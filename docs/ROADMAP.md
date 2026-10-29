@@ -2,7 +2,6 @@
 
 Not commitments; ordered roughly by value.
 
-- Demo mode: separate compose project with its own ClickHouse/SQLite and a synthetic seed; no firewall or OpenAI contact.
 - Configuration-change history page from OPNsense audit events; authentication events view.
 - Server page DNS card (transport + names with correlation confidence).
 - Optional adapters: LibreNMS (interface counters), NetBox (inventory and prefixes).

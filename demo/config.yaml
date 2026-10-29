@@ -1,0 +1,102 @@
+# m0nitor DEMO configuration - synthetic network, documentation/private address ranges only.
+# The demo has no firewall: no API key, no SNMP, no syslog; every remote address is from RFC 5737 ranges.
+clickhouse_url: http://clickhouse:8123
+akvorado_url: http://demo.invalid/
+brand: m0nitor
+monitor_address: 10.40.0.161
+akvorado_metrics: {}          # no Akvorado collector in the demo: reported as "not configured"
+
+sites:
+  - id: demo-a
+    name: Demo site · fw-demo
+    vendor: opnsense
+    exporter: fw-demo
+    exporter_ip: 10.40.0.1
+    wan_if: ix0
+    lan_if: bridge0
+    ifindexes:
+      5:  {name: ix0, description: "WAN", speed: 10000}
+      12: {name: bridge0, description: "LAN bridge", speed: 10000}
+    location: {country: US, lat: null, lon: null, label: "Demo site"}
+    wan_capacity_mbps: 1000
+    syslog_source: 10.40.0.1
+
+exporter: fw-demo
+wan_if: ix0
+lan_if: bridge0
+exporter_active_timeout: 120
+
+internal_nets: [10.40.0.0/24]
+public_nets: [203.0.113.176/28]
+outbound_nat_ips: [203.0.113.179]
+
+detector:
+  interval_seconds: 300
+  window_minutes: 60
+  ingest_delay_seconds: 60
+  baseline_days: 3
+  min_learning_days: 1
+  cooldown_minutes: 360
+
+rules:
+  new_dest_country: {enabled: true, min_flows: 2}
+  new_dest_asn: {enabled: false, min_flows: 3}
+  unexpected_inbound: {enabled: true, ephemeral_floor: 32768}
+  outbound_volume: {enabled: true, min_bytes: 200000000, factor: 4.0}
+  fanout: {enabled: true, window_minutes: 10, min_peers: 150, min_ports_per_peer: 25}
+  beaconing: {enabled: true, hours: 6, min_events: 8, max_cv: 0.2,
+              min_interval_s: 30, max_interval_s: 3600, ignore_ports: [53, 123]}
+  exporter_silence: {enabled: true, minutes: 5}
+  disk_usage: {enabled: true, percent: 85}
+  ids_alert: {enabled: true, window_minutes: 10}
+  fw_blocked_outbound: {enabled: true, window_minutes: 10, min_events: 20}
+  fw_blocked_scan: {enabled: true, window_minutes: 10, min_events: 300, min_ports: 25}
+  syslog_silence: {enabled: false, minutes: 15}
+
+service_ports: [21, 22, 25, 53, 80, 110, 123, 143, 443, 465, 587, 853, 993, 995, 3478, 5222, 8080, 8443]
+
+assets:
+  10.40.0.1:   {name: fw-demo-lan, role: firewall, sensitive: true}
+  10.40.0.8:   {name: backup-1, role: backup, sensitive: true}
+  10.40.0.20:  {name: web-1, role: web}
+  10.40.0.74:  {name: crm-1, role: web}
+  10.40.0.161: {name: monitor, role: monitoring}
+  10.40.0.240: {name: mail-1, role: mail}
+  10.40.0.250: {name: proxy-1, role: reverse-proxy}
+
+exposures:
+  - 10.40.0.250 tcp 80 203.0.113.180
+  - 10.40.0.250 tcp 443 203.0.113.180
+  - 10.40.0.240 tcp 25 203.0.113.182
+  - 10.40.0.240 tcp 587 203.0.113.182
+  - 10.40.0.240 tcp 993 203.0.113.182
+  - 10.40.0.20 tcp 22 203.0.113.184
+
+users:
+  admin: admin
+
+opnsense:
+  base_url: https://fw.example.net
+  tls_server_name: fw.example.net
+  block_alias: netmon_block
+  key_file: /run/secrets/none        # absent on purpose: blocking and live policy reads are disabled
+  protected: []
+  min_prefix_v4: 24
+  min_prefix_v6: 48
+
+notify:
+  webhook: {enabled: false, url: "", min_severity: medium, secret_file: /run/secrets/none}
+
+geoip_policy:
+  alias: GeoIP_BLOCK
+  verified_at: null
+  rule: {uuid: 00000000-0000-4000-8000-0000000000a1, interface: wan, direction: in, action: block, enabled: true, sequence: 10}
+  countries: [KP, IR, RU]
+
+ai:
+  model: gpt-5-nano
+  key_file: /run/secrets/none        # no key: AI analysis is shown as not configured
+  max_output_tokens: 4000
+  max_input_chars: 24000
+  daily_request_limit: 0
+  pseudonymize_internal: true

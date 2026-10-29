@@ -33,7 +33,7 @@
     $("blklists").replaceChildren(el("div", { class: "grid2 even" }, list(p.blocked_in, "in"), list(p.blocked_out, "out")),
       el("p", { class: "note", text: "Inbound = an enabled block/reject rule has a GeoIP alias as its source (traffic from that country). " +
         "Outbound = a GeoIP alias as the destination (traffic to that country). Only rules that reference the alias directly are counted." }));
-    $("blknote").textContent = `${p.live ? "live" : "last verified"} ${p.verified_at}`;
+    $("blknote").textContent = p.verified_at ? `${p.live ? "live" : "last verified"} ${p.verified_at}` : "configured snapshot · not verified against the firewall";
   }
   $("blkshade").addEventListener("change", (ev) => bmap.setShade(ev.target.value));
   // where the logged-block numbers come from, and how complete they are, for this exact scope

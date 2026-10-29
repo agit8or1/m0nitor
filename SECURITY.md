@@ -5,7 +5,7 @@ This repository is private. Report vulnerabilities to the maintainer directly (G
 reporting on this repository), not in issues. Please include affected version/commit, impact and reproduction steps.
 
 ## Design rules the code follows
-- The monitor is out of band and read-mostly. It changes a firewall only through objects it created itself (one block
+- The monitor is passive and read-mostly: it is not in the traffic path. It changes a firewall only through objects it created itself (one block
   alias, its own auto-response alias and rules, recorded by UUID), and only when an admin has enabled that feature.
 - Every automation is switchable and ships off (auto-response ships in dry-run). Notifications stay off until a test
   to the configured destination succeeded.

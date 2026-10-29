@@ -97,8 +97,9 @@ def msum(metrics, name, **want):
 class Health:
     def __init__(self, cfg, ch, conn, notifier=None, metrics_urls=None, log_dir=None, geo=None):
         self.cfg, self.ch, self.conn, self.notifier = cfg, ch, conn, notifier
-        self.metrics_urls = metrics_urls or {"inlet": "http://akvorado-inlet:8080/api/v0/inlet/metrics",
-                                             "outlet": "http://akvorado-outlet:8080/api/v0/outlet/metrics"}
+        # config `akvorado_metrics: {}` = no Akvorado collector to watch (e.g. demo mode): reported as not configured
+        self.metrics_urls = metrics_urls if metrics_urls is not None else cfg.get("akvorado_metrics", {
+            "inlet": "http://akvorado-inlet:8080/api/v0/inlet/metrics", "outlet": "http://akvorado-outlet:8080/api/v0/outlet/metrics"})
         self.log_dir = log_dir or os.environ.get("NETMON_SYSLOG_DIR", "/var/log/netmon")
         self.geo = geo
         self.started = time.time()
@@ -149,6 +150,8 @@ class Health:
 
     def c_collector(self, s):
         out = []
+        if not self.metrics_urls:
+            return [check("collector", "Flows", "Flow collector (Akvorado)", "not_configured", "no collector metrics configured")]
         inl, err_i = self._metrics("inlet")
         outl, err_o = self._metrics("outlet")
         if inl is None or outl is None:
@@ -326,7 +329,7 @@ class Health:
             else:
                 out.append(check("geoip", "Enrichment", "GeoIP country database", "fail", "not readable", evidence=p.get("error", "")))
         out.append(check("threatintel", "Enrichment", "Threat intelligence feeds", "not_configured", "none configured",
-                         limits="Findings do not depend on reputation lists.", action="Optional: see docs/integrations.md."))
+                         limits="Findings do not depend on reputation lists.", action="Not implemented yet (docs/ROADMAP.md)."))
         return out
 
     def c_notifications(self, s):
@@ -392,9 +395,9 @@ class Health:
         """Optional sources: present only as adapters until data arrives."""
         out = []
         for cid, label, table, action in (
-                ("dns", "DNS resolver logs", "netmon.dns_events", "See docs/dns.md (Unbound query logging via remote syslog, or Zeek dns.log)."),
-                ("zeek", "Zeek sensor (internal traffic)", "netmon.zeek_conn", "Awaiting traffic feed: see docs/zeek.md (mirror/TAP placement)."),
-                ("hostlogs", "Server authentication logs", "netmon.auth_events", "See docs/hostlogs.md (forward sshd/sudo logs via syslog).")):
+                ("dns", "DNS resolver logs", "netmon.dns_events", "See docs/dns-zeek-hostlogs.md (Unbound query logging via remote syslog, or Zeek dns.log)."),
+                ("zeek", "Zeek sensor (internal traffic)", "netmon.zeek_conn", "Awaiting traffic feed: see docs/dns-zeek-hostlogs.md (mirror/TAP placement)."),
+                ("hostlogs", "Server authentication logs", "netmon.auth_events", "See docs/dns-zeek-hostlogs.md (forward sshd/sudo logs via syslog).")):
             try:
                 r = self.ch.query(f"SELECT toUInt32(max(received)) AS last, countIf(received > now() - 3600) AS n FROM {table}", {})[0]
             except Exception:

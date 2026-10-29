@@ -1,7 +1,7 @@
 """Optional Zeek sensor ingestion (read-only): tails Zeek JSON logs from a mounted directory into ClickHouse.
 
 Expected layout: <dir>/<sensor>/{conn,dns,ssl,http,notice,capture_loss,stats}.log written by Zeek with
-`redef LogAscii::use_json = T;` (see docs/zeek.md). Files are only read; offsets and inodes are kept in the
+`redef LogAscii::use_json = T;` (see docs/dns-zeek-hostlogs.md). Files are only read; offsets and inodes are kept in the
 state table so rotation and restarts neither skip nor re-read lines. With no directory or no files the
 source shows "Awaiting traffic feed" - nothing here assumes a sensor exists.
 

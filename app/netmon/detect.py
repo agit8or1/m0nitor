@@ -11,7 +11,8 @@ import time
 
 import os
 
-from .core import get_setting, DATA_DIR, PROTO, apply_overrides, audit, expand_flow_sql, flow_predicates, set_state
+from .core import (get_setting, DATA_DIR, PROTO, apply_overrides, audit, expand_flow_sql, expected_devices, expected_match,
+                   flow_predicates, set_state)
 
 IP = "replaceOne(IPv6NumToString({col}), '::ffff:', '')"
 
@@ -182,7 +183,32 @@ class Detector:
                 ],
                 akvorado_filter=self.akv(f"DstAddr = {r['local']} AND ({peer_expr})"),
             ))
-        return out
+        return self.group_new_dest(out, kind, rc.get("group_min", 4))
+
+    def group_new_dest(self, out, kind, group_min):
+        """Several new countries/ASNs for one host in one window are one finding (a scanning host would otherwise
+        raise one per country). Subject "many" keeps it a single alert that later runs update."""
+        by = {}
+        for f in out:
+            by.setdefault(f["asset"], []).append(f)
+        res = []
+        for host, fs in by.items():
+            if len(fs) < group_min:
+                res += fs
+                continue
+            fs.sort(key=lambda f: -f["evidence"][0]["bytes"])
+            labels = [f["subject"] if kind == "country" else f"AS{f['subject']}" for f in fs]
+            g = dict(fs[0])
+            g.update(subject="many", severity=max((f["severity"] for f in fs), key=lambda x: SEV_ORDER[x]),
+                     title=f"{self.cfg.asset_label(host)} contacted {len(fs)} new {'countries' if kind == 'country' else 'networks'}: "
+                           + ", ".join(labels[:8]) + (" …" if len(fs) > 8 else ""),
+                     evidence=[f["evidence"][0] for f in fs[:25]],
+                     baseline=fs[0]["baseline"].replace(f"{kind} {fs[0]['subject']}", f"any of the listed {kind} values"),
+                     alternatives=["Scanning or crawling from this host (many destinations in many countries at once)"]
+                                  + fs[0]["alternatives"],
+                     akvorado_filter=self.akv(f"DstAddr = {host}"))
+            res.append(g)
+        return res
 
     def rule_unexpected_inbound(self, now, days):
         """Passed inbound traffic to an internal port that no port forward explains."""
@@ -324,6 +350,12 @@ class Detector:
                 r["top_dst_traceroute"] = f"{len(trace)} UDP traceroute/mtr probe ports ({trace[0]}-{trace[-1]}), not counted as scanned ports"
             if r["src"] in self.cfg.get("outbound_nat_ips", []):
                 r.update(self.nat_hosts(r["src"], ws, we))
+                if r["dsts_expected"]:
+                    # destinations whose replies went to expected devices (Settings: expected devices) do not count
+                    if vertical and self.reply_hosts([r["top_dst"]], ws, we) <= set(r["expected_hosts"]) | {""}:
+                        continue
+                    if not vertical and r["dsts"] - r["dsts_expected"] < rc["min_peers"]:
+                        continue
             out.append(dict(
                 rule="fanout", severity="medium", confidence="low" if r["src"] in self.cfg.get("outbound_nat_ips", []) else "medium",
                 asset=r["src"], subject="vertical" if vertical else "horizontal",
@@ -340,6 +372,31 @@ class Detector:
                 akvorado_filter=self.akv(f"OutIfName = {self.site['wan_if']} AND SrcAddr = {r['src']}"),
             ))
         return out
+
+    def reply_hosts(self, peers, ws, we):
+        """LAN hosts that received traffic from any of `peers` in the window (return path); {""} if none did."""
+        if not peers:
+            return {""}
+        rows = self.q(f"""SELECT DISTINCT {IP.format(col='DstAddr')} AS h FROM flows WHERE ExporterName = {{exporter:String}} AND INB AND TOLAN
+                          AND TimeReceived >= toDateTime({{ws:UInt32}}) AND TimeReceived < toDateTime({{we:UInt32}}) + 120
+                          AND has({{p:Array(String)}}, {IP.format(col='SrcAddr')}) LIMIT 50""",
+                      {"ws": int(ws), "we": int(we), "p": [str(x) for x in peers][:200]})
+        return {r["h"] for r in rows} or {""}
+
+    def expected_only(self, f):
+        """True if a shared-NAT finding's named peers replied only to expected devices (so it is their traffic)."""
+        exp = expected_devices(self.conn)
+        if not exp or f["asset"] not in self.cfg.get("outbound_nat_ips", []):
+            return False
+        peers = []
+        for ev in f["evidence"] if isinstance(f["evidence"], list) else [f["evidence"]]:
+            for k in ("peers", "sample_peers", "top_dsts", "peer", "top_dst", "dst"):
+                v = ev.get(k) if isinstance(ev, dict) else None
+                peers += [str(x) for x in (v if isinstance(v, list) else [v] if v else [])]
+        if not peers:
+            return False
+        hosts = self.reply_hosts(peers, *f["window"])
+        return hosts != {""} and all(expected_match(exp, h) for h in hosts)
 
     def nat_hosts(self, src, ws, we):
         """Which LAN host(s) stand behind a shared NAT address's destinations, from the return path.
@@ -361,9 +418,12 @@ class Detector:
             FROM e LEFT JOIN r ON e.dst = r.dst GROUP BY k, host ORDER BY dsts DESC""",
                       {"ws": ws, "we": we, "s": src, "exp": self.exposed_public_ports()})
         total = sum(int(x["dsts"]) for x in rows) or 1
-        hosts = [{"host": x["host"], "destinations": int(x["dsts"]), "share_pct": round(100 * int(x["dsts"]) / total, 1)}
-                 for x in rows if x["k"] == "one"][:10]
-        return {"lan_hosts": hosts,
+        exp = expected_devices(self.conn)
+        hosts = [{"host": x["host"], "destinations": int(x["dsts"]), "share_pct": round(100 * int(x["dsts"]) / total, 1),
+                  **({"expected": True} if expected_match(exp, x["host"]) else {})} for x in rows if x["k"] == "one"]
+        excluded = [h for h in hosts if h.get("expected")]
+        return {"lan_hosts": hosts[:10],
+                "dsts_expected": sum(h["destinations"] for h in excluded), "expected_hosts": [h["host"] for h in excluded],
                 "dsts_ambiguous": sum(int(x["dsts"]) for x in rows if x["k"] == "many"),
                 "dsts_no_reply": sum(int(x["dsts"]) for x in rows if x["k"] == "none"),
                 "lan_hosts_basis": "return path: the LAN host that received each destination's replies; destinations that never "
@@ -753,6 +813,8 @@ class Detector:
             # firewall shows the peer did not open it: reply traffic of an outbound connection, not exposure
             if f["rule"] == "unexpected_inbound" and f.get("direction") == "outbound" and f.get("direction_verified"):
                 continue
+            if f["rule"] != "fanout" and self.expected_only(f):
+                continue
             kept.append(dict(f, site=self.site["id"]))
         return kept, errors, days
 
@@ -762,6 +824,10 @@ class Detector:
         for e in excs:
             if exception_matches(e, f["rule"], f["asset"], f["subject"], now):
                 return 0
+        exp = expected_devices(self.conn, now)
+        if exp and f["rule"] not in ("source_health", "detector_error") and \
+                (expected_match(exp, f["asset"]) or expected_match(exp, str(f["subject"]).split("|")[-1].split(":")[0])):
+            return 0   # an expected device (or its known peer): legitimate by operator decision
         site = f.get("site") or self.cfg.sites[0]["id"]
         key = f"{site}|{f['rule']}|{f['asset']}|{f['subject']}"
         cooldown = self.cfg["detector"]["cooldown_minutes"] * 60

@@ -1,0 +1,10 @@
+# Optional: publish the demo UI on this machine only (http://127.0.0.1:8099).
+#   docker compose -f demo/docker-compose.yml -f demo/view.yml up -d
+# This attaches the app to a second, non-internal network so the port can be published; the demo config still has
+# no firewall, AI or notification credentials. Session cookies are "Secure", so use http://127.0.0.1 or localhost.
+services:
+  app:
+    networks: [demo, view]
+    ports: ["127.0.0.1:8099:8000"]
+networks:
+  view: {}

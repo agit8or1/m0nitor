@@ -56,7 +56,7 @@ def capabilities():
                      f"{pct('no_return'):.0f}% with no LAN return path, {pct('unanswered'):.0f}% unanswered attempts.",
                      "Return-path correlation proves a host received replies, not that every outbound packet is visible: unanswered "
                      "and firewall-originated traffic has no LAN-side record (bridge ingress is not exported). Full pre-NAT attribution "
-                     "needs LAN-rule logging or a LAN-side sensor (see docs/attribution.md).",
+                     "needs LAN-rule logging or a LAN-side sensor (see docs/nat-attribution.md).",
                      v["ts"] if v else None, v))
     caps.append(("Outbound volume across the WAN (post-NAT)", "verified" if f.get("outb") else "unavailable",
                  f"{int(f.get('outb') or 0):,} WAN egress flow records in the last hour; 1:1 NAT addresses map to exactly one host",
@@ -70,7 +70,7 @@ def capabilities():
     lan = _q1("SELECT count() AS n FROM netmon.zeek_conn WHERE ts > now() - 3600", {}, {}).get("n", 0)
     caps.append(("LAN ↔ LAN (server-to-server, same subnet)", "verified" if lan else "awaiting",
                  f"{int(lan):,} Zeek connection records in the last hour" if lan else "Bridged/switched locally: never crosses the firewall",
-                 "Needs a mirror port or TAP feeding a Zeek sensor (docs/zeek.md); same-host VM traffic needs a Proxmox bridge mirror.", None))
+                 "Needs a mirror port or TAP feeding a Zeek sensor (docs/dns-zeek-hostlogs.md); same-host VM traffic needs a Proxmox bridge mirror.", None))
     fw = _q1("SELECT count() AS n, toUInt32(max(received)) AS last FROM netmon.fw_events WHERE received > now() - 3600", {}, {})
     caps.append(("Blocked / denied traffic", "verified" if fw.get("n") else "awaiting",
                  f"{int(fw.get('n') or 0):,} firewall log records in the last hour; counts reconciled with the Countries map",
@@ -94,7 +94,7 @@ def capabilities():
     au = _q1("SELECT count() AS n, toUInt32(max(received)) AS last FROM netmon.auth_events WHERE received > now() - 86400", {}, {})
     caps.append(("Authentication & privilege events", "partial" if au.get("n") else "awaiting",
                  f"{int(au.get('n') or 0):,} events in 24 h (firewall GUI/SSH)" if au.get("n") else "no server logs forwarded",
-                 "Only from systems that forward their own auth logs; never inferred from flows (docs/hostlogs.md).", au.get("last")))
+                 "Only from systems that forward their own auth logs; never inferred from flows (docs/dns-zeek-hostlogs.md).", au.get("last")))
     caps.append(("Payload content", "unavailable", "Flow records, logs and Zeek metadata carry no payload",
                  "Full packet capture is off by design.", None))
     v6l = _q1("SELECT count() AS n FROM netmon.fw_events WHERE received > now() - 86400 AND ipver = 6", {}, {}).get("n", 0)
@@ -136,7 +136,7 @@ def coverage_page(req: Request, msg: str = ""):
     if ROLES[role] >= ROLES["admin"]:
         num = lambda k, label, unit="": (f"<label>{e(label)}<input name={k} type=number step=any value='{s[k]}' class='short'> {e(unit)}</label>")
         form = f"""<section class="card"><div class="card-h"><h2>Health alert thresholds</h2></div>
-<form method="post" action="/netmon/coverage/settings" class="stackform">{csrf_field(req)}
+<form method="post" action="/netmon/coverage/settings" class="stackform wide">{csrf_field(req)}
 <label class="check"><input type=checkbox name=enabled value=1 {'checked' if s['enabled'] else ''}> Raise health alerts</label>
 <label class="check"><input type=checkbox name=notify value=1 {'checked' if s['notify'] else ''}> Send health alerts and recoveries to notification channels
  (off by default — enable only after a successful channel test)</label>

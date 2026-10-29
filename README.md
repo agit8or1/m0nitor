@@ -1,6 +1,6 @@
 # m0nitor
 
-Self-hosted, out-of-band network monitoring for OPNsense (and, with limits, pfSense) firewalls. The firewall only
+Self-hosted network monitoring for OPNsense (and, with limits, pfSense) firewalls. The firewall only
 *sends* telemetry (NetFlow v9, remote syslog, optional SNMP); the monitor never sits in the forwarding path, so if it
 stops, traffic is unaffected.
 
@@ -19,6 +19,8 @@ stops, traffic is unaffected.
 - **Firewall context:** logged block decisions by country, the live GeoIP policy (policy vs. enforcement), Suricata
   alerts, configuration-change and authentication events from syslog.
 - **Coverage page:** which telemetry is actually arriving, judged per source, and what each capability can and cannot see.
+- **Expected devices:** mark known-legitimate hosts (crawlers, scanners you run) so they stop raising findings —
+  including their share of traffic behind a shared NAT address.
 - **Optional, off by default:** approval-gated blocking through one firewall alias, a switchable auto-response
   (brute force / IDS / floods — never scans) with dry-run mode, manual preview-first AI analysis (pseudonymized
   evidence, per-day caps), notifications (Pushover, webhook) after a successful test.
@@ -26,8 +28,24 @@ stops, traffic is unaffected.
 What it does **not** do: decrypt TLS, see payloads, see LAN-to-LAN traffic that does not cross the firewall (unless an
 optional Zeek sensor on a mirror port is added), or guarantee complete coverage — absence of evidence is shown as such.
 
-## Quick look
+## Screenshots (demo data)
 
+| | |
+|---|---|
+| ![Overview](docs/screenshots/overview-light.png) | ![Overview, dark](docs/screenshots/overview-dark.png) |
+| ![Security findings](docs/screenshots/security.png) | ![Fan-out behind shared NAT with LAN host attribution](docs/screenshots/finding-nat-fanout.png) |
+| ![Countries tooltip](docs/screenshots/countries-tooltip-light.png) | ![Coverage and source health](docs/screenshots/coverage.png) |
+| ![Servers](docs/screenshots/servers.png) | ![Mobile](docs/screenshots/mobile-overview.png) |
+
+All screenshots come from the isolated demo (docs/demo.md): synthetic data, documentation address ranges.
+
+## Try it
+
+    docker compose -f demo/docker-compose.yml up -d --build     # see docs/demo.md
+
+## Docs
+
+    docs/demo.md             isolated demo with synthetic data
     docs/architecture.md     components, data flow, trust boundaries
     docs/install.md          install, upgrade, uninstall, backup, restore, rollback
     docs/opnsense-setup.md   NetFlow, syslog, SNMP, Suricata, API user (read-only + one alias)

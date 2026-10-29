@@ -28,6 +28,36 @@ _SPECIAL = [ipaddress.ip_network(n) for n in (
     "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3", "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8")]
 
 
+class CsvGeo:
+    """`network,country` CSV with the mmdb reader's interface (offline tests and demo mode; no real GeoIP data)."""
+
+    def __init__(self, path):
+        import bisect
+        import csv
+        self._bisect, rows = bisect, []
+        with open(path) as fh:
+            for r in csv.reader(fh):
+                if r and not r[0].startswith("#"):
+                    n = ipaddress.ip_network(r[0].strip(), strict=False)
+                    rows.append((n.version, int(n.network_address), int(n.broadcast_address), r[1].strip().upper()))
+        rows.sort()
+        self._rows, self._keys, self.mtime = rows, [(v, lo) for v, lo, _, _ in rows], os.path.getmtime(path)
+
+    def get(self, ip):
+        a = norm(ip)
+        i = self._bisect.bisect_right(self._keys, (a.version, int(a))) - 1
+        if i >= 0:
+            v, lo, hi, cc = self._rows[i]
+            if v == a.version and lo <= int(a) <= hi:
+                return {"country": cc}
+        return None
+
+    def metadata(self):
+        class M:
+            database_type, build_epoch = "csv (synthetic/offline)", self.mtime
+        return M()
+
+
 class Geo:
     """Country lookups from the mounted mmdb (read-only); results cached per address."""
 
@@ -36,8 +66,11 @@ class Geo:
 
     def _reader(self):
         if self._r is None:
-            import maxminddb
-            self._r = maxminddb.open_database(self.path)
+            if self.path.endswith(".csv"):
+                self._r = CsvGeo(self.path)
+            else:
+                import maxminddb
+                self._r = maxminddb.open_database(self.path)
         return self._r
 
     def provenance(self):

@@ -66,8 +66,11 @@ class Config:
 
     def asset_label(self, ip: str) -> str:
         if ip in self.raw.get("outbound_nat_ips", []):
-            return f"Shared NAT {ip} (any LAN host — not attributable)"
+            return f"Shared NAT {ip} (many LAN hosts; see the LAN host attribution)"
         a = self.raw.get("assets", {}).get(ip) or self.raw.get("labels", {}).get(ip)
+        if not a and ip in self.binat:     # 1:1 NAT public address: name it after the one internal server behind it
+            inner = self.raw.get("assets", {}).get(self.binat[ip])
+            return f"{inner['name'] if inner else self.binat[ip]} via 1:1 NAT ({ip})"
         return f"{a['name']} ({ip})" if a else ip
 
     def label(self, ip: str) -> str:
@@ -405,6 +408,31 @@ def set_state(conn, k: str, v) -> None:
 def get_setting(conn, k: str, default=None):
     r = conn.execute("SELECT v FROM settings WHERE k=?", (k,)).fetchone()
     return json.loads(r["v"]) if r else default
+
+
+EXPECTED_KEY = "expected:db"
+
+
+def expected_devices(conn, now=None):
+    """Devices whose traffic is known and legitimate (e.g. crawlers): {target: {reason, owner, by, ts, expires_at}}.
+    Expired entries are left out. Targets are IPs or CIDRs, internal or external."""
+    now = now or time.time()
+    return {k: v for k, v in (get_setting(conn, EXPECTED_KEY, {}) or {}).items() if not v.get("expires_at") or v["expires_at"] > now}
+
+
+def expected_match(entries, ip):
+    """The expected-device target covering ip, or None."""
+    try:
+        a = ipaddress.ip_address(str(ip))
+    except ValueError:
+        return None
+    for t in entries:
+        try:
+            if a in ipaddress.ip_network(t, strict=False):
+                return t
+        except ValueError:
+            continue
+    return None
 
 
 def put_setting(conn, k: str, v, user: str):

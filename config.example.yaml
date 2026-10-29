@@ -1,5 +1,6 @@
 # m0nitor (netmon) configuration — EXAMPLE with documentation/private addresses only.
 # Copy to app/config.yaml and edit. Secrets never go here: they are files under secrets/ (see .env.example).
+brand: m0nitor                 # product name shown in the header and page titles
 clickhouse_url: http://clickhouse:8123
 akvorado_url: https://10.40.0.161/
 

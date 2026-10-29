@@ -351,3 +351,4 @@ dialog.namer::backdrop { background: rgb(10 16 28 / .45); } dialog.namer h2 { ma
 .scorebar span { display: block; height: 100%; background: var(--ink-2); border-radius: 4px; }
 .tag.og-active { color: var(--warn-text); border-color: currentColor; } .tag.og-traffic { color: var(--warn-text); }
 .attrib { margin: 24px 0 8px; text-align: center; } .attrib a { color: inherit; }
+form.inline input.sm { width: 12em; padding: 2px 6px; font-size: 12px; } button.sm { padding: 2px 8px; font-size: 12px; }

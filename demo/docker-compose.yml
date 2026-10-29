@@ -1,0 +1,64 @@
+# m0nitor demo: synthetic data on an isolated network.
+#   docker compose -f demo/docker-compose.yml up -d --build
+# The "demo" network is internal (no route to the Internet or your LAN), so nothing in the demo can reach a
+# firewall, OpenAI or any notification service. To open the UI from a browser see docs/demo.md (view.yml).
+name: m0nitor-demo
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"      # passwordless default user; reachable only on the internal network
+    volumes: [clickhouse:/var/lib/clickhouse]
+    networks: [demo]
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "-q", "SELECT 1"]
+      interval: 5s
+      retries: 30
+  seed:
+    image: m0nitor-demo-app
+    build: ../app
+    command: ["python", "/demo/seed.py", "init"]
+    user: "0"                              # one-shot: prepares the volumes, then hands them to uid 10001
+    environment: &env
+      NETMON_CONFIG: /demo/config.yaml
+      NETMON_DB: /data/netmon.db
+      NETMON_GEOIP_DB: /demo-data/geoip.csv
+      NETMON_ADMIN_PASSWORD_FILE: /run/demo/admin_password
+      DEMO_DAYS: "4"
+    volumes: &vols
+      - ./:/demo:ro
+      - app-data:/data
+      - demo-data:/demo-data
+      - demo-secrets:/run/demo
+    networks: [demo]
+    depends_on:
+      clickhouse: {condition: service_healthy}
+  app:
+    image: m0nitor-demo-app
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment: *env
+    volumes: *vols
+    networks: [demo]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+  feeder:
+    image: m0nitor-demo-app
+    command: ["python", "/demo/seed.py", "feed"]
+    user: "10001"
+    environment: *env
+    volumes: *vols
+    networks: [demo]
+    restart: unless-stopped
+    depends_on:
+      seed: {condition: service_completed_successfully}
+networks:
+  demo:
+    internal: true
+volumes:
+  clickhouse:
+  app-data:
+  demo-data:
+  demo-secrets:

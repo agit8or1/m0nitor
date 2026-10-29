@@ -20,7 +20,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth
 from . import block as blk
-from .core import DATA_DIR, ClickHouse, ThreadLocalDB, audit, db_connect, get_setting, get_state, load_config, set_state
+from .core import (DATA_DIR, EXPECTED_KEY, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
+                   load_config, put_setting, set_state)
 from .dash import Dash
 from .detect import Detector, fmt_ts, human_bytes
 from .notify import Notifier
@@ -28,6 +29,7 @@ from .counters import Poller, init as counters_init
 
 cfg = load_config()
 ch = ClickHouse(cfg["clickhouse_url"])
+BRAND = str(cfg.get("brand") or "netmon")      # product name in the header and page titles
 conn = ThreadLocalDB()
 auth.init(conn)
 counters_init(conn)
@@ -216,10 +218,10 @@ def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtit
                   for name, href, role in NAV if ROLES[r] >= ROLES[role])
     scr = "".join(f'<script src="/netmon/static/{s}?v={ASSET_V}"></script>' for s in scripts)
     return HTMLResponse(f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)} · netmon</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)} · {e(BRAND)}</title>
 <meta name="nm-csrf" content="{e(csrf_token(req))}"><meta name="nm-role" content="{e(r)}">
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body>
-<header class="appbar"><a class="brand" href="/"><span class="logo">◎</span> netmon</a>
+<header class="appbar"><a class="brand" href="/"><span class="logo">◎</span> {e(BRAND)}</a>
 <nav class="mainnav">{nav}<a href="/visualize" class="ext" title="Akvorado: raw flow exploration">Advanced flow explorer ↗</a></nav>
 <div class="who"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select> <span>{e(u)}</span> <small>{e(r)}</small>
 <form method="post" action="/logout" class="inline">{csrf_field(req)}<button class="link">Sign out</button></form></div></header>
@@ -237,10 +239,10 @@ def sev(s):
 
 # ---- auth -------------------------------------------------------------------
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · netmon</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · {brand}</title>
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body class="login"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select>
 <form method="post" action="/login" class="loginbox">
-<div class="brand big"><span class="logo">◎</span> netmon</div>
+<div class="brand big"><span class="logo">◎</span> {brand}</div>
 <p class="muted">Network monitoring for {exporter}</p>
 {error}
 <label>Username<input name="username" autocomplete="username" required autofocus></label>
@@ -265,7 +267,7 @@ def safe_next(n: str) -> str:
 @app.get("/login", response_class=HTMLResponse)
 def login_page(next: str = "/", error: str = ""):
     msg = {"bad": "Invalid username or password.", "slow": "Too many attempts. Try again in 15 minutes."}.get(error, "")
-    return HTMLResponse(LOGIN_HTML.format(ASSET_V=ASSET_V, exporter=e(cfg["exporter"]), next=e(safe_next(next)),
+    return HTMLResponse(LOGIN_HTML.format(ASSET_V=ASSET_V, brand=e(BRAND), exporter=e(cfg["exporter"]), next=e(safe_next(next)),
                                           error=f'<div class="err">{e(msg)}</div>' if msg else ""),
                         headers=SECURITY_HEADERS)
 
@@ -299,10 +301,10 @@ def login_post(req: Request, username: str = Form(...), password: str = Form(...
 
 
 MFA_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Two-factor · netmon</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Two-factor · {brand}</title>
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body class="login"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select>
 <form method="post" action="/login/2fa" class="loginbox">
-<div class="brand big"><span class="logo">◎</span> netmon</div>
+<div class="brand big"><span class="logo">◎</span> {brand}</div>
 <p class="muted">Enter the 6-digit code from your authenticator app for <b>{user}</b>, or a recovery code.</p>{error}
 <label>Code<input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus maxlength="16"></label>
 <button class="primary">Verify</button><p class="muted small"><a href="/login">Start over</a></p></form></body></html>"""
@@ -314,7 +316,7 @@ def mfa_page(req: Request, error: str = ""):
     if not p:
         return RedirectResponse("/login", 303)
     msg = {"bad": "That code is not valid.", "slow": "Too many attempts. Start over in 15 minutes."}.get(error, "")
-    return HTMLResponse(MFA_HTML.format(ASSET_V=ASSET_V, user=e(p["username"]), error=f'<div class="err">{e(msg)}</div>' if msg else ""),
+    return HTMLResponse(MFA_HTML.format(ASSET_V=ASSET_V, brand=e(BRAND), user=e(p["username"]), error=f'<div class="err">{e(msg)}</div>' if msg else ""),
                         headers=SECURITY_HEADERS)
 
 
@@ -485,17 +487,28 @@ def lan_hosts_text(a):
     total = sum(h["destinations"] for h in ev["lan_hosts"]) + ev.get("dsts_ambiguous", 0) + ev.get("dsts_no_reply", 0)
     if not ev["lan_hosts"]:
         return f"no LAN host identified: none of {total:,} destinations replied to a single host"
-    top = ", ".join(f"{cfg.asset_label(h['host'])} ({h['destinations']:,} of {total:,} destinations)" for h in ev["lan_hosts"][:3])
+    top = ", ".join(f"{cfg.asset_label(h['host'])}{' [expected]' if h.get('expected') else ''} ({h['destinations']:,} of {total:,} destinations)"
+                    for h in ev["lan_hosts"][:3])
     return f"likely LAN host{'s' if len(ev['lan_hosts']) > 1 else ''}: {top}" + \
         (f"; {ev['dsts_no_reply']:,} never replied (not attributable)" if ev.get("dsts_no_reply") else "")
 
 
-def lan_hosts_dd(a):
+def expected_button(req, ip, back):
+    return (f"<form method=post action='/netmon/expected' class='inline'>{csrf_field(req)}<input type=hidden name=target value='{e(ip)}'>"
+            f"<input type=hidden name=back value='{e(back)}'><input name=reason required maxlength=200 placeholder='why it is legitimate' class='sm'>"
+            f"<button class='sm' title='Exclude this device from findings (Security → Suppressions)'>Mark expected</button></form>")
+
+
+def lan_hosts_dd(a, req=None, can_edit=False):
     ev = lan_hosts(a)
     if not ev:
         return ""
+    exp = expected_devices(conn)
+    back = f"/netmon/alert/{a['id']}"
     links = "".join(f"<li><a href='/netmon/servers/{quote(h['host'])}'>{e(cfg.asset_label(h['host']))}</a> — {h['destinations']:,} destinations "
-                    f"({h['share_pct']}%)</li>" for h in ev["lan_hosts"])
+                    f"({h['share_pct']}%) "
+                    + ("<span class='tag'>expected device</span>" if expected_match(exp, h["host"]) else
+                       expected_button(req, h["host"], back) if can_edit and req else "") + "</li>" for h in ev["lan_hosts"])
     return (f"<div class='small'><b>Behind the NAT address</b> (return path):<ul>{links or '<li>no single host identified</li>'}</ul>"
             f"<span class='muted'>{ev.get('dsts_ambiguous', 0):,} destinations replied to several hosts · {ev.get('dsts_no_reply', 0):,} never replied "
             f"— unanswered probes cannot be attributed from flow records.</span></div>")
@@ -563,7 +576,8 @@ def security_page(req: Request, status: str = "open"):
 EV_LABELS = {"src": "Source", "dst": "Destination", "dsts": "Distinct destinations", "max_ports": "Most ports on one destination (traceroute probes excluded)",
              "flows": "Flow records", "top_dst": "Top destination", "top_dsts": "Top destinations", "sample_ports": "Example destination ports (up to 10, across all destinations)", "distinct_ports": "Distinct destination ports (all destinations)",
              "top_dst_ports": "Ports contacted on top destination", "dsts_ambiguous": "Destinations that replied to several LAN hosts",
-             "dsts_no_reply": "Destinations that never replied (not attributable)", "lan_hosts_basis": "LAN host attribution basis", "top_dst_traceroute": "Traceroute probes to top destination",
+             "dsts_no_reply": "Destinations that never replied (not attributable)",
+             "dsts_expected": "Destinations explained by expected devices (not counted)", "expected_hosts": "Expected devices involved", "lan_hosts_basis": "LAN host attribution basis", "top_dst_traceroute": "Traceroute probes to top destination",
              "ports": "Ports", "port": "Port", "peers": "Remote peers", "sample_peers": "Sample remote peers", "peer": "Remote peer",
              "bytes": "Bytes", "packets": "Packets", "count": "Count", "proto": "Protocol", "country": "Country", "asn": "Network (ASN)",
              "interval": "Interval (s)", "jitter": "Interval jitter", "first": "First seen", "last": "Last seen", "baseline": "Baseline"}
@@ -590,6 +604,8 @@ def evidence_table(evs):
             continue
         rows = ""
         for k, v in ev.items():
+            if k in ("dsts_expected", "expected_hosts") and not v:
+                continue      # nothing excluded: no row
             label = EV_LABELS.get(k, k.replace("_", " ").capitalize())
             if "port" in k and isinstance(v, (list, int)):
                 vals = sorted(v, key=lambda x: int(x) if str(x).isdigit() else 0) if isinstance(v, list) else [v]
@@ -667,7 +683,7 @@ def alert_view(req: Request, aid: int):
 {e(RULE_LABEL.get(a['rule'], a['rule']))} · {e(CATEGORY.get(a['rule'], 'security'))} · status {e(a['status'])}{(' · acked by ' + e(a['acked_by'])) if a['acked_by'] else ''}</span></div>
 <h2 class="title">{e(a['title'])}</h2>
 <dl class="facts"><dt>Firewall</dt><dd>{e(site_name(a['site']))}</dd><dt>Direction</dt><dd>{direction_badge(a) or '—'} <span class="muted small">{e(a['direction_basis'] or 'not applicable')}</span></dd>
-<dt>Affected server</dt><dd>{f'<a href="{link}">{e(cfg.asset_label(a["asset"]))}</a>' if link else e(cfg.asset_label(a['asset']) if a['asset'] else '—')}{lan_hosts_dd(a)}</dd>
+<dt>Affected server</dt><dd>{f'<a href="{link}">{e(cfg.asset_label(a["asset"]))}</a>' if link else e(cfg.asset_label(a['asset']) if a['asset'] else '—')}{lan_hosts_dd(a, req, ROLES[r] >= ROLES["analyst"])}</dd>
 <dt>Time window</dt><dd>{e(fmt_ts(a['window_start']))} → {e(fmt_ts(a['window_end']))}</dd>
 <dt>Seen</dt><dd>{e(a['count'])}× ({e(fmt_ts(a['first_seen']))} → {e(fmt_ts(a['last_seen']))})</dd>
 <dt>Ongoing?</dt><dd><span class="tag og-{e(og['state'])}">{e(og['state'])}</span> {e(og['label'])}
@@ -742,7 +758,26 @@ def exceptions(req: Request):
         + (f"<form method=post action='/netmon/exceptions/{x['id']}/disable'>{csrf_field(req)}<button>Disable</button></form>"
            if x["enabled"] and ROLES[r] >= 1 else "") + "</td></tr>" for x in rows)
     from .admin import SECURITY_TABS, tabs
-    return page(req, "Suppressions", tabs(SECURITY_TABS, "/netmon/exceptions") + "<p class='muted'>Exceptions suppress alerts; they do not make traffic trusted. "
+    exp = get_setting(conn, EXPECTED_KEY, {}) or {}
+    now = time.time()
+    etr = "".join(
+        f"<tr><td class='mono'>{e(t)}</td><td>{e(cfg.asset_label(t) if '/' not in t else t)}</td><td>{e(v.get('reason'))}</td><td>{e(v.get('by'))}</td>"
+        f"<td>{e(fmt_ts(v['ts']))}</td><td>{e(fmt_ts(v['expires_at'])) if v.get('expires_at') else 'never'}"
+        f"{' <span class=tag>expired</span>' if v.get('expires_at') and v['expires_at'] < now else ''}</td><td>"
+        + (f"<form method=post action='/netmon/expected/remove' class='inline'>{csrf_field(req)}<input type=hidden name=target value='{e(t)}'>"
+           f"<button>Remove</button></form>" if ROLES[r] >= 1 else "") + "</td></tr>" for t, v in sorted(exp.items()))
+    add = (f"""<form method=post action="/netmon/expected" class="row">{csrf_field(req)}
+<label>IP or CIDR<input name=target required class="mono" placeholder="10.0.0.21 or 10.0.0.32/28"></label>
+<label class="span2">Why it is legitimate<input name=reason required maxlength=200 placeholder="e.g. contact crawler for the CRM"></label>
+<label>Expires after (days)<input name=expires_days inputmode=numeric placeholder="never"></label><button class="primary">Add expected device</button></form>"""
+           if ROLES[r] >= 1 else "")
+    expected_card = (f"""<section class="card"><div class="card-h"><h2>Expected devices</h2><span class="muted small">legitimate traffic by your decision · excluded from findings</span></div>
+<p class="muted small">Findings about these addresses are not raised. Behind a shared NAT address, destinations that replied to these devices are not
+counted towards fan-out, and other findings are dropped when every named peer replied only to them. Destinations that never replied cannot be
+attributed and still count. Traffic is still recorded and shown on every page. Changes are audited.</p>
+<div class="wrap"><table class="tbl"><tr><th>Address</th><th>Name</th><th>Reason</th><th>By</th><th>Added</th><th>Expires</th><th></th></tr>
+{etr or '<tr><td colspan=7 class=muted>No expected devices</td></tr>'}</table></div>{add}</section>""")
+    return page(req, "Suppressions", tabs(SECURITY_TABS, "/netmon/exceptions") + expected_card + "<h2 class='grp'>Alert suppressions</h2><p class='muted'>Exceptions suppress alerts; they do not make traffic trusted. "
                 "Use * for any rule/asset/subject; subject may be a CIDR. Add them from an alert.</p><div class='card wrap'><table class='tbl'><tr><th>#</th><th>Rule</th>"
                 "<th>Asset</th><th>Subject</th><th>Owner</th><th>Reason</th><th>By</th><th>Expires</th><th>Active</th><th></th></tr>"
                 f"{trs or '<tr><td colspan=10 class=muted>No exceptions</td></tr>'}</table></div>", "/netmon/security", scoped=False)
@@ -764,6 +799,44 @@ def add_exception(req: Request, rule: str = Form(...), asset: str = Form(...), s
                  (*vals, u, time.time(), exp))
     conn.commit()
     audit(conn, u, "exception_added", {"rule": vals[0], "asset": vals[1], "subject": vals[2], "expires": exp})
+    return RedirectResponse("/netmon/exceptions", 303)
+
+
+@app.post("/netmon/expected")
+def add_expected(req: Request, target: str = Form(...), reason: str = Form(...), expires_days: str = Form(""), back: str = Form(""),
+                 csrf: str = Form("")):
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    try:
+        n = ipaddress.ip_network(target.strip(), strict=False)
+    except ValueError:
+        raise HTTPException(400, "not an IP address or CIDR")
+    if n.prefixlen < (24 if n.version == 4 else 48):
+        raise HTTPException(400, "range too broad (at most a /24 or /48)")
+    if str(n.network_address) in cfg.get("outbound_nat_ips", []) and n.prefixlen == n.max_prefixlen:
+        raise HTTPException(400, "that is the shared NAT address (every LAN host) — mark the individual devices instead")
+    if not reason.strip():
+        raise HTTPException(400, "reason required")
+    try:
+        exp = time.time() + float(expires_days) * 86400 if expires_days.strip() else None
+    except ValueError:
+        raise HTTPException(400, "expires must be a number of days")
+    t = str(n.network_address) if n.prefixlen == n.max_prefixlen else str(n)
+    d = get_setting(conn, EXPECTED_KEY, {}) or {}
+    d[t] = {"reason": reason.strip()[:200], "by": u, "ts": time.time(), "expires_at": exp}
+    put_setting(conn, EXPECTED_KEY, d, u)
+    audit(conn, u, "expected_device_added", {"target": t, "reason": d[t]["reason"], "expires": exp})
+    return RedirectResponse(safe_next(back) if back else "/netmon/exceptions", 303)
+
+
+@app.post("/netmon/expected/remove")
+def remove_expected(req: Request, target: str = Form(...), csrf: str = Form("")):
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    d = get_setting(conn, EXPECTED_KEY, {}) or {}
+    if d.pop(target, None) is not None:
+        put_setting(conn, EXPECTED_KEY, d, u)
+        audit(conn, u, "expected_device_removed", {"target": target})
     return RedirectResponse("/netmon/exceptions", 303)
 
 
