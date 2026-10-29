@@ -1,0 +1,5 @@
+[Unit]
+Description=netmon encrypted backup
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netmon-backup

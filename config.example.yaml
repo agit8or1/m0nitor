@@ -1,0 +1,139 @@
+# m0nitor (netmon) configuration — EXAMPLE with documentation/private addresses only.
+# Copy to app/config.yaml and edit. Secrets never go here: they are files under secrets/ (see .env.example).
+clickhouse_url: http://clickhouse:8123
+akvorado_url: https://10.40.0.161/
+
+# Observation semantics for fw-a (validate for your firewall: see docs/nat-attribution.md):
+#   ix0 -> bridge0 : inbound across WAN, DstAddr is the real internal host (post de-NAT)
+#   *   -> ix0     : outbound across WAN, SrcAddr is post-NAT (public)
+#   ''  -> *       : firewall-originated
+# Sites (one per firewall). More can be added in Settings → Firewalls (stored in the app DB);
+# the detector, dashboards, logs and blocking run per site. vendor: opnsense | pfsense.
+sites:
+  - id: site-a
+    name: Site A · fw-a
+    vendor: opnsense
+    exporter: fw-a
+    exporter_ip: 10.40.0.1     # NetFlow source address (Akvorado exporter + host ACL)
+    wan_if: ix0
+    lan_if: bridge0
+    # Kernel ifindex (netstat -inW Link#N on the firewall). Rendered into Akvorado outlet.yaml.
+    ifindexes:
+      5:  {name: ix0, description: "WAN", speed: 10000}
+      6:  {name: ix1, description: "LAN bridge member", speed: 10000}
+      12: {name: bridge0, description: "LAN bridge", speed: 10000}
+    # Exact site coordinates are not configured: GeoIP for our WAN addresses gives country only,
+    # so the map uses the country centroid and labels it as such. Set lat/lon to override.
+    location: {country: US, lat: null, lon: null, label: "Site A"}
+    wan_capacity_mbps: null      # contracted capacity; null = utilization not shown (port speed is not capacity)
+    syslog_source: 10.40.0.1   # remote syslog sender address (filter logs, Suricata, system events)
+    snmp:                         # read-only interface counters (OPNsense os-net-snmp)
+      host: 10.40.0.1
+      community_file: /run/secrets/snmp_community
+      interfaces: {ix0: 5}        # name: ifIndex (IF-MIB ifHCInOctets/ifHCOutOctets)
+      interval_seconds: 10
+
+exporter: fw-a
+wan_if: ix0
+lan_if: bridge0
+# Active timeout on OPNsense (seconds); periodic exports of long-lived flows at this
+# cadence are not beacons.
+exporter_active_timeout: 120
+
+internal_nets: [10.40.0.0/24, 10.0.0.0/24, 10.50.0.0/24]
+public_nets: [203.0.113.176/28, 198.51.100.224/27]
+# Shared outbound NAT address: per-address counts aggregate many hosts (return-path attribution: docs/nat-attribution.md).
+outbound_nat_ips: [203.0.113.179]
+
+detector:
+  interval_seconds: 300
+  window_minutes: 60          # evaluation window for novelty/volume rules
+  ingest_delay_seconds: 60    # ignore the newest minute (export latency)
+  baseline_days: 14           # full-confidence learning period
+  min_learning_days: 3        # novelty rules stay silent before this
+  cooldown_minutes: 360       # repeat of an open alert only updates it
+
+rules:
+  new_dest_country: {enabled: true, min_flows: 2}
+  new_dest_asn: {enabled: true, min_flows: 3}
+  unexpected_inbound: {enabled: true, ephemeral_floor: 32768}
+  outbound_volume: {enabled: true, min_bytes: 200000000, factor: 4.0}
+  fanout: {enabled: true, window_minutes: 10, min_peers: 150, min_ports_per_peer: 25}
+  beaconing: {enabled: true, hours: 6, min_events: 8, max_cv: 0.2,
+              min_interval_s: 30, max_interval_s: 3600, ignore_ports: [53, 123]}
+  exporter_silence: {enabled: true, minutes: 5}
+  disk_usage: {enabled: true, percent: 85}
+  ids_alert: {enabled: true, window_minutes: 10}
+  fw_blocked_outbound: {enabled: true, window_minutes: 10, min_events: 20}
+  fw_blocked_scan: {enabled: true, window_minutes: 10, min_events: 300, min_ports: 25}
+  syslog_silence: {enabled: true, minutes: 15}
+
+# Ports treated as "service" ports when inferring which side initiated (heuristic).
+service_ports: [21, 22, 25, 53, 80, 110, 123, 143, 443, 465, 587, 853, 993, 995,
+                3478, 5222, 8080, 8443]
+
+# Internal servers (example names). sensitive: true raises severity for outbound novelty.
+# Usually managed in Settings → Inventory (stored in the app DB); this list only seeds a fresh DB.
+assets:
+  10.40.0.1:   {name: fw-a-lan, role: firewall, sensitive: true}
+  10.40.0.8:   {name: backup-1, role: backup, sensitive: true}
+  10.40.0.161: {name: monitor, role: monitoring}
+  10.40.0.210: {name: mgmt-1, role: management, sensitive: true}
+  10.40.0.233: {name: admin-panel, role: web}
+  10.40.0.240: {name: mail-1, role: mail+dns}
+  10.40.0.250: {name: proxy-1, role: reverse-proxy}
+  10.40.0.254: {name: hypervisor-1, role: hypervisor, sensitive: true}
+
+# Intended inbound exposure = port forwards on the firewall: "internal proto port[-port] public_ip"
+exposures:
+  - 10.40.0.250 tcp 80 198.51.100.231
+  - 10.40.0.250 tcp 443 198.51.100.231
+  - 10.40.0.8 tcp 8007 198.51.100.231
+  - 10.40.0.233 tcp 10000 198.51.100.231
+  - 10.40.0.240 tcp 25 203.0.113.182
+  - 10.40.0.240 tcp 443 203.0.113.182
+  - 10.40.0.240 tcp 587 203.0.113.182
+  - 10.40.0.240 tcp 993 203.0.113.182
+  - 10.40.0.240 udp 53 203.0.113.182
+  - 10.40.0.210 tcp 443 198.51.100.229
+  - 10.40.0.210 tcp 8100-8443 198.51.100.229
+  - 10.40.0.254 tcp 8006 203.0.113.178
+
+# Access control (users come from Caddy's Remote-User header). Unlisted users = viewer.
+users:
+  admin: admin
+
+# Blocking: enforced by OPNsense via alias_util on ONE alias. The app never edits rules.
+opnsense:
+  base_url: https://10.40.0.1
+  tls_server_name: fw.example.net     # name on the firewall's TLS certificate (verified)
+  block_alias: netmon_block
+  key_file: /run/secrets/opnsense_block.key   # "key:secret"; absent => blocking disabled
+  # Never blockable, in addition to internal_nets and public_nets.
+  protected: [1.1.1.1, 1.0.0.1, 8.8.8.8, 8.8.4.4, 4.2.2.3, 203.0.113.177]
+  min_prefix_v4: 24
+  min_prefix_v6: 48
+
+notify:
+  webhook:
+    enabled: false
+    url: ""                     # set + enabled: true, then use "Send test alert"
+    min_severity: medium
+    secret_file: /run/secrets/webhook_hmac.key   # optional HMAC-SHA256 signing key
+
+# GeoIP policy: read live from OPNsense (API, read-only). This snapshot is only the fallback when the firewall is unreachable.
+geoip_policy:
+  alias: GeoIP_BLOCK
+  verified_at: null
+  rule: {interface: wan, direction: in, action: block, enabled: false, sequence: 51,
+         note: "The only rule referencing GeoIP_BLOCK is DISABLED: these countries are not blocked."}
+  countries: [AO,BF,BI,BJ,BW,CD,CF,CG,CI,CM,DJ,DZ,EG,EH,ER,ET,GA,GH,GM,GN,GQ,GW,KE,LR,LS,LY,MA,ML,MR,MW,MZ,NA,NE,NG,RW,SD,SL,SN,SO,SS,ST,SZ,TD,TG,TN,TZ,UG,ZA,ZM,ZW,AG,AI,AR,AW,BB,BL,BO,BQ,BR,BS,BZ,CA,CL,CR,CW,DM,DO,EC,GD,GF,GL,GP,GT,GY,HN,HT,JM,KN,KY,LC,MF,MQ,MS,MX,NI,PA,PE,PM,PR,PY,SR,SV,SX,TC,TT,UY,VC,VE,AQ,SJ,AE,AF,AM,AZ,BD,BH,BN,BT,CN,CY,GE,HK,ID,IL,IN,IQ,IR,JO,JP,KG,KH,KP,KR,KW,KZ,LA,LB,LK,MM,MN,MO,MY,NP,OM,PH,PK,PS,QA,SA,SG,SY,TH,TJ,TL,TM,TW,UZ,VN,YE,CC,CX,IO,KM,MG,MU,MV,RE,SC,TF,YT,AS,CK,FJ,FM,GU,KI,MH,MP,NC,NF,NR,NU,NZ,PF,PG,PN,PW,SB,TK,TO,TV,VU,WF,WS,RU,UA]
+
+# Optional manual AI analysis (OpenAI Responses API). Disabled until a key file exists.
+ai:
+  model: gpt-5-nano            # cheapest current model (check current OpenAI pricing)
+  key_file: /run/secrets/openai_api_key
+  max_output_tokens: 4000      # includes hidden reasoning tokens for gpt-5* models
+  max_input_chars: 24000
+  daily_request_limit: 25
+  pseudonymize_internal: true  # internal addresses -> host-N; mapping stays local

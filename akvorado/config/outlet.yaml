@@ -1,0 +1,108 @@
+---
+geoip:
+  optional: true
+  # When running on Docker, these paths are inside the container. By default,
+  # IPinfo databases are used. (https://ipinfo.io/)
+  asn-database:
+    - /usr/share/GeoIP/asn.mmdb
+  geo-database:
+    - /usr/share/GeoIP/country.mmdb
+  # If you want to use MaxmindDB, check `.env`, `docker-compose-maxmind.yml` and
+  # update these paths:
+  #asn-database:
+  # - /usr/share/GeoIP/GeoLite2-ASN.mmdb
+  #geo-database:
+  # - /usr/share/GeoIP/GeoLite2-Country.mmdb
+
+networks:
+  networks:
+    # Internal ranges (extend once OPNsense interfaces are confirmed).
+    10.0.0.0/8:
+      name: rfc1918-10
+      role: internal
+    172.16.0.0/12:
+      name: rfc1918-172
+      role: internal
+    192.168.0.0/16:
+      name: rfc1918-192
+      role: internal
+    # Your own networks (examples; documentation ranges). netmon's Settings → Sites lists the real ones.
+    10.40.0.0/24:
+      name: lan
+      role: servers
+    203.0.113.176/28:
+      name: public-a
+      role: dc-public
+  network-sources: []
+
+  # network-sources:
+    # amazon:
+    #   url: https://ip-ranges.amazonaws.com/ip-ranges.json
+    #   interval: 6h
+    #   transform: |
+    #     (.prefixes + .ipv6_prefixes)[] |
+    #     { prefix: (.ip_prefix // .ipv6_prefix), tenant: "amazon", region: .region, role: .service|ascii_downcase }
+    # gcp:
+    #   url: https://www.gstatic.com/ipranges/cloud.json
+    #   interval: 6h
+    #   transform: |
+    #     .prefixes[] |
+    #     { prefix: (.ipv4Prefix // .ipv6Prefix), tenant: "google-cloud", region: .scope }
+    # netbox:
+    #   url: "https://netbox.domain.tld/api/ipam/prefixes/?limit=0"
+    #   interval: 6h
+    #   headers:
+    #     Authorization: "Token YOUR_NETBOX_API_TOKEN"
+    #     Accept: "application/json"
+    #   transform: |
+    #     .results[] |
+    #     { prefix: .prefix,
+    #       tenant: .tenant.name,
+    #       site: .scope.description,
+    #       city: .scope.name,
+    #       role: .role.name,
+    #       name: .description
+    #     }
+    # nerd-scan:
+    #   url: https://nerd.cesnet.cz/nerd/data/bl_scan.txt
+    #   parser: plain
+    #   interval: 24h
+    #   transform: |
+    #     .[] | select(startswith("#") | not) |
+    #     { prefix: . + "/32", tenant: "nerd", role: "nerd-scan" }
+
+metadata:
+  providers:
+    # OPNsense has no SNMP by default; interface names come from static config.
+    # ifindexes are filled in after reading the firewall's interface table.
+    - type: static
+      exporters:
+        # BEGIN netmon-exporters  (rendered from Settings → Firewalls by host/netmon-apply-sites; example below)
+        10.40.0.1/32:
+          name: fw-a
+          default:
+            name: unknown
+            description: unmapped ifindex
+            speed: 0
+          ifindexes:
+            5: {name: ix0, description: "WAN", speed: 10000}
+            12: {name: bridge0, description: "LAN bridge", speed: 10000}
+        # END netmon-exporters
+routing:
+  provider:
+    type: bmp
+    # Before increasing this value, look for it in the scaling section
+    # of the documentation.
+    receive-buffer: 212992
+core:
+  # OPNsense NetFlow is unsampled and does not advertise a sampling rate.
+  default-sampling-rate: 1
+  exporter-classifiers:
+    # BEGIN netmon-classifiers
+    - ClassifySite("site-a")
+    - ClassifyRole("firewall")
+    # END netmon-classifiers
+  interface-classifiers:
+    # The interface described "WAN" is the only external boundary; LAN and VPN interfaces are internal.
+    - Interface.Description == "WAN" && ClassifyExternal() && ClassifyConnectivity("transit")
+    - ClassifyInternal()

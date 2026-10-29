@@ -1,0 +1,9 @@
+[Unit]
+Description=netmon: watch the app's firewall list
+
+[Path]
+PathChanged=/opt/netmon/data/host-sites.json
+Unit=netmon-apply-sites.service
+
+[Install]
+WantedBy=multi-user.target

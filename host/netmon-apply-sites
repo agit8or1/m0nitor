@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Apply the firewall (site) list from the netmon app to this host. Runs as root via
+netmon-apply-sites.path whenever /opt/netmon/data/host-sites.json changes.
+
+The JSON is written by the unprivileged app, so every value is validated against a strict
+pattern before it is rendered into ufw rules, rsyslog config or Akvorado's outlet.yaml.
+Only regions this script owns are changed:
+  /etc/ufw/after.rules                       between "# BEGIN netmon-senders" / "# END netmon-senders"
+  ufw rules with comment "netmon-syslog"     (syslog 5514/tcp+udp per firewall)
+  /etc/rsyslog.d/30-netmon-opnsense.conf     whole file (template below)
+  akvorado/config/outlet.yaml                between the netmon-exporters / netmon-classifiers markers
+"""
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+SRC = "/opt/netmon/data/host-sites.json"
+STATUS = "/opt/netmon/data/host-sites.status.json"
+AFTER = "/etc/ufw/after.rules"
+RSYSLOG = "/etc/rsyslog.d/30-netmon-opnsense.conf"
+OUTLET = "/opt/netmon/akvorado/config/outlet.yaml"
+AKV_DIR = "/opt/netmon/akvorado"
+APP_UID = 10001
+MAX_SITES = 32
+
+RE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
+RE_IF = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
+RE_EXP = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$")
+RE_NAME = re.compile(r"^[A-Za-z0-9 _.:/()+,·-]{1,60}$")
+RE_TEXT = re.compile(r"^[A-Za-z0-9 _.:/()+,-]{0,60}$")
+
+
+class Invalid(Exception):
+    pass
+
+
+def host_ip(v, what):
+    try:
+        a = ipaddress.ip_address(str(v))
+    except ValueError:
+        raise Invalid(f"{what}: not an IP address")
+    if a.is_unspecified or a.is_loopback or a.is_multicast or a.is_link_local or a.is_reserved:
+        raise Invalid(f"{what}: {a} is not a usable sender address")
+    return str(a)
+
+
+def validate(doc):
+    sites = doc.get("sites")
+    if not isinstance(sites, list) or not 1 <= len(sites) <= MAX_SITES:
+        raise Invalid("sites must be a list of 1..32")
+    out, seen_ids, seen_exp = [], set(), set()
+    for s in sites:
+        sid = str(s.get("id", ""))
+        if not RE_ID.match(sid) or sid in seen_ids:
+            raise Invalid(f"bad or duplicate site id {sid!r}")
+        seen_ids.add(sid)
+        exp = str(s.get("exporter", ""))
+        if not RE_EXP.match(exp):
+            raise Invalid(f"{sid}: bad exporter name")
+        if exp in seen_exp:
+            raise Invalid(f"{sid}: exporter name {exp} used twice")
+        seen_exp.add(exp)
+        mode = s.get("flow_mode")
+        if mode not in ("routed", "capture"):
+            raise Invalid(f"{sid}: bad flow_mode")
+        wan = str(s.get("wan_if", ""))
+        if not RE_IF.match(wan):
+            raise Invalid(f"{sid}: bad WAN interface name")
+        ifx = {}
+        for k, v in (s.get("ifindexes") or {}).items():
+            try:
+                idx = int(k)
+            except ValueError:
+                raise Invalid(f"{sid}: ifindex {k!r} not a number")
+            if not 1 <= idx <= 65535 or not isinstance(v, dict):
+                raise Invalid(f"{sid}: ifindex {k} out of range")
+            name, desc, speed = str(v.get("name", "")), str(v.get("description", "")), v.get("speed", 0)
+            if not RE_IF.match(name) or not RE_TEXT.match(desc) or not isinstance(speed, int) or not 0 <= speed <= 10 ** 6:
+                raise Invalid(f"{sid}: bad interface entry for ifindex {idx}")
+            ifx[idx] = {"name": name, "description": desc, "speed": speed}
+        out.append({"id": sid, "exporter": exp, "flow_mode": mode, "wan_if": wan, "ifindexes": ifx,
+                    "exporter_ip": host_ip(s.get("exporter_ip"), f"{sid} exporter_ip") if s.get("exporter_ip") else None,
+                    "syslog_source": host_ip(s.get("syslog_source"), f"{sid} syslog_source") if s.get("syslog_source") else None})
+    return out
+
+
+def replace_region(text, begin, end, body):
+    i, j = text.find(begin), text.find(end)
+    if i < 0 or j < i:
+        raise Invalid(f"markers {begin!r} not found")
+    line_start = text.rfind("\n", 0, i) + 1
+    indent = text[line_start:i]
+    return text[:i] + begin + "\n" + "".join(indent + l + "\n" for l in body) + indent + text[j:]
+
+
+def render_outlet(text, sites):
+    ex = []
+    for s in sites:
+        if not s["exporter_ip"]:
+            continue
+        net = "/128" if ":" in s["exporter_ip"] else "/32"
+        ex.append(f"{s['exporter_ip']}{net}:")
+        ex.append(f"  name: {s['exporter']}")
+        if s["flow_mode"] == "capture":
+            # softflowd reports the capture interface as both input and output: every ifindex is the WAN
+            ex += ["  default:", f"    name: {s['wan_if']}", '    description: "WAN"', "    speed: 0"]
+        else:
+            ex += ["  default:", "    name: unknown", "    description: unmapped ifindex", "    speed: 0"]
+        if s["ifindexes"]:
+            ex.append("  ifindexes:")
+            for idx in sorted(s["ifindexes"]):
+                v = s["ifindexes"][idx]
+                desc = "WAN" if v["name"] == s["wan_if"] else v["description"]
+                ex.append(f'    {idx}: {{name: {v["name"]}, description: "{desc}", speed: {v["speed"]}}}')
+    text = replace_region(text, "# BEGIN netmon-exporters", "# END netmon-exporters", ex)
+    if len(sites) == 1:
+        cl = [f'- ClassifySite("{sites[0]["id"]}")', '- ClassifyRole("firewall")']
+    else:
+        cl = [f'- Exporter.Name == "{s["exporter"]}" && ClassifySite("{s["id"]}")' for s in sites] + ['- ClassifyRole("firewall")']
+    return replace_region(text, "# BEGIN netmon-classifiers", "# END netmon-classifiers", cl)
+
+
+def render_after(text, sites):
+    ips = sorted({s["exporter_ip"] for s in sites if s["exporter_ip"] and ":" not in s["exporter_ip"]})
+    body = [f"-A DOCKER-USER -i eth0 -p udp --dport 2055 -s {ip} -j RETURN" for ip in ips]
+    body.append("-A DOCKER-USER -i eth0 -p udp --dport 2055 -j DROP")
+    if "# BEGIN netmon-senders" not in text:  # first run: wrap the existing hand-written rules
+        old = [l for l in text.splitlines() if "--dport 2055" in l and l.startswith("-A DOCKER-USER")]
+        if not old:
+            raise Invalid("DOCKER-USER 2055 rules not found in after.rules")
+        first, last = text.index(old[0]), text.index(old[-1]) + len(old[-1])
+        text = text[:first] + "# BEGIN netmon-senders\n# END netmon-senders" + text[last:]
+    return replace_region(text, "# BEGIN netmon-senders", "# END netmon-senders", body)
+
+
+RSYSLOG_TMPL = """# netmon: receive firewall remote syslog (filterlog, suricata, gateways, VPN, audit) on 5514.
+# OPNsense sends TCP; pfSense sends UDP. GENERATED by netmon-apply-sites from Settings -> Firewalls.
+# Access limited per firewall by ufw (comment netmon-syslog) and AllowedSender.
+module(load="imtcp" MaxSessions="64")
+module(load="imudp")
+{allowed}
+template(name="netmonRaw" type="string" string="%timegenerated:::date-unixtimestamp% %fromhost-ip% %rawmsg%\\n")
+template(name="netmonFile" type="string" string="/var/log/netmon/opnsense-%$year%%$month%%$day%.log")
+ruleset(name="netmonOPNsense") {{
+  action(type="omfile" dynaFile="netmonFile" template="netmonRaw" fileOwner="syslog" fileGroup="netmon" fileCreateMode="0640" dirCreateMode="02750" asyncWriting="on" flushInterval="1" ioBufferSize="256k")
+  stop
+}}
+input(type="imtcp" port="5514" ruleset="netmonOPNsense")
+input(type="imudp" port="5514" ruleset="netmonOPNsense")
+"""
+
+
+def render_rsyslog(sites):
+    ips = sorted({s["syslog_source"] for s in sites if s["syslog_source"]})
+    allowed = "\n".join([f"$AllowedSender TCP, {', '.join(ips)}", f"$AllowedSender UDP, {', '.join(ips)}"]) if ips else ""
+    return RSYSLOG_TMPL.format(allowed=allowed)
+
+
+def run(cmd, check=True, cwd=None):
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=cwd)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd)}: {(r.stderr or r.stdout).strip()[:300]}")
+    return r.stdout
+
+
+def ufw_syslog(sites):
+    """Make ufw's netmon-syslog rules exactly one tcp+udp allow per syslog source."""
+    want = {(ip, p) for ip in {s["syslog_source"] for s in sites if s["syslog_source"]} for p in ("tcp", "udp")}
+    have, legacy = {}, []
+    for line in run(["ufw", "status", "numbered"]).splitlines():
+        m = re.match(r"^\[\s*(\d+)\]\s+5514/(tcp|udp)\s+ALLOW IN\s+(\S+)\s+#\s*(.*)$", line.strip())
+        if m:
+            num, proto, src, comment = m.groups()
+            if comment.strip() == "netmon-syslog":
+                have[(src, proto)] = int(num)
+            elif "remote syslog" in comment:
+                legacy.append(int(num))
+    changed = False
+    for num in sorted([n for k, n in have.items() if k not in want] + legacy, reverse=True):
+        run(["ufw", "--force", "delete", str(num)])
+        changed = True
+    for ip, proto in sorted(want - set(have)):
+        run(["ufw", "allow", "proto", proto, "from", ip, "to", "any", "port", "5514", "comment", "netmon-syslog"])
+        changed = True
+    return changed
+
+
+def write_if_changed(path, text, mode=0o644):
+    old = open(path).read() if os.path.exists(path) else None
+    if old == text:
+        return False
+    tmp = path + ".netmon-tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    return True
+
+
+def status(**kw):
+    tmp = STATUS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"applied_at": time.time(), **kw}, f)
+    os.chown(tmp, APP_UID, APP_UID)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATUS)
+
+
+def main():
+    raw = open(SRC, "rb").read()
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        sites = validate(json.loads(raw))
+    except (Invalid, ValueError) as e:
+        status(ok=False, hash=digest, error=f"rejected: {e}", actions=[])
+        return 1
+    actions = []
+    try:
+        outlet = render_outlet(open(OUTLET).read(), sites)
+        after = render_after(open(AFTER).read(), sites)
+        rsys = render_rsyslog(sites)
+        if write_if_changed(OUTLET, outlet):
+            run(["docker", "compose", "restart", "akvorado-orchestrator"], cwd=AKV_DIR)
+            run(["docker", "compose", "restart", "akvorado-outlet", "akvorado-inlet"], cwd=AKV_DIR)
+            actions.append("Akvorado exporters updated (orchestrator, inlet, outlet restarted)")
+        fw_changed = write_if_changed(AFTER, after, 0o640)
+        fw_changed = ufw_syslog(sites) or fw_changed
+        if fw_changed:
+            run(["ufw", "reload"])
+            actions.append("ufw sender rules updated")
+        old = open(RSYSLOG).read() if os.path.exists(RSYSLOG) else None
+        if old != rsys:
+            write_if_changed(RSYSLOG, rsys)
+            try:
+                run(["rsyslogd", "-N1"])
+            except RuntimeError:
+                if old is not None:
+                    write_if_changed(RSYSLOG, old)
+                raise
+            run(["systemctl", "restart", "rsyslog"])
+            actions.append("rsyslog senders updated")
+    except Exception as e:
+        status(ok=False, hash=digest, error=str(e)[:500], actions=actions)
+        return 1
+    status(ok=True, hash=digest, error=None, actions=actions or ["no change needed"],
+           senders={"netflow": sorted({s["exporter_ip"] for s in sites if s["exporter_ip"]}),
+                    "syslog": sorted({s["syslog_source"] for s in sites if s["syslog_source"]})})
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

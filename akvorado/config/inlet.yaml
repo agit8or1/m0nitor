@@ -1,0 +1,9 @@
+---
+flow:
+  inputs:
+    # NetFlow v9 from OPNsense
+    - type: udp
+      decoder: netflow
+      listen: :2055
+      workers: 4
+      receive-buffer: 212992

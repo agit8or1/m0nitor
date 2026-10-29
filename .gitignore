@@ -1,0 +1,17 @@
+.env
+secrets/
+data/
+app/config.yaml
+*.key
+*.pem
+*.enc
+*.db
+*.db-*
+__pycache__/
+.pytest_cache/
+caddy/data/
+caddy/config/
+akvorado/docker/
+akvorado/.env
+*.bak*
+.ruff_cache/

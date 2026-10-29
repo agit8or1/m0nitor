@@ -1,0 +1,24 @@
+# Local overrides for netmon (do not edit upstream docker-compose.yml).
+services:
+  clickhouse:
+    # VM CPU lacks AVX2; ClickHouse >=26.6 needs x86-64-v3. Remove after
+    # switching the Proxmox CPU type to x86-64-v3/host.
+    image: clickhouse/clickhouse-server:26.3
+  akvorado-inlet:
+    # NetFlow v9 only. Host firewall (DOCKER-USER) limits sources to exporters.
+    ports: !override
+      - 2055:2055/udp
+  akvorado-outlet:
+    ports: !reset []
+  traefik:
+    # Console only reachable via Caddy (TLS + auth) on 443.
+    ports: !override
+      - 127.0.0.1:8080:8080/tcp
+      - 127.0.0.1:8081:8081/tcp
+  akvorado-console:
+    labels:
+      # Upstream injects a demo user; identity comes from Caddy's Remote-User instead.
+      - traefik.http.routers.akvorado-console.middlewares=compress@docker
+  kafka-ui:
+    # Unauthenticated admin tool; not needed in production.
+    profiles: [disabled]

@@ -1,0 +1,7 @@
+[Unit]
+Description=netmon: apply firewall/site list (ufw senders, rsyslog, Akvorado exporters)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netmon-apply-sites

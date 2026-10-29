@@ -1,0 +1,5 @@
+line-length = 200
+target-version = "py312"
+[lint]
+select = ["E", "F", "W"]
+ignore = ["E731", "E501", "E402", "E741"]  # HTML templates are long lines; some imports are deliberately late (circular app wiring)

@@ -1,0 +1,37 @@
+{
+	admin off
+}
+# NETMON_SITE: the monitor's address(es), e.g. "https://10.40.0.161, https://monitor.example.net" (set in .env)
+{$NETMON_SITE} {
+	tls internal
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		-Server
+	}
+	# netmon app: login, session check and operator UI (the app enforces sessions itself)
+	@app path /login /logout /auth/* /netmon /netmon/*
+	handle @app {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up -Remote-User
+		}
+	}
+	# landing page = netmon Overview (served at /), not Akvorado
+	handle / {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up -Remote-User
+		}
+	}
+	# Akvorado ("Advanced flow explorer"): session verified by the app, identity passed as Remote-User
+	handle {
+		forward_auth 127.0.0.1:8090 {
+			uri /auth/verify
+			copy_headers Remote-User
+		}
+		reverse_proxy 127.0.0.1:8081 {
+			header_up -X-Forwarded-User
+		}
+	}
+}
