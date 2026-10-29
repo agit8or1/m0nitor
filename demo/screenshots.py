@@ -2,7 +2,6 @@
   docker run --rm --network container:m0nitor-demo-app-1 -e PW=... -v $PWD:/w -w /w <playwright image> python demo/screenshots.py
 """
 import os
-import sqlite3
 
 from playwright.sync_api import sync_playwright
 
