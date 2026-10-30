@@ -4,7 +4,7 @@ Self-hosted network monitoring for OPNsense (and, with limits, pfSense) firewall
 *sends* telemetry (NetFlow v9, remote syslog, optional SNMP); the monitor never sits in the forwarding path, so if it
 stops, traffic is unaffected.
 
-> **Status:** pre-release. No license has been chosen yet — all rights reserved until one is added.
+> **Status:** pre-release. Licensed under the [MIT License](LICENSE); bundled third-party files keep their own licenses (see [NOTICE](NOTICE)), notably `akvorado/config/*`, which stays AGPL-3.0.
 > The internal Python package is still called `netmon`.
 
 ## What it does
