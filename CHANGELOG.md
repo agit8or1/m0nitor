@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Added
+- Monitor identity setting (Settings → Firewalls & sites → This monitor): FQDN served by the TLS front end (root
+  helper renders the Caddyfile site line, validates, restarts Caddy) and used in notification links; address firewalls
+  send to; live DNS check of the FQDN (recognises a reverse proxy on one of your own addresses).
 - FQDNs for remote addresses from the Unbound query log (re-resolved on the same resolver, `netmon.dns_resolved`),
   shown under remote addresses in conversation tables; per-firewall DNS card (query log mode record, resolver,
   status) and IDS / DNS query log lines on Settings → Firewalls & sites.

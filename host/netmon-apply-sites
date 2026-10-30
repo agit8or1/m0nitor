@@ -9,6 +9,8 @@ Only regions this script owns are changed:
   ufw rules with comment "netmon-syslog"     (syslog 5514/tcp+udp per firewall)
   /etc/rsyslog.d/30-netmon-opnsense.conf     whole file (template below)
   akvorado/config/outlet.yaml                between the netmon-exporters / netmon-classifiers markers
+  caddy/Caddyfile                            the site line between "# BEGIN netmon-hosts" / "# END netmon-hosts":
+                                             this monitor's IP + the FQDN set under Settings (only when an FQDN is set)
 """
 import hashlib
 import ipaddress
@@ -25,6 +27,8 @@ AFTER = "/etc/ufw/after.rules"
 RSYSLOG = "/etc/rsyslog.d/30-netmon-opnsense.conf"
 OUTLET = "/opt/netmon/akvorado/config/outlet.yaml"
 AKV_DIR = "/opt/netmon/akvorado"
+CADDY_DIR = "/opt/netmon/caddy"
+CADDYFILE = CADDY_DIR + "/Caddyfile"
 APP_UID = 10001
 MAX_SITES = 32
 
@@ -33,6 +37,9 @@ RE_IF = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 RE_EXP = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$")
 RE_NAME = re.compile(r"^[A-Za-z0-9 _.:/()+,·-]{1,60}$")
 RE_TEXT = re.compile(r"^[A-Za-z0-9 _.:/()+,-]{0,60}$")
+RE_FQDN = re.compile(r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# first site-address line: not indented, not a comment, not the bare "{" of the global options, ends with "{"
+RE_SITE_LINE = re.compile(r"(?m)^(?!\{[ \t]*$)(?![#\s])[^\n]*\{[ \t]*$")
 
 
 class Invalid(Exception):
@@ -87,6 +94,57 @@ def validate(doc):
                     "exporter_ip": host_ip(s.get("exporter_ip"), f"{sid} exporter_ip") if s.get("exporter_ip") else None,
                     "syslog_source": host_ip(s.get("syslog_source"), f"{sid} syslog_source") if s.get("syslog_source") else None})
     return out
+
+
+def validate_monitor(doc):
+    m = doc.get("monitor") or {}
+    fqdn = m.get("fqdn") or None
+    if fqdn is not None and not RE_FQDN.match(str(fqdn)):
+        raise Invalid("monitor fqdn is not a DNS name")
+    addr = host_ip(m.get("address"), "monitor address") if m.get("address") else None
+    return {"fqdn": fqdn, "address": addr}
+
+
+def render_caddy(text, mon):
+    """Caddyfile with the site line = this monitor's IP + FQDN; None when no FQDN is set (file left alone)."""
+    if not mon["fqdn"] or not mon["address"]:
+        return None
+    ip = f"[{mon['address']}]" if ":" in mon["address"] else mon["address"]
+    if "# BEGIN netmon-hosts" not in text:   # first run: wrap the existing site line
+        m = RE_SITE_LINE.search(text)
+        if not m:
+            raise Invalid("site line not found in Caddyfile")
+        text = text[:m.start()] + "# BEGIN netmon-hosts\n" + m.group(0) + "\n# END netmon-hosts" + text[m.end():]
+    return replace_region(text, "# BEGIN netmon-hosts", "# END netmon-hosts", [f"https://{ip}, https://{mon['fqdn']} {{"])
+
+
+def apply_caddy(new):
+    """Validate the new Caddyfile in a throwaway container, swap it in, restart Caddy; restore the old file on failure."""
+    old = open(CADDYFILE).read()
+    if new is None or new == old:
+        return False
+    image = re.search(r"(?m)^\s*image:\s*(\S+)", open(CADDY_DIR + "/docker-compose.yml").read()).group(1)
+    st = os.stat(CADDYFILE)
+    tmp = CADDYFILE + ".netmon-new"
+    with open(tmp, "w") as f:
+        f.write(new)
+    os.chmod(tmp, st.st_mode & 0o777)
+    os.chown(tmp, st.st_uid, st.st_gid)
+    try:
+        run(["docker", "run", "--rm", "--network", "none", "-v", f"{tmp}:/etc/caddy/Caddyfile:ro", image,
+             "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"])
+    except RuntimeError:
+        os.unlink(tmp)
+        raise
+    os.replace(tmp, CADDYFILE)   # new inode: the single-file bind mount needs a container restart to see it
+    try:
+        run(["docker", "compose", "restart", "caddy"], cwd=CADDY_DIR)
+    except RuntimeError:
+        write_if_changed(CADDYFILE, old, st.st_mode & 0o777)
+        os.chown(CADDYFILE, st.st_uid, st.st_gid)
+        run(["docker", "compose", "restart", "caddy"], cwd=CADDY_DIR, check=False)
+        raise
+    return True
 
 
 def replace_region(text, begin, end, body):
@@ -215,7 +273,8 @@ def main():
     raw = open(SRC, "rb").read()
     digest = hashlib.sha256(raw).hexdigest()
     try:
-        sites = validate(json.loads(raw))
+        doc = json.loads(raw)
+        sites, mon = validate(doc), validate_monitor(doc)
     except (Invalid, ValueError) as e:
         status(ok=False, hash=digest, error=f"rejected: {e}", actions=[])
         return 1
@@ -244,12 +303,15 @@ def main():
                 raise
             run(["systemctl", "restart", "rsyslog"])
             actions.append("rsyslog senders updated")
+        if os.path.exists(CADDYFILE) and apply_caddy(render_caddy(open(CADDYFILE).read(), mon)):
+            actions.append(f"TLS front end now serves {mon['address']} and {mon['fqdn']} (Caddy restarted)")
     except Exception as e:
         status(ok=False, hash=digest, error=str(e)[:500], actions=actions)
         return 1
     status(ok=True, hash=digest, error=None, actions=actions or ["no change needed"],
            senders={"netflow": sorted({s["exporter_ip"] for s in sites if s["exporter_ip"]}),
-                    "syslog": sorted({s["syslog_source"] for s in sites if s["syslog_source"]})})
+                    "syslog": sorted({s["syslog_source"] for s in sites if s["syslog_source"]})},
+           monitor=mon)
     return 0
 
 

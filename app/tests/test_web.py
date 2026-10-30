@@ -265,3 +265,24 @@ def test_site_dns_settings_recorded_on_firewalls_page():
     r = a.post("/netmon/settings/sites/site-a/dns", data={"fw_mode": "queries", "resolver": "not-an-ip", "csrf": tok}, follow_redirects=False)
     assert "Not%20saved" in r.headers["location"]
     assert v.post("/netmon/settings/sites/site-a/dns", data={"fw_mode": "off", "csrf": web.csrf_token(sid(v))}).status_code == 403
+
+
+def test_admin_sets_monitor_fqdn_for_tls_front_end_and_links():
+    from netmon import admin
+    a, v = client("admin", ADMINPW), client("viewer1", VIEWPW)
+    tok = web.csrf_token(sid(a))
+    assert "This monitor" in a.get("/netmon/settings/sites").text
+    r = a.post("/netmon/settings/monitor", data={"fqdn": "Monitor.Example.NET.", "address": "", "csrf": tok}, follow_redirects=False)
+    assert r.status_code == 303 and "Saved" in r.headers["location"]
+    assert admin.monitor_settings()["fqdn"] == "monitor.example.net"
+    doc = json.load(open(admin.HOST_JSON))
+    assert doc["monitor"] == {"fqdn": "monitor.example.net", "address": admin.monitor_address()}
+    assert web.notifier.base == "https://monitor.example.net" and admin.monitor_url() == "https://monitor.example.net"
+    for bad in ("monitor", "x.example.com/evil", "*.example.com", "10.40.0.161"):
+        r = a.post("/netmon/settings/monitor", data={"fqdn": bad, "csrf": tok}, follow_redirects=False)
+        assert "Not%20saved" in r.headers["location"], bad
+    r = a.post("/netmon/settings/monitor", data={"fqdn": "monitor.example.net", "address": "127.0.0.1", "csrf": tok}, follow_redirects=False)
+    assert "Not%20saved" in r.headers["location"]
+    assert v.post("/netmon/settings/monitor", data={"fqdn": "x.example.com", "csrf": web.csrf_token(sid(v))}).status_code == 403
+    a.post("/netmon/settings/monitor", data={"fqdn": "", "address": "", "csrf": tok})
+    assert web.notifier.base == web.cfg["akvorado_url"].rstrip("/") and json.load(open(admin.HOST_JSON))["monitor"]["fqdn"] is None

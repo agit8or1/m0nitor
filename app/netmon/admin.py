@@ -1,5 +1,7 @@
 """Settings (notifications, alert rules, maintenance, integrations), account/2FA, firewall & IDS pages."""
+import ipaddress
 import json
+import re
 import time
 from urllib.parse import quote
 
@@ -78,10 +80,96 @@ def snmp_rows():
     return out
 
 
+MONITOR_KEY = "monitor:db"
+# lowercase DNS name with at least one dot; no wildcard, no trailing dot, no IP
+FQDN_RE = re.compile(r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def monitor_settings():
+    """This monitor's own identity (Settings → Firewalls & sites → This monitor): the FQDN the UI is served and linked
+    under, and the address firewalls send NetFlow/syslog to. Empty values fall back to config.yaml."""
+    return {"fqdn": "", "address": "", **(get_setting(conn, MONITOR_KEY, {}) or {})}
+
+
 def monitor_address():
-    """Address the firewall should send NetFlow/syslog to: `monitor_address` in config, else the host of akvorado_url."""
+    """Address the firewall should send NetFlow/syslog to: the setting, else `monitor_address` in config, else the
+    host of akvorado_url."""
     from urllib.parse import urlparse
-    return str(cfg.get("monitor_address") or urlparse(cfg.get("akvorado_url") or "").hostname or "MONITOR-ADDRESS")
+    return str(monitor_settings()["address"] or cfg.get("monitor_address") or urlparse(cfg.get("akvorado_url") or "").hostname
+               or "MONITOR-ADDRESS")
+
+
+def clean_fqdn(v):
+    v = (v or "").strip().lower().rstrip(".")
+    if v and not FQDN_RE.match(v):
+        raise ValueError("FQDN must be a DNS name such as monitor.example.com (letters, digits, hyphens, at least one dot)")
+    return v
+
+
+def monitor_card(req, admin):
+    m = monitor_settings()
+    addr = monitor_address()
+    hs, hdetail = host_status()
+    served = ", ".join(["https://" + (f"[{addr}]" if ":" in addr else addr)] + ([f"https://{m['fqdn']}"] if m["fqdn"] else []))
+    check = ""
+    if m["fqdn"]:
+        from . import dnsresolve as dr
+        server, _ = dr.resolver_for(cfg.sites[0], dr.settings(conn, cfg.sites[0]["id"]))
+        try:
+            got = sorted({a for t in ("A", "AAAA") for a, _ in dr.query(m["fqdn"], t, server, 1.0)}) if server else []
+            ok = addr in got
+            # one of our own addresses with a name (e.g. a reverse proxy's 1:1 NAT): fine if it forwards to this monitor
+            via = [f"{cfg.asset_label(a)}" for a in got if cfg.asset_label(a) not in ("", a)]
+            if ok:
+                verdict = "<span class='sev s-good'>● points at this monitor</span>"
+            elif via:
+                verdict = (f"<span class='sev s-warning'>● points at {e(', '.join(via))}</span> — fine if that reverse proxy forwards "
+                           f"to https://{e(addr)}; otherwise add a host override (Unbound) or DNS record for {e(addr)}")
+            else:
+                verdict = (f"<span class='sev s-serious'>◆ does not point at {e(addr)}</span> — add a host override (Unbound) or a "
+                           "DNS record so browsers reach it")
+            check = f"<li>DNS: {e(m['fqdn'])} → {e(', '.join(got) or 'no address')} on {e(server)} {verdict}</li>"
+        except (OSError, ValueError) as ex:
+            check = f"<li>DNS: could not check {e(m['fqdn'])} on {e(server)} ({e(type(ex).__name__)})</li>"
+    dis = "" if admin else "disabled"
+    return f"""<section class="card" id="monitor"><div class="card-h"><h2>This monitor</h2><span class="muted small">its own name and address</span></div>
+<ul class="plain small"><li>Web UI served as: <span class="mono">{e(served)}</span> (TLS from Caddy's internal CA)</li>
+<li>Links in notifications: <span class="mono">{e(monitor_url())}</span></li>{check}
+<li>Host configuration: {e('applied' if hs == 'ok' else 'FAILED' if hs == 'failed' else 'pending')} — {e(hdetail)}</li></ul>
+<form method=post action="/netmon/settings/monitor" class="stackform wide">{csrf_field(req)}
+<div class="formgrid"><label>FQDN<input name=fqdn value="{e(m['fqdn'])}" maxlength=253 placeholder="e.g. monitor.example.com" class="mono" {dis}></label>
+<label>Address firewalls send to<input name=address value="{e(m['address'])}" placeholder="automatic: {e(addr)}" class="mono" {dis}></label></div>
+<p class="muted small">The FQDN is added to the TLS front end (the IP address keeps working) and used for links in notifications. A previous
+FQDN stops being served once you save a new one. The address is what the setup steps tell firewalls to send NetFlow and syslog to.</p>
+{'<div class="row"><button class="primary">Save</button></div>' if admin else ''}</form></section>"""
+
+
+def monitor_url():
+    """Base URL for links to this monitor (notifications): https://<FQDN> when set, else akvorado_url."""
+    fqdn = monitor_settings()["fqdn"]
+    return f"https://{fqdn}" if fqdn else (cfg.get("akvorado_url") or "").rstrip("/")
+
+
+@app.post("/netmon/settings/monitor")
+def save_monitor(req: Request, fqdn: str = Form(""), address: str = Form(""), csrf: str = Form("")):
+    u = need(req, "admin")
+    check_csrf(req, csrf)
+    try:
+        f = clean_fqdn(fqdn)
+        a = address.strip()
+        if a:
+            ip = ipaddress.ip_address(a)
+            if ip.is_loopback or ip.is_unspecified or ip.is_multicast or ip.is_link_local:
+                raise ValueError("address must be this monitor's reachable IP address")
+            a = str(ip)
+        old = monitor_settings()
+        put_setting(conn, MONITOR_KEY, {"fqdn": f, "address": a}, u)
+        audit(conn, u, "monitor_identity", {"old": old, "new": {"fqdn": f, "address": a}})
+        sync_sites()   # hands the name to the root helper, which updates the TLS front end
+        msg = "Saved. The TLS front end is updated within a few seconds." if f != old["fqdn"] else "Saved."
+    except ValueError as ex:
+        msg = f"Not saved: {ex}"
+    return RedirectResponse(f"/netmon/settings/sites?msg={quote(msg)}#monitor", 303)
 
 
 def tip_box(key, open_=False):
@@ -689,9 +777,7 @@ def ids_page(req: Request):
 
 # ---- firewalls (sites) ----------------------------------------------------------------------
 import hashlib
-import ipaddress
 import os
-import re
 
 from .core import DATA_DIR, IFNAME, SITE_ID, VENDORS, apply_sites
 from . import block as blk
@@ -699,14 +785,21 @@ from . import block as blk
 HOST_JSON = os.path.join(DATA_DIR, "host-sites.json")
 HOST_STATUS = os.path.join(DATA_DIR, "host-sites.status.json")
 SECRETS = os.path.join(DATA_DIR, "secrets")
-MONITOR_IP = re.sub(r"^https?://([^/:]+).*$", r"\1", cfg.get("akvorado_url", "")) or "this monitor"
+
+
+def _ip_or_none(v):
+    try:
+        return str(ipaddress.ip_address(v))
+    except ValueError:
+        return None
 
 
 def export_host_sites():
     """Hand the sender list to the root helper (netmon-apply-sites.path). Written only when it changes."""
     doc = {"version": 1, "sites": [{"id": x["id"], "exporter": x["exporter"], "flow_mode": x["flow_mode"], "wan_if": x["wan_if"],
                                     "exporter_ip": x.get("exporter_ip") or None, "syslog_source": x.get("syslog_source") or None,
-                                    "ifindexes": {str(k): v for k, v in (x.get("ifindexes") or {}).items()}} for x in cfg.sites]}
+                                    "ifindexes": {str(k): v for k, v in (x.get("ifindexes") or {}).items()}} for x in cfg.sites],
+           "monitor": {"fqdn": monitor_settings()["fqdn"] or None, "address": _ip_or_none(monitor_address())}}
     text = json.dumps(doc, indent=1, sort_keys=True)
     try:
         if open(HOST_JSON).read() == text:
@@ -829,7 +922,7 @@ def ago_txt(t):
 
 def site_setup(x):
     """Vendor-specific setup steps with this site's values filled in."""
-    mon = e(MONITOR_IP)
+    mon = e(monitor_address())
     if x["vendor"] == "pfsense":
         return f"""<ol class="steps">
 <li><b>NetFlow</b> — System → Package Manager → install <code>softflowd</code>. Services → softflowd: Enable ✓ · Interface <b>WAN only</b>
@@ -970,7 +1063,7 @@ Look up sends only the address you type to OpenStreetMap Nominatim, and only whe
 {conn_form(req)}<p class="muted small">Saving lets this firewall's NetFlow (UDP 2055) and syslog (5514 TCP+UDP) source through the monitor's host firewall,
 registers it with Akvorado (collector restarts for a few seconds) and starts per-site detection, dashboards, logs and blocking.
 Asset names and expected exposures are global: if two sites use the same private range, give their hosts distinct names.</p></section>""" if admin else "")
-    body = f"""{tabs(SETTINGS_TABS, '/netmon/settings/sites')}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}{hostbox}{cards}{add}"""
+    body = f"""{tabs(SETTINGS_TABS, '/netmon/settings/sites')}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}{hostbox}{monitor_card(req, admin)}{cards}{add}"""
     return page(req, "Settings · Firewalls & sites", body, "/netmon/settings", ("settings.js",), scoped=False)
 
 

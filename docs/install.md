@@ -14,6 +14,9 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
    `secrets/` (mode 700) and `data/` owned by uid 10001. `cd app && docker compose up -d --build`.
 4. **Schema:** `docker exec app-netmon-app-1 python -m netmon.schema | docker exec -i akvorado-clickhouse-1 clickhouse-client --multiquery`.
 5. **TLS front end:** `cp .env.example .env`, set `NETMON_SITE`; `cd caddy && docker compose --env-file ../.env up -d`.
+   Afterwards the monitor's FQDN can be changed in the UI (Settings → Firewalls & sites → This monitor): the root helper
+   rewrites the Caddyfile site line (this monitor's IP + the FQDN, between `# BEGIN/END netmon-hosts` markers), validates
+   it in a throwaway Caddy container and restarts Caddy. Notification links follow the same FQDN.
 6. **Host helpers (root):** install `host/netmon-apply-sites` to `/usr/local/sbin/`, the `.path`/`.service` units to
    `/etc/systemd/system/`, `systemctl enable --now netmon-apply-sites.path`. Add firewalls in Settings → Firewalls;
    the helper renders the NetFlow/syslog ACLs, rsyslog config and Akvorado exporter metadata.

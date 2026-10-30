@@ -18,7 +18,7 @@ from email.message import EmailMessage
 
 import httpx
 
-from .core import audit
+from .core import audit, get_setting
 
 SEV = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 CATEGORY = {"new_dest_country": "info", "new_dest_asn": "info", "fw_blocked_scan": "info", "exporter_silence": "health", "disk_usage": "health",
@@ -54,9 +54,15 @@ def category(rule):
 
 
 class Notifier:
+    @property
+    def base(self):
+        """https://<this monitor's FQDN> when set (Settings → Firewalls & sites → This monitor), else the configured URL."""
+        m = get_setting(self.conn, "monitor:db", {}) or {}
+        return f"https://{m['fqdn']}" if m.get("fqdn") else self._base
+
     def __init__(self, cfg, conn, base_url):
         from .core import ThreadLocalDB
-        self.cfg, self.base = cfg, base_url.rstrip("/")
+        self.cfg, self._base = cfg, base_url.rstrip("/")
         self.conn = ThreadLocalDB()  # safe from detector, web and worker threads alike
         self.q = queue.Queue(maxsize=1000)
         self._started = False
