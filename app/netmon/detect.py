@@ -404,19 +404,22 @@ class Detector:
         A destination that answered sends its reply across the LAN interface to the real host, and that record is
         exported with the host's own address. Per destination: exactly one receiving host -> attributed to it; several
         -> ambiguous (never split); none -> no reply (unanswered probes, or firewall-originated) and not attributable
-        from flow records. Only destinations that answered can be attributed. Same flow filters as rule_fanout."""
+        from flow records. Only destinations that answered can be attributed. Same flow filters as rule_fanout.
+        Hosts with their own 1:1 NAT to another public address are never candidates: binat wins over outbound NAT, so
+        their traffic cannot leave through src even when they talk to the same peers."""
+        own = sorted({x["internal"].removesuffix("/32") for x in self.cfg.raw.get("binat", []) if x["external"].removesuffix("/32") != src})
         rows = self.q(f"""
             WITH e AS (SELECT DISTINCT dst FROM ({OUTBOUND}) WHERE t >= toDateTime({{ws:UInt32}}) AND t < toDateTime({{we:UInt32}})
                          AND src = {{s:String}} AND NOT fw_origin AND sport >= 1024 AND NOT has({{svc:Array(UInt16)}}, sport)
                          AND NOT has({{exp:Array(Tuple(String, UInt16))}}, (src, sport)) AND NOT (sport >= 32768 AND dport >= 32768)),
-                 r AS (SELECT {IP.format(col='SrcAddr')} AS dst, groupUniqArray(21)({IP.format(col='DstAddr')}) AS hosts FROM flows
+                 r AS (SELECT {IP.format(col='SrcAddr')} AS dst, groupUniqArrayIf(21)({IP.format(col='DstAddr')}, NOT has({{own:Array(String)}}, {IP.format(col='DstAddr')})) AS hosts FROM flows
                        WHERE ExporterName = {{exporter:String}} AND INB AND TOLAN
                          AND TimeReceived >= toDateTime({{ws:UInt32}}) AND TimeReceived < toDateTime({{we:UInt32}}) + 120
                          AND {IP.format(col='SrcAddr')} IN (SELECT dst FROM e) GROUP BY dst)
             SELECT multiIf(length(r.hosts) = 1, 'one', length(r.hosts) > 1, 'many', 'none') AS k, if(k = 'one', r.hosts[1], '') AS host,
                    if(k = 'many', arraySort(r.hosts), []) AS several, count() AS dsts
             FROM e LEFT JOIN r ON e.dst = r.dst GROUP BY k, host, several ORDER BY dsts DESC""",
-                      {"ws": ws, "we": we, "s": src, "exp": self.exposed_public_ports()})
+                      {"ws": ws, "we": we, "s": src, "exp": self.exposed_public_ports(), "own": own})
         total = sum(int(x["dsts"]) for x in rows) or 1
         exp = expected_devices(self.conn)
         hosts = [{"host": x["host"], "destinations": int(x["dsts"]), "share_pct": round(100 * int(x["dsts"]) / total, 1),

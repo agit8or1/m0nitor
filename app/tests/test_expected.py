@@ -86,3 +86,14 @@ def test_nat_hosts_counts_destinations_shared_by_expected_devices(cfg, conn):
     r = d.nat_hosts("203.0.113.179", 0, 600)
     assert r["dsts_expected"] == 80 and r["dsts_ambiguous"] == 4 and r["dsts_no_reply"] == 7
     assert r["expected_hosts"] == ["10.40.0.121", "10.40.0.122"]
+
+
+def test_nat_hosts_never_attributes_hosts_with_their_own_1to1_nat(cfg, conn):
+    d = Detector(cfg, None, conn)
+    d.exposed_public_ports = lambda: []
+    cfg.raw["binat"] = [{"external": "203.0.113.181", "internal": "10.40.0.74"},
+                        {"external": "203.0.113.179/32", "internal": "10.40.0.9/32"}]
+    seen = {}
+    d.q = lambda sql, p: seen.update(p) or []
+    d.nat_hosts("203.0.113.179", 0, 600)
+    assert seen["own"] == ["10.40.0.74"]   # its traffic leaves via .181; a host 1:1-mapped to src itself stays a candidate
