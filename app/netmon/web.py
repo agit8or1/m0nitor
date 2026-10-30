@@ -638,20 +638,35 @@ def candidate_peers(a):
     return list(dict.fromkeys(out))[:20]
 
 
+def list_return(req: Request) -> str:
+    """Where triage should land afterwards: the list the finding was opened from (same-origin Referer), else Security."""
+    from urllib.parse import urlsplit
+    ref = urlsplit(req.headers.get("referer", ""))
+    path = ref.path + (f"?{ref.query}" if ref.query else "")
+    if ref.netloc != req.headers.get("host", "") or not ref.path or ref.path.startswith("/netmon/alert/"):
+        return "/netmon/security"
+    return safe_next(path)
+
+
+def back_field(back: str) -> str:
+    return f'<input type="hidden" name="back" value="{e(back)}">'
+
+
 @app.get("/netmon/alert/{aid}", response_class=HTMLResponse)
-def alert_view(req: Request, aid: int):
+def alert_view(req: Request, aid: int, back: str = ""):
     u, r = user_of(req)
     a = conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()
     if not a:
         raise HTTPException(404)
     q = json.loads(a["query"] or "{}")
     lis = lambda xs: "".join(f"<li>{e(x)}</li>" for x in json.loads(xs or "[]"))  # noqa: E731
+    back = safe_next(back) if back else list_return(req)
     actions = ""
     if ROLES[r] >= ROLES["analyst"]:
         actions += f"""<div class="card"><div class="card-h"><h2>Triage</h2></div>
-<form method=post action="/netmon/alert/{aid}/status" class="row">{csrf_field(req)}
+<form method=post action="/netmon/alert/{aid}/status" class="row">{csrf_field(req)}{back_field(back)}
 <select name=status><option>acked</option><option>closed</option><option>open</option></select> <button>Set status</button></form>
-</div>{normal_card(req, a)}"""
+</div>{normal_card(req, a, back)}"""
         peers = candidate_peers(a)
         if peers:
             opts = "".join(f"<option>{e(p)}</option>" for p in peers)
@@ -714,7 +729,7 @@ def _is_internal_safe(ip):
         return False
 
 
-def normal_card(req, a):
+def normal_card(req, a, back="/netmon/security"):
     """'This is normal' on a finding: stop it (or everything for the address) from triggering again, and close the
     matching findings already raised. Suppression only: the traffic is not marked trusted anywhere else."""
     label = cfg.asset_label(a["asset"]) if a["asset"] else ""
@@ -728,7 +743,7 @@ def normal_card(req, a):
     note = ("<p class='muted small'>This is the shared NAT address, used by every LAN host: suppress the finding type here, or mark the "
             "individual LAN hosts expected in the attribution above.</p>" if shared else "")
     return f"""<div class="card" id="normal"><div class="card-h"><h2>This is normal</h2></div>
-<form method=post action="/netmon/alert/{a['id']}/normal" class="stackform">{csrf_field(req)}
+<form method=post action="/netmon/alert/{a['id']}/normal" class="stackform">{csrf_field(req)}{back_field(back)}
 <p class="muted small">Stops future triggers and closes the matching findings already raised. It only suppresses findings: the traffic is not
 marked trusted anywhere else, and you can undo it under Security → Suppressions.</p>{note}
 <fieldset><legend>Don't alert again for</legend>{scopes}</fieldset>
@@ -746,7 +761,7 @@ marked trusted anywhere else, and you can undo it under Security → Suppression
 
 @app.post("/netmon/alert/{aid}/normal")
 def alert_normal(req: Request, aid: int, scope: str = Form(...), reason: str = Form(...), expires_days: str = Form(""),
-                 close: str = Form(""), csrf: str = Form("")):
+                 close: str = Form(""), back: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
     a = conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()
@@ -790,11 +805,12 @@ def alert_normal(req: Request, aid: int, scope: str = Form(...), reason: str = F
         if closed:
             audit(conn, u, "alert_status", {"ids": closed, "status": "closed", "reason": "marked normal"})
     conn.commit()
-    return RedirectResponse(f"/netmon/alert/{aid}", 303)
+    # closed: back to the list it came from (it is gone from there now); otherwise stay on the finding
+    return RedirectResponse(safe_next(back) if closed and back else f"/netmon/alert/{aid}", 303)
 
 
 @app.post("/netmon/alert/{aid}/status")
-def alert_status(req: Request, aid: int, status: str = Form(...), csrf: str = Form("")):
+def alert_status(req: Request, aid: int, status: str = Form(...), back: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
     if status not in ("open", "acked", "closed"):
@@ -802,7 +818,8 @@ def alert_status(req: Request, aid: int, status: str = Form(...), csrf: str = Fo
     conn.execute("UPDATE alerts SET status=?, acked_by=?, acked_at=? WHERE id=?", (status, u, time.time(), aid))
     conn.commit()
     audit(conn, u, "alert_status", {"id": aid, "status": status})
-    return RedirectResponse(f"/netmon/alert/{aid}", 303)
+    # acked/closed drop off the open lists, so return to the list rather than leaving the user on the finding
+    return RedirectResponse(safe_next(back) if back and status != "open" else f"/netmon/alert/{aid}", 303)
 
 
 @app.post("/netmon/test-alert")

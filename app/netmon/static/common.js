@@ -335,6 +335,8 @@ const NM = (() => {
   function scopeDesc(sc) { const n = $("scopedesc"); if (n && sc) n.textContent = `${sc.describe} · ${fmtTime(sc.start, true)} → ${fmtTime(sc.end, true)} (${tz})`; }
 
   document.addEventListener("DOMContentLoaded", () => { bindToolbar(); pollLive(); setInterval(pollLive, 10000); });
+  // Back/forward can restore a page from the browser's memory cache with stale lists (e.g. a finding just acked): reload it
+  window.addEventListener("pageshow", (ev) => { if (ev.persisted) location.reload(); });
   return { el, $, fmtBytes, fmtBps, fmtNum, ago, fmtTime, tz, css, sev, scope, qs, href, setScope, onScope, every, get, state, table, rank,
     legendInOut, pager, lineChart, cards, alertList, meters, convTable, scopeDesc, ipCell, namer, onLive: (f) => liveL.push(f), live: () => live,
     isPaused: () => paused };

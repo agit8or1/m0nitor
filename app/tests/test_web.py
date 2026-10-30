@@ -102,6 +102,27 @@ def test_viewer_cannot_mutate_and_csrf_enforced():
     assert r.status_code == 303
 
 
+def test_ack_returns_to_list_it_came_from():
+    aid = make_alert()
+    a = client("admin", ADMINPW)
+    tok = web.csrf_token(sid(a))
+    host = a.get("/").request.headers["host"]
+    # the finding page carries the list it was opened from (same-origin Referer) into the triage form
+    r = a.get(f"/netmon/alert/{aid}", headers={"Referer": f"http://{host}/netmon/security?status=open"})
+    assert 'name="back" value="/netmon/security?status=open"' in r.text
+    r = a.get(f"/netmon/alert/{aid}", headers={"Referer": "https://evil.example/x"})
+    assert 'name="back" value="/netmon/security"' in r.text
+    r = a.post(f"/netmon/alert/{aid}/status", data={"status": "acked", "back": "/", "csrf": tok}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert web.conn.execute("SELECT status FROM alerts WHERE id=?", (aid,)).fetchone()[0] == "acked"
+    assert f"/netmon/alert/{aid}\"" not in a.get("/netmon/security").text   # gone from the open list
+    r = a.post(f"/netmon/alert/{aid}/status", data={"status": "closed", "back": "https://evil.example/", "csrf": tok},
+               follow_redirects=False)
+    assert r.headers["location"] == "/"
+    r = a.post(f"/netmon/alert/{aid}/status", data={"status": "open", "back": "/", "csrf": tok}, follow_redirects=False)
+    assert r.headers["location"] == f"/netmon/alert/{aid}"   # reopening stays on the finding
+
+
 def test_block_refused_for_internal():
     a = client("admin", ADMINPW)
     r = a.post("/netmon/blocks", data={"address": "10.40.0.8", "reason": "x", "csrf": web.csrf_token(sid(a))})
