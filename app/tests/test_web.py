@@ -214,3 +214,38 @@ def test_partial_ip_search_ranges():
     assert str(prefix_range("203.0.113.0/24")[0]) == "203.0.113.0/24"
     assert prefix_range("109") is None and prefix_range("109.") is None and prefix_range("10.0.0.0/8") is None
     assert prefix_range("300.1.2") is None and prefix_range("abc") is None
+
+
+def test_server_aliases_saved_shown_and_searchable():
+    a = client("admin", ADMINPW)
+    tok = web.csrf_token(sid(a))
+    a.post("/netmon/names", data={"ip": "10.40.0.51", "name": "cp", "aliases": "ns1, cp.example.com, NS1, cp", "csrf": tok})
+    assert web.cfg.get("assets")["10.40.0.51"]["aliases"] == ["ns1", "cp.example.com"]   # deduped, never the main name
+    assert a.get("/netmon/api/name?ip=10.40.0.51").json()["aliases"] == ["ns1", "cp.example.com"]
+    assert any(r["href"] == "/netmon/servers/10.40.0.51" for r in a.get("/netmon/api/search?q=cp.example").json()["results"])
+    assert "aka ns1, cp.example.com" in a.get("/netmon/servers/10.40.0.51").text
+    r = a.post("/netmon/names", data={"ip": "10.40.0.51", "name": "cp", "aliases": "<b>x</b>", "csrf": tok}, follow_redirects=False)
+    assert "Not%20saved" in r.headers["location"] and web.cfg.get("assets")["10.40.0.51"]["aliases"] == ["ns1", "cp.example.com"]
+    a.post("/netmon/names", data={"ip": "10.40.0.51", "clear": "1", "csrf": tok})
+
+
+def test_mark_finding_normal_suppresses_future_and_closes_past():
+    from netmon.core import EXPECTED_KEY, get_setting
+    from netmon.detect import exception_matches
+    a = client("admin", ADMINPW)
+    tok = web.csrf_token(sid(a))
+    first, second = make_alert(), make_alert()   # same rule and server
+    assert "This is normal" in a.get(f"/netmon/alert/{first}").text
+    r = a.post(f"/netmon/alert/{first}/normal", data={"scope": "rule", "reason": "backup job", "close": "1", "csrf": tok}, follow_redirects=False)
+    assert r.status_code == 303
+    st = {x["id"]: x["status"] for x in web.conn.execute("SELECT id, status FROM alerts WHERE id IN (?,?)", (first, second))}
+    assert st == {first: "closed", second: "closed"}
+    exc = dict(web.conn.execute("SELECT * FROM exceptions ORDER BY id DESC LIMIT 1").fetchone())
+    assert exc["rule"] == "beaconing" and exc["asset"] == "10.40.0.8" and exc["subject"] == "*"
+    assert exception_matches(exc, "beaconing", "10.40.0.8", "198.51.100.99|443", time.time())
+    assert not exception_matches(exc, "fanout", "10.40.0.8", "horizontal", time.time())
+    third = make_alert()
+    a.post(f"/netmon/alert/{third}/normal", data={"scope": "device", "reason": "lab box", "csrf": tok})
+    assert "10.40.0.8" in get_setting(web.conn, EXPECTED_KEY, {})
+    assert web.conn.execute("SELECT status FROM alerts WHERE id=?", (third,)).fetchone()["status"] == "open"   # close unticked
+    assert a.post(f"/netmon/alert/{third}/normal", data={"scope": "x", "reason": "r", "csrf": tok}).status_code == 400

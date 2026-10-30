@@ -24,8 +24,21 @@ def clean(v, rx, what, limit):
     return v
 
 
-def save(ip, name, role, sensitive, notes, user, role_of_user):
-    """Set or clear the name for `ip`. Internal addresses (servers) need admin: `sensitive` changes detection
+def clean_aliases(v, name):
+    """Comma-separated other names for one address (e.g. a DNS name and a short name). At most 8, deduplicated,
+    never repeating the main name; same character rules as names."""
+    out = []
+    for a in (v or "").split(","):
+        a = clean(a, NAME_RE, "Alias", 64)
+        if a and a.lower() != name.lower() and a.lower() not in (x.lower() for x in out):
+            out.append(a)
+    if len(out) > 8:
+        raise ValueError("at most 8 aliases")
+    return out
+
+
+def save(ip, name, role, sensitive, notes, user, role_of_user, aliases=""):
+    """Set or clear the name (and aliases) for `ip`. Internal addresses (servers) need admin: `sensitive` changes detection
     severity. External labels need analyst. Returns a status message."""
     try:
         ip = str(ipaddress.ip_address(ip.strip()))
@@ -37,6 +50,7 @@ def save(ip, name, role, sensitive, notes, user, role_of_user):
         raise PermissionError(f"naming {'servers' if internal else 'external addresses'} requires role {need_role}")
     name = clean(name, NAME_RE, "Name", 64)
     notes = " ".join((notes or "").split())[:300].replace("<", "‹").replace(">", "›")
+    alias_list = clean_aliases(aliases, name) if name else []
     key = "assets:db" if internal else "labels:db"
     db = get_setting(conn, key, {}) or {}
     old = db.get(ip)
@@ -44,10 +58,11 @@ def save(ip, name, role, sensitive, notes, user, role_of_user):
         db.pop(ip, None)
         msg = f"Removed the name for {ip}."
     elif internal:
-        db[ip] = {"name": name, "role": clean(role, ROLE_RE, "Role", 32), "sensitive": bool(sensitive), "notes": notes}
+        db[ip] = {"name": name, "role": clean(role, ROLE_RE, "Role", 32), "sensitive": bool(sensitive), "notes": notes,
+                  **({"aliases": alias_list} if alias_list else {})}
         msg = f"Saved {name} ({ip})."
     else:
-        db[ip] = {"name": name, "notes": notes}   # no "source": a person's label, never replaced by a sync
+        db[ip] = {"name": name, "notes": notes, **({"aliases": alias_list} if alias_list else {})}   # no "source": a person's label, never replaced by a sync
         msg = f"Saved label {name} for {ip}."
     put_setting(conn, key, db, user)
     apply_assets(cfg, conn)
@@ -152,13 +167,13 @@ def back_to(url, msg):
 
 @app.post("/netmon/names")
 def post_name(req: Request, ip: str = Form(...), name: str = Form(""), role: str = Form(""), sensitive: str = Form(""),
-              notes: str = Form(""), clear: str = Form(""), back: str = Form(""), csrf: str = Form("")):
+              notes: str = Form(""), aliases: str = Form(""), clear: str = Form(""), back: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
     _, r = user_of(req)
     js = req.headers.get("x-nm-fetch") == "1"   # the in-page ✎ editor wants JSON, plain forms get a redirect
     try:
-        msg = save(ip, "" if clear else name, role, sensitive == "1", notes, u, r)
+        msg = save(ip, "" if clear else name, role, sensitive == "1", notes, u, r, aliases)
     except PermissionError as ex:
         if js:
             return JSONResponse({"ok": False, "error": str(ex)}, 403)
@@ -177,7 +192,7 @@ def name_json(ip, role):
     internal = cfg.is_internal(ip)
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
     return {"ip": ip, "internal": internal, "name": a.get("name", ""), "role": a.get("role", ""), "sensitive": bool(a.get("sensitive")),
-            "notes": a.get("notes", ""), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
+            "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
             "needs": "admin" if internal else "analyst"}
 
 
@@ -200,6 +215,7 @@ def name_form(req, ip, back, compact=False):
     return f"""<form method=post action="/netmon/names" class="stackform{'' if compact else ' wide'} nameform">{csrf_field(req)}
 <input type=hidden name=ip value="{e(ip)}"><input type=hidden name=back value="{e(back)}">
 <label>Name<input name=name value="{e(a.get('name', ''))}" maxlength=64 placeholder="{'server name' if internal else 'e.g. Office VPN, Backup provider'}"></label>
+<label>Aliases<input name=aliases value="{e(', '.join(a.get('aliases', [])))}" maxlength=400 placeholder="other names, comma-separated (e.g. ns1, cp.example.com)"></label>
 {extra}<label>Notes<input name=notes value="{e(a.get('notes', ''))}" maxlength=300 placeholder="optional"></label>
 <div class="row"><button class="primary">Save</button>{'<button name=clear value=1 class="ghost" title="Remove this name">Clear name</button>' if a else ''}</div></form>"""
 
@@ -213,15 +229,18 @@ def inventory_page(req: Request, msg: str = ""):
     assets = sorted(cfg.get("assets", {}).items(), key=lambda kv: ipaddress.ip_address(kv[0]))
     labels = sorted(cfg.get("labels", {}).items(), key=lambda kv: ipaddress.ip_address(kv[0]))
 
+    def aka(a):
+        return f"<div class='sub'>aka {e(', '.join(a['aliases']))}</div>" if a.get("aliases") else ""
+
     def edit(ip, ok):
         return f"<details class='tech'><summary>Edit</summary>{name_form(req, ip, back + '#n-' + ip.replace(':', '-'), True)}</details>" if ok else ""
-    srows = "".join(f"""<tr id="n-{e(ip.replace(':', '-'))}"><td><a href="/netmon/servers/{e(ip)}">{e(a['name'])}</a></td><td class="mono">{e(ip)}</td>
+    srows = "".join(f"""<tr id="n-{e(ip.replace(':', '-'))}"><td><a href="/netmon/servers/{e(ip)}">{e(a['name'])}</a>{aka(a)}</td><td class="mono">{e(ip)}</td>
 <td>{e(a.get('role') or '—')}</td><td>{'<span class="tag">sensitive</span>' if a.get('sensitive') else ''}</td><td class="small">{e(a.get('notes', ''))}</td>
 <td>{edit(ip, admin)}</td></tr>""" for ip, a in assets)
     def src(a):
         s = a.get("source", "")
         return f"<span class='tag' title='imported; edit to make it yours'>{e(cfg.site(s[4:])['name'] if s.startswith('vip:') and cfg.site(s[4:]) else s)} virtual IP</span>" if s else "manual"
-    lrows = "".join(f"""<tr id="n-{e(ip.replace(':', '-'))}"><td>{e(a['name'])}</td><td class="mono"><a href="/netmon/connections?rip={e(ip)}">{e(ip)}</a></td>
+    lrows = "".join(f"""<tr id="n-{e(ip.replace(':', '-'))}"><td>{e(a['name'])}{aka(a)}</td><td class="mono"><a href="/netmon/connections?rip={e(ip)}">{e(ip)}</a></td>
 <td>{src(a)}</td><td class="small">{e(a.get('notes', ''))}</td><td>{edit(ip, analyst)}</td></tr>""" for ip, a in labels)
     from .core import get_state
     vs, _ = get_state(conn, "vip_sync", {})

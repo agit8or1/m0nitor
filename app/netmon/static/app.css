@@ -352,3 +352,5 @@ dialog.namer::backdrop { background: rgb(10 16 28 / .45); } dialog.namer h2 { ma
 .tag.og-active { color: var(--warn-text); border-color: currentColor; } .tag.og-traffic { color: var(--warn-text); }
 .attrib { margin: 24px 0 8px; text-align: center; } .attrib a { color: inherit; }
 form.inline input.sm { width: 12em; padding: 2px 6px; font-size: 12px; } button.sm { padding: 2px 8px; font-size: 12px; }
+.stackform fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 0; display: grid; gap: 6px; min-width: 0; }
+.stackform fieldset legend { font-size: 13px; color: var(--ink-2); padding: 0 4px; }

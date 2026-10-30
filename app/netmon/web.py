@@ -23,7 +23,7 @@ from . import block as blk
 from .core import (DATA_DIR, EXPECTED_KEY, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
                    load_config, put_setting, set_state)
 from .dash import Dash
-from .detect import Detector, fmt_ts, human_bytes
+from .detect import Detector, exception_matches, fmt_ts, human_bytes
 from .notify import Notifier
 from .counters import Poller, init as counters_init
 
@@ -222,7 +222,7 @@ def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtit
 <meta name="nm-csrf" content="{e(csrf_token(req))}"><meta name="nm-role" content="{e(r)}">
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body>
 <header class="appbar"><a class="brand" href="/"><span class="logo">◎</span> {e(BRAND)}</a>
-<nav class="mainnav">{nav}<a href="/visualize" class="ext" title="Akvorado: raw flow exploration">Advanced flow explorer ↗</a></nav>
+<nav class="mainnav">{nav}<a href="/visualize" target="_blank" rel="noopener" class="ext" title="Akvorado: raw flow exploration">Advanced flow explorer ↗</a></nav>
 <div class="who"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select> <span>{e(u)}</span> <small>{e(r)}</small>
 <form method="post" action="/logout" class="inline">{csrf_field(req)}<button class="link">Sign out</button></form></div></header>
 <main class="{'wide' if wide else ''}">
@@ -651,11 +651,7 @@ def alert_view(req: Request, aid: int):
         actions += f"""<div class="card"><div class="card-h"><h2>Triage</h2></div>
 <form method=post action="/netmon/alert/{aid}/status" class="row">{csrf_field(req)}
 <select name=status><option>acked</option><option>closed</option><option>open</option></select> <button>Set status</button></form>
-<form method=post action="/netmon/exceptions" class="row">{csrf_field(req)}<p class="muted small">Add exception (suppresses future alerts for this rule/asset/subject; does not mark traffic as trusted)</p>
-<input name=rule value="{e(a['rule'])}" size=18> <input name=asset value="{e(a['asset'])}" size=16>
-<input name=subject value="{e(a['subject'])}" size=18> <input name=owner placeholder="owner" required size=10>
-<input name=reason placeholder="reason" required size=24> <input name=expires_days placeholder="expires (days)" size=8>
-<button>Add exception</button></form></div>"""
+</div>{normal_card(req, a)}"""
         peers = candidate_peers(a)
         if peers:
             opts = "".join(f"<option>{e(p)}</option>" for p in peers)
@@ -693,7 +689,7 @@ def alert_view(req: Request, aid: int):
 <dt>Notification</dt><dd>{e(a['notify_status'] or 'not sent (no destination configured)')}</dd></dl>
 <div class="grid2 even"><div><h3>Other possible explanations</h3><ul>{lis(a['alternatives'])}</ul></div>
 <div><h3>Next investigation steps</h3><ul>{lis(a['next_steps'])}</ul>
-<p>{'<a class="btn" href="#aibox">Analyze with AI ↓</a> ' if can_ai else ''}<a class="btn" href="/visualize">Open flow explorer</a></p></div></div></div>
+<p>{'<a class="btn" href="#aibox">Analyze with AI ↓</a> ' if can_ai else ''}<a class="btn" href="/visualize" target="_blank" rel="noopener">Open flow explorer</a></p></div></div></div>
 <div class="card"><div class="card-h"><h2>Evidence</h2><span class="muted small">values from flow records; strings are untrusted telemetry</span></div>
 {evidence_table(evs)}</div>
 <section class="card" id="ftraffic" data-aid="{aid}"><div class="card-h"><h2>Traffic behind this finding</h2>
@@ -716,6 +712,85 @@ def _is_internal_safe(ip):
         return cfg.is_internal(ip)
     except ValueError:
         return False
+
+
+def normal_card(req, a):
+    """'This is normal' on a finding: stop it (or everything for the address) from triggering again, and close the
+    matching findings already raised. Suppression only: the traffic is not marked trusted anywhere else."""
+    label = cfg.asset_label(a["asset"]) if a["asset"] else ""
+    shared = a["asset"] in cfg.get("outbound_nat_ips", [])
+    rule = e(RULE_LABEL.get(a["rule"], a["rule"]))
+    opt = lambda v, text, checked=False: (f"<label class='check'><input type=radio name=scope value={v} {'checked' if checked else ''}> {text}</label>")  # noqa: E731
+    scopes = (opt("rule", f"Any <b>{rule}</b> finding for <b>{e(label or a['asset'])}</b>", True)
+              + (opt("exact", f"Only this exact finding (<span class='mono'>{e(a['subject'])}</span>)") if a["subject"] not in ("", "*") else "")
+              + ("" if shared or not a["asset"] else
+                 opt("device", f"Every finding for <span class='mono'>{e(a['asset'])}</span> (expected device)")))
+    note = ("<p class='muted small'>This is the shared NAT address, used by every LAN host: suppress the finding type here, or mark the "
+            "individual LAN hosts expected in the attribution above.</p>" if shared else "")
+    return f"""<div class="card" id="normal"><div class="card-h"><h2>This is normal</h2></div>
+<form method=post action="/netmon/alert/{a['id']}/normal" class="stackform">{csrf_field(req)}
+<p class="muted small">Stops future triggers and closes the matching findings already raised. It only suppresses findings: the traffic is not
+marked trusted anywhere else, and you can undo it under Security → Suppressions.</p>{note}
+<fieldset><legend>Don't alert again for</legend>{scopes}</fieldset>
+<label>Reason<input name=reason required maxlength=200 placeholder="e.g. crawler: fan-out is what this server does"></label>
+<label>Expires after (days)<input name=expires_days inputmode=numeric maxlength=5 placeholder="never" class="short"></label>
+<label class="check"><input type=checkbox name=close value=1 checked> Close matching open findings now</label>
+<div class="row"><button class="primary">Don't alert again</button></div></form>
+<details class="tech"><summary>Advanced exception (any rule / asset / subject pattern)</summary>
+<form method=post action="/netmon/exceptions" class="row">{csrf_field(req)}
+<input name=rule value="{e(a['rule'])}" size=18> <input name=asset value="{e(a['asset'])}" size=16>
+<input name=subject value="{e(a['subject'])}" size=18> <input name=owner placeholder="owner" required size=10>
+<input name=reason placeholder="reason" required size=24> <input name=expires_days placeholder="expires (days)" size=8>
+<button>Add exception</button></form></details></div>"""
+
+
+@app.post("/netmon/alert/{aid}/normal")
+def alert_normal(req: Request, aid: int, scope: str = Form(...), reason: str = Form(...), expires_days: str = Form(""),
+                 close: str = Form(""), csrf: str = Form("")):
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    a = conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()
+    if not a:
+        raise HTTPException(404)
+    reason = " ".join(reason.split())[:200]
+    if not reason:
+        raise HTTPException(400, "reason required")
+    try:
+        exp = time.time() + float(expires_days) * 86400 if expires_days.strip() else None
+    except ValueError:
+        raise HTTPException(400, "expires must be a number of days")
+    now = time.time()
+    if scope in ("rule", "exact"):
+        exc = {"rule": a["rule"], "asset": a["asset"], "subject": "*" if scope == "rule" else a["subject"],
+               "enabled": 1, "expires_at": exp}
+        conn.execute("INSERT INTO exceptions(rule,asset,subject,owner,reason,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)",
+                     (exc["rule"], exc["asset"], exc["subject"], u, f"{reason} (from finding #{aid})", u, now, exp))
+        audit(conn, u, "exception_added", {"rule": exc["rule"], "asset": exc["asset"], "subject": exc["subject"], "expires": exp, "alert": aid})
+        hit = lambda x: exception_matches(exc, x["rule"], x["asset"], x["subject"], now)  # noqa: E731
+    elif scope == "device":
+        try:
+            ip = str(ipaddress.ip_address(a["asset"]))
+        except ValueError:
+            raise HTTPException(400, "this finding has no single address to mark expected")
+        if ip in cfg.get("outbound_nat_ips", []):
+            raise HTTPException(400, "that is the shared NAT address (every LAN host) — mark the individual devices instead")
+        d = get_setting(conn, EXPECTED_KEY, {}) or {}
+        d[ip] = {"reason": f"{reason} (from finding #{aid})", "by": u, "ts": now, "expires_at": exp}
+        put_setting(conn, EXPECTED_KEY, d, u)
+        audit(conn, u, "expected_device_added", {"target": ip, "reason": d[ip]["reason"], "expires": exp, "alert": aid})
+        hit = lambda x: x["asset"] == ip  # noqa: E731
+    else:
+        raise HTTPException(400, "unknown scope")
+    closed = []
+    if close:
+        for x in conn.execute("SELECT id, rule, asset, subject FROM alerts WHERE status IN ('open','acked') AND test=0").fetchall():
+            if x["id"] == aid or hit(x):
+                conn.execute("UPDATE alerts SET status='closed', acked_by=?, acked_at=? WHERE id=?", (u, now, x["id"]))
+                closed.append(x["id"])
+        if closed:
+            audit(conn, u, "alert_status", {"ids": closed, "status": "closed", "reason": "marked normal"})
+    conn.commit()
+    return RedirectResponse(f"/netmon/alert/{aid}", 303)
 
 
 @app.post("/netmon/alert/{aid}/status")

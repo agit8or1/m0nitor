@@ -321,8 +321,10 @@ def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "
         counts = {}
         for a in open_alerts():
             counts[a["asset"]] = counts.get(a["asset"], 0) + 1
+        assets = cfg.get("assets", {})
         for h in rows:
             h["alerts"] = counts.get(h["ip"], 0)
+            h["aliases"] = (assets.get(h["ip"]) or {}).get("aliases", [])
         per_ = max(10, min(per, 200))
         p = max(1, page_)
         return {"ok": True, "scope": scope_json(sc), "rows": rows[(p - 1) * per_: p * per_], "total": len(rows),
@@ -625,10 +627,11 @@ def api_search(req: Request, q: str = ""):
         return {"ok": True, "results": []}
     ql, res = q.lower(), []
     for ip, a in cfg.get("assets", {}).items():
-        if ql in ip or ql in a["name"].lower() or ql in a.get("role", "").lower():
-            res.append({"type": "Server", "label": a["name"], "sub": f"{ip} · {a.get('role')}", "href": f"/netmon/servers/{ip}"})
+        if ql in ip or ql in a["name"].lower() or ql in a.get("role", "").lower() or any(ql in x.lower() for x in a.get("aliases", [])):
+            res.append({"type": "Server", "label": a["name"], "sub": " · ".join(x for x in (ip, a.get("role"), ", ".join(a.get("aliases", []))) if x),
+                        "href": f"/netmon/servers/{ip}"})
     for ip, a in cfg.get("labels", {}).items():
-        if ql in ip or ql in a["name"].lower() or ql in a.get("notes", "").lower():
+        if ql in ip or ql in a["name"].lower() or ql in a.get("notes", "").lower() or any(ql in x.lower() for x in a.get("aliases", [])):
             res.append({"type": "Remote IP", "label": a["name"], "ip": ip, "name": a["name"], "sub": "your label", "href": f"/netmon/connections?rip={ip}"})
     for cc, m in META.items():
         if ql == cc.lower() or ql in m["name"].lower():
@@ -727,7 +730,8 @@ def server_page(req: Request, ip: str, msg: str = ""):
 <div class="card"><div class="card-h"><h2>Exposure &amp; AI</h2></div><div id="t-exposure"></div></div></section>
 <section class="card"><div class="card-h"><h2>Connections</h2><a class="small" href="/netmon/connections?host={e(ip)}" data-keep>All for this server →</a></div><div id="t-conv"></div></section>
 {name_card(req, ip, f"/netmon/servers/{ip}#srvname", msg)}"""
-    return page(req, title, body, "/netmon/servers", ("d3.min.js", "server.js"), subtitle=f"{ip} · {a.get('role') or 'unknown'}")
+    aka = (cfg.get("assets", {}).get(ip) or {}).get("aliases", [])
+    return page(req, title, body, "/netmon/servers", ("d3.min.js", "server.js"), subtitle=f"{ip} · {a.get('role') or 'unknown'}" + (f" · aka {', '.join(aka)}" if aka else ""))
 
 
 def name_card(req, ip, back, msg=""):
@@ -1022,7 +1026,7 @@ def settings_page(req: Request):
 <div class="card"><div class="card-h"><h2>Administration</h2></div><ul class="links">
 <li><a href="/netmon/coverage">Telemetry coverage — what is and is not visible</a></li>
 {'<li><a href="/netmon/users">Users &amp; roles</a></li><li><a href="/netmon/audit">Audit log</a></li>' if r == 'admin' else ''}
-<li><a href="/netmon/exceptions">Alert suppressions</a></li><li><a href="/visualize">Advanced flow explorer (Akvorado)</a></li></ul></div></section>"""
+<li><a href="/netmon/exceptions">Alert suppressions</a></li><li><a href="/visualize" target="_blank" rel="noopener">Advanced flow explorer (Akvorado)</a></li></ul></div></section>"""
     return page(req, "Settings · Health", body, "/netmon/settings", scoped=False)
 
 

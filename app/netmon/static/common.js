@@ -292,7 +292,7 @@ const NM = (() => {
     return el("span", { class: "ipcell" }, el("a", { class: "mono", href: link || href("/netmon/connections", { rip: ip }), text: ip }), btn,
       el("div", { class: "sub ipname", "data-ip": ip, title: "your name for this address (Settings → Inventory)", text: name || "" }));
   }
-  async function namer(ip) {
+  async function namer(ip, onSaved) {
     let d;
     try { d = await get(`/netmon/api/name?ip=${encodeURIComponent(ip)}`); } catch (e) { alert(e.message); return; }
     const dlg = el("dialog", { class: "namer" }), msg = el("p", { class: "muted small" });
@@ -300,6 +300,7 @@ const NM = (() => {
     const f = el("form", { method: "dialog", class: "stackform" },
       el("h2", { text: d.internal ? `Name server ${d.ip}` : `Label ${d.ip}` }),
       el("label", {}, "Name", inp("name", d.name, d.internal ? "server name" : "e.g. Office VPN, Backup provider", { autofocus: true })),
+      el("label", {}, "Aliases", inp("aliases", (d.aliases || []).join(", "), "other names, comma-separated (e.g. ns1, cp.example.com)", { maxlength: 400 })),
       d.internal ? el("label", {}, "Role", inp("role", d.role, "web, mail, backup…")) : null,
       d.internal ? el("label", { class: "check" }, el("input", { type: "checkbox", name: "sensitive", value: "1", checked: d.sensitive }), " Sensitive — new outbound destinations raised one severity level") : null,
       el("label", {}, "Notes", inp("notes", d.notes, "optional")),
@@ -319,6 +320,7 @@ const NM = (() => {
         if (!j.ok) { msg.textContent = j.error || j.detail || "Not saved"; msg.className = "warnline"; return; }
         document.querySelectorAll(`.ipname[data-ip="${CSS.escape(d.ip)}"]`).forEach((n) => { n.textContent = j.name; });
         dlg.close();
+        if (onSaved) onSaved(j);
       } catch (e) { msg.textContent = e.message; msg.className = "warnline"; }
     });
     dlg.append(f); document.body.append(dlg);
