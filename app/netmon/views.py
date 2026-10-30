@@ -89,7 +89,9 @@ _alert_cc = {"t": 0, "v": {}}
 
 def alert_countries():
     """Countries of remote addresses named in open security/info alerts (from observed flows)."""
-    if time.time() - _alert_cc["t"] < 60:
+    # cache keyed on the open-finding set too, so ack/unack/close shows on the map at the next refresh
+    fp = tuple(conn.execute("SELECT count(*), coalesce(sum(id), 0), coalesce(max(last_seen), 0) FROM alerts WHERE status='open' AND test=0").fetchone())
+    if time.time() - _alert_cc["t"] < 60 and _alert_cc.get("fp") == fp:
         return _alert_cc["v"]
     by_cc, ips, meta = {}, {}, {}
     for a in open_alerts():
@@ -129,7 +131,7 @@ def alert_countries():
                 d["sec_ids"] = sorted(set(d["sec_ids"]) | ips[r["ip"]])
                 d["ids"] = sorted(set(d["ids"]) | ips[r["ip"]])
                 d["security"] = len(d["sec_ids"])
-    _alert_cc.update(t=time.time(), v=by_cc)
+    _alert_cc.update(t=time.time(), v=by_cc, fp=fp)
     return by_cc
 
 

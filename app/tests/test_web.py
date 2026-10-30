@@ -198,6 +198,21 @@ def test_unack_all_reopens_findings_acked_before_page_load():
     assert q(ids[0]) == q(ids[1]) == ("open", None) and q(ids[2])[0] == "acked"
 
 
+def test_ack_clears_map_marker_without_waiting_for_cache():
+    from netmon import views
+    now = time.time()
+    aid = web.conn.execute(
+        "INSERT INTO alerts(key,rule,severity,confidence,asset,subject,title,first_seen,last_seen,window_start,window_end,"
+        "evidence,query,baseline,alternatives,next_steps,akvorado_filter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("cc" + str(now), "new_dest_country", "low", "medium", "10.40.0.8", "ZZ", "new country", now, now, now, now,
+         "[]", "{}", "", "[]", "[]", "")).lastrowid
+    web.conn.commit()
+    assert aid in views.alert_countries()["ZZ"]["ids"]
+    a = client("admin", ADMINPW)
+    a.post(f"/netmon/alert/{aid}/status", data={"status": "acked", "csrf": web.csrf_token(sid(a))})
+    assert "ZZ" not in views.alert_countries()   # within the 60 s cache window
+
+
 def test_block_refused_for_internal():
     a = client("admin", ADMINPW)
     r = a.post("/netmon/blocks", data={"address": "10.40.0.8", "reason": "x", "csrf": web.csrf_token(sid(a))})
