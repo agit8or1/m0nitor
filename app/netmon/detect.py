@@ -409,22 +409,26 @@ class Detector:
             WITH e AS (SELECT DISTINCT dst FROM ({OUTBOUND}) WHERE t >= toDateTime({{ws:UInt32}}) AND t < toDateTime({{we:UInt32}})
                          AND src = {{s:String}} AND NOT fw_origin AND sport >= 1024 AND NOT has({{svc:Array(UInt16)}}, sport)
                          AND NOT has({{exp:Array(Tuple(String, UInt16))}}, (src, sport)) AND NOT (sport >= 32768 AND dport >= 32768)),
-                 r AS (SELECT {IP.format(col='SrcAddr')} AS dst, groupUniqArray(3)({IP.format(col='DstAddr')}) AS hosts FROM flows
+                 r AS (SELECT {IP.format(col='SrcAddr')} AS dst, groupUniqArray(21)({IP.format(col='DstAddr')}) AS hosts FROM flows
                        WHERE ExporterName = {{exporter:String}} AND INB AND TOLAN
                          AND TimeReceived >= toDateTime({{ws:UInt32}}) AND TimeReceived < toDateTime({{we:UInt32}}) + 120
                          AND {IP.format(col='SrcAddr')} IN (SELECT dst FROM e) GROUP BY dst)
             SELECT multiIf(length(r.hosts) = 1, 'one', length(r.hosts) > 1, 'many', 'none') AS k, if(k = 'one', r.hosts[1], '') AS host,
-                   count() AS dsts
-            FROM e LEFT JOIN r ON e.dst = r.dst GROUP BY k, host ORDER BY dsts DESC""",
+                   if(k = 'many', arraySort(r.hosts), []) AS several, count() AS dsts
+            FROM e LEFT JOIN r ON e.dst = r.dst GROUP BY k, host, several ORDER BY dsts DESC""",
                       {"ws": ws, "we": we, "s": src, "exp": self.exposed_public_ports()})
         total = sum(int(x["dsts"]) for x in rows) or 1
         exp = expected_devices(self.conn)
         hosts = [{"host": x["host"], "destinations": int(x["dsts"]), "share_pct": round(100 * int(x["dsts"]) / total, 1),
                   **({"expected": True} if expected_match(exp, x["host"]) else {})} for x in rows if x["k"] == "one"]
         excluded = [h for h in hosts if h.get("expected")]
+        # several hosts got replies: still the expected devices' traffic when every one of them is expected
+        # (at most 20 hosts are listed per destination; 21 means "more", which is never treated as all-expected)
+        many_exp = [x for x in rows if x["k"] == "many" and len(x["several"]) <= 20 and all(expected_match(exp, h) for h in x["several"])]
         return {"lan_hosts": hosts[:10],
-                "dsts_expected": sum(h["destinations"] for h in excluded), "expected_hosts": [h["host"] for h in excluded],
-                "dsts_ambiguous": sum(int(x["dsts"]) for x in rows if x["k"] == "many"),
+                "dsts_expected": sum(h["destinations"] for h in excluded) + sum(int(x["dsts"]) for x in many_exp),
+                "expected_hosts": sorted({h["host"] for h in excluded} | {h for x in many_exp for h in x["several"]}),
+                "dsts_ambiguous": sum(int(x["dsts"]) for x in rows if x["k"] == "many") - sum(int(x["dsts"]) for x in many_exp),
                 "dsts_no_reply": sum(int(x["dsts"]) for x in rows if x["k"] == "none"),
                 "lan_hosts_basis": "return path: the LAN host that received each destination's replies; destinations that never "
                                    "answered cannot be attributed from flow records"}

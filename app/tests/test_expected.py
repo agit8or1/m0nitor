@@ -71,3 +71,18 @@ def test_new_country_findings_group_per_host(cfg, conn):
     assert many["subject"] == "many" and "5 new countries" in many["title"] and many["title"].index("IN") < many["title"].index("CN")
     assert len(many["evidence"]) == 5 and "any of the listed" in many["baseline"]
     assert next(f for f in g if f["asset"] == "10.40.0.20")["subject"] == "DE"           # below the threshold: unchanged
+
+
+def test_nat_hosts_counts_destinations_shared_by_expected_devices(cfg, conn):
+    d = Detector(cfg, None, conn)
+    d.exposed_public_ports = lambda: []
+    put_setting(conn, EXPECTED_KEY, {"10.40.0.121": {"reason": "crawler"}, "10.40.0.122": {"reason": "crawler"}}, "t")
+    d.q = lambda sql, p: [
+        {"k": "one", "host": "10.40.0.121", "several": [], "dsts": 50},
+        {"k": "one", "host": "10.40.0.20", "several": [], "dsts": 5},
+        {"k": "many", "host": "", "several": ["10.40.0.121", "10.40.0.122"], "dsts": 30},   # only crawlers: theirs
+        {"k": "many", "host": "", "several": ["10.40.0.121", "10.40.0.20"], "dsts": 4},     # mixed: stays ambiguous
+        {"k": "none", "host": "", "several": [], "dsts": 7}]
+    r = d.nat_hosts("203.0.113.179", 0, 600)
+    assert r["dsts_expected"] == 80 and r["dsts_ambiguous"] == 4 and r["dsts_no_reply"] == 7
+    assert r["expected_hosts"] == ["10.40.0.121", "10.40.0.122"]
