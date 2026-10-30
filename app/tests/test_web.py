@@ -249,3 +249,19 @@ def test_mark_finding_normal_suppresses_future_and_closes_past():
     assert "10.40.0.8" in get_setting(web.conn, EXPECTED_KEY, {})
     assert web.conn.execute("SELECT status FROM alerts WHERE id=?", (third,)).fetchone()["status"] == "open"   # close unticked
     assert a.post(f"/netmon/alert/{third}/normal", data={"scope": "x", "reason": "r", "csrf": tok}).status_code == 400
+
+
+def test_site_dns_settings_recorded_on_firewalls_page():
+    from netmon import dnsresolve
+    a, v = client("admin", ADMINPW), client("viewer1", VIEWPW)
+    tok = web.csrf_token(sid(a))
+    page = a.get("/netmon/settings/sites").text
+    assert "DNS query log" in page and "automatic: 10.40.0.1" in page
+    r = a.post("/netmon/settings/sites/site-a/dns", data={"fw_mode": "queries", "fw_note": "Log Queries on", "enabled": "1",
+                                                           "resolver": "", "csrf": tok}, follow_redirects=False)
+    assert r.status_code == 303 and "saved" in r.headers["location"]
+    assert dnsresolve.settings(web.conn, "site-a")["fw_mode"] == "queries"
+    assert "Unbound query logging queries only · recorded by admin" in a.get("/netmon/settings/sites").text
+    r = a.post("/netmon/settings/sites/site-a/dns", data={"fw_mode": "queries", "resolver": "not-an-ip", "csrf": tok}, follow_redirects=False)
+    assert "Not%20saved" in r.headers["location"]
+    assert v.post("/netmon/settings/sites/site-a/dns", data={"fw_mode": "off", "csrf": web.csrf_token(sid(v))}).status_code == 403

@@ -764,17 +764,60 @@ def site_health():
         logs = {r["s"]: r["t"] for r in dash.ch.query(
             "SELECT site AS s, toUInt32(max(m)) AS t FROM (SELECT site, max(received) AS m FROM netmon.fw_events GROUP BY site "
             "UNION ALL SELECT site, max(received) FROM netmon.sys_events GROUP BY site UNION ALL SELECT site, max(received) FROM netmon.ids_events GROUP BY site) GROUP BY s")}
+        extra = {(r["k"], r["s"]): r["t"] for r in dash.ch.query(
+            "SELECT 'ids' AS k, site AS s, toUInt32(max(received)) AS t FROM netmon.ids_events GROUP BY site "
+            "UNION ALL SELECT 'dns', site, toUInt32(max(received)) FROM netmon.dns_events WHERE startsWith(source, 'unbound') GROUP BY site", {})}
     except Exception:
-        flows, logs = {}, {}
+        flows, logs, extra = {}, {}, {}
     out = {}
     for x in cfg.sites:
         sn = x.get("snmp") or {}
         st = [get_state(conn, f"snmp:{x['id']}:{n}", None)[0] for n in (sn.get("interfaces") or {})]
         out[x["id"]] = {"flows": flows.get(x["exporter"]) or None, "logs": logs.get(x["id"]) or None,
+                        "ids": extra.get(("ids", x["id"])) or None, "dns": extra.get(("dns", x["id"])) or None,
                         "snmp": None if not sn else ("ok" if st and all(v and v.get("ok") for v in st) else
                                                        (next((v.get("error") for v in st if v and v.get("error")), None) or "no sample yet")),
                         "block": blk.enforcer(x).enabled}
     return out
+
+
+def dns_note(site):
+    from . import dnsresolve as dr
+    d = dr.settings(conn, site["id"])
+    if not d["fw_mode"]:
+        return ""
+    note = f" · {e(d['fw_note'])}" if d["fw_note"] else ""
+    return (f"<div class='muted'>Firewall: Unbound query logging {e(dr.FW_MODES[d['fw_mode']])} · recorded by {e(d['noted_by'])} "
+            f"{e(fmt_ts(d['noted_at']))}{note}</div>")
+
+
+def dns_card(req, site, admin):
+    """DNS for one firewall: what is set up on the firewall (operator's record) and how netmon names remote addresses."""
+    from . import dnsresolve as dr
+    d = dr.settings(conn, site["id"])
+    server, how = dr.resolver_for(site, d)
+    st = ((get_state(conn, "dnsnames:status", None)[0] or {}).get(site["id"])) or {}
+    hour = st.get("hour", [])
+    err = f" · last error: {st['error']}" if st.get("error") else ""
+    stat = (f"Last hour: {sum(h[1] for h in hour):,} names resolved, {sum(h[2] for h in hour):,} addresses, "
+            f"{sum(h[3] for h in hour):,} lookups failed{err}." if hour else "Not run yet (starts a minute after the app).")
+    dis = "" if admin else "disabled"
+    modes = "".join(f"<option value='{k}' {'selected' if k == d['fw_mode'] else ''}>{e(v)}</option>" for k, v in dr.FW_MODES.items())
+    recorded = f"Recorded by {e(d['noted_by'])} {e(fmt_ts(d['noted_at']))}. " if d["noted_at"] else ""
+    save = '<div class="row"><button class="primary">Save DNS settings</button></div>' if admin else ""
+    return f"""<details {'' if d['fw_mode'] else 'open'}><summary>DNS: query log &amp; remote names (FQDN)</summary>
+<form method=post action="/netmon/settings/sites/{e(site['id'])}/dns" class="stackform wide">{csrf_field(req)}
+<h3>On the firewall</h3>
+<div class="formgrid"><label>Unbound query logging<select name=fw_mode {dis}>{modes}</select></label>
+<label>Note<input name=fw_note value="{e(d['fw_note'])}" maxlength=300 placeholder="e.g. Services → Unbound DNS → Advanced → Log Queries; Logging → Remote: Unbound" {dis}></label></div>
+<p class="muted small">{recorded}A record of the firewall-side setting; what actually arrives is the "DNS query log" line above.</p>
+<h3>Names for remote addresses</h3>
+<label class="check"><input type=checkbox name=enabled value=1 {'checked' if d['enabled'] else ''} {dis}> Resolve looked-up names to label connections with their FQDN</label>
+<label>Resolver<input name=resolver value="{e(d['resolver'])}" placeholder="automatic: {e(server or 'none')}" class="mono" {dis}></label>
+<p class="muted small">Now using <span class="mono">{e(server or 'none')}</span> ({e(how)}). The query log carries names, not answers: netmon asks the
+same resolver for each A/AAAA name a host looked up, and its cache normally returns the answer the host got. Connections then show the
+name under the remote address (≈ = only another host looked it up). {e(stat)}</p>
+{save}</form></details>"""
 
 
 def ago_txt(t):
@@ -855,6 +898,23 @@ def conn_form(req, x=None):
 <div class="row"><button class="primary">{'Save connection settings' if edit else 'Add firewall'}</button></div></form>"""
 
 
+@app.post("/netmon/settings/sites/{sid}/dns")
+def save_site_dns(req: Request, sid: str, fw_mode: str = Form(""), fw_note: str = Form(""), enabled: str = Form(""),
+                  resolver: str = Form(""), csrf: str = Form("")):
+    u = need(req, "admin")
+    check_csrf(req, csrf)
+    if not cfg.site(sid):
+        raise HTTPException(404)
+    from . import dnsresolve as dr
+    try:
+        d = dr.save_settings(conn, sid, {"fw_mode": fw_mode, "fw_note": fw_note, "enabled": enabled == "1", "resolver": resolver}, u)
+        audit(conn, u, "site_dns_settings", {"site": sid, **{k: d[k] for k in ("fw_mode", "fw_note", "enabled", "resolver")}})
+        msg = "DNS settings saved."
+    except ValueError as ex:
+        msg = f"Not saved: {ex}"
+    return RedirectResponse(f"/netmon/settings/sites?msg={quote(msg)}#site-{quote(sid)}", 303)
+
+
 @app.get("/netmon/settings/sites", response_class=HTMLResponse)
 def sites_page(req: Request, msg: str = ""):
     from .dash import META
@@ -876,6 +936,8 @@ def sites_page(req: Request, msg: str = ""):
         status = f"""<ul class="plain small fwstat">
 <li>NetFlow: {badge(h.get('flows'), f"last flow {ago_txt(h.get('flows'))}", 'nothing received yet')}</li>
 <li>Syslog: {badge(h.get('logs'), f"last line {ago_txt(h.get('logs'))}", 'nothing received yet')}</li>
+<li>IDS (Suricata EVE): {badge(h.get('ids'), f"last alert {ago_txt(h.get('ids'))}", 'nothing received yet')}</li>
+<li>DNS query log: {badge(h.get('dns'), f"last query {ago_txt(h.get('dns'))}", 'nothing received yet')}{dns_note(s)}</li>
 <li>Counters: {badge(h.get('snmp') == 'ok', 'SNMP polling', 'not set up' if h.get('snmp') is None else f"SNMP: {h.get('snmp')}")}</li>
 <li>Blocking: {badge(h.get('block'), f"API key set · alias {blk.enforcer(s).alias}", 'not set up')}</li></ul>"""
         exp_ip = f" ({e(s['exporter_ip'])})" if s.get("exporter_ip") else ""
@@ -900,6 +962,7 @@ def sites_page(req: Request, msg: str = ""):
 Look up sends only the address you type to OpenStreetMap Nominatim, and only when you click it.</p>
 {'<div class="row"><button class="primary">Save</button></div>' if admin else ''}</form>
 {f"<details><summary>Connection settings</summary>{conn_form(req, s)}" + (f"<form method=post action='/netmon/settings/sites/{e(s['id'])}/delete' class='row confirm'>{csrf_field(req)}<button>Delete</button></form>" if len(cfg.sites) > 1 else "") + "</details>" if admin else ''}
+{dns_card(req, s, admin)}
 <details><summary>Setup steps on the {e(VENDORS.get(s['vendor'], {}).get('label', ''))} firewall</summary>{site_setup(s)}</details></section>"""
     hostbox = (f"<div class='banner {'' if hs == 'ok' else 'bad' if hs == 'failed' else 'warn'}'><b>Host access lists:</b> "
                f"{'applied' if hs == 'ok' else 'FAILED' if hs == 'failed' else 'pending'} — {e(hdetail)}</div>")

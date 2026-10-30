@@ -36,6 +36,11 @@ TABLES = {
         `resolver` IPv6, `uid` String)
         ENGINE = MergeTree PARTITION BY toDate(ts) ORDER BY (site, client, ts) TTL toDateTime(ts) + toIntervalDay({dns_days})
         SETTINGS ttl_only_drop_parts = 1""",
+    # answers netmon got for names in the resolver query log (dnsresolve.py): remote address -> FQDN
+    "dns_resolved": """CREATE TABLE IF NOT EXISTS netmon.dns_resolved (`ts` DateTime64(3, 'UTC'), `site` LowCardinality(String),
+        `query` String, `qtype` LowCardinality(String), `addr` IPv6, `ttl` UInt32, `clients` Array(IPv6), `resolver` String)
+        ENGINE = MergeTree PARTITION BY toDate(ts) ORDER BY (site, addr, ts) TTL toDateTime(ts) + toIntervalDay({dns_days})
+        SETTINGS ttl_only_drop_parts = 1""",
     # Zeek (optional internal sensor): conn, tls, http, notice, capture health
     "zeek_conn": """CREATE TABLE IF NOT EXISTS netmon.zeek_conn (`ts` DateTime64(3, 'UTC'), `received` DateTime('UTC'),
         `site` LowCardinality(String), `sensor` LowCardinality(String), `uid` String, `proto` LowCardinality(String),
@@ -80,6 +85,7 @@ def ensure(ch, dns_days=7):
 
 def set_dns_retention(ch, days):
     ch.query(f"ALTER TABLE netmon.dns_events MODIFY TTL toDateTime(ts) + toIntervalDay({int(days)})", {})
+    ch.query(f"ALTER TABLE netmon.dns_resolved MODIFY TTL toDateTime(ts) + toIntervalDay({int(days)})", {})
 
 
 def statements(dns_days=7):

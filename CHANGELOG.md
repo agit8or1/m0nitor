@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Added
+- FQDNs for remote addresses from the Unbound query log (re-resolved on the same resolver, `netmon.dns_resolved`),
+  shown under remote addresses in conversation tables; per-firewall DNS card (query log mode record, resolver,
+  status) and IDS / DNS query log lines on Settings → Firewalls & sites.
 - Optional Zeek sensor service (`docker compose --profile zeek`, pinned zeek/zeek 9.0.0, read-only, capture caps
   only) and three documented feeds: Proxmox bridge mirror (`host/pve-mirror.sh` + timer), switch SPAN, firewall
   bridge span — docs/zeek-sensor.md.

@@ -1211,6 +1211,8 @@ def start():
         threading.Thread(target=responder_loop, daemon=True).start()
         Poller(cfg).start()
         Ingest(cfg, cfg["clickhouse_url"]).start()
+        from .dnsresolve import NameResolver
+        NameResolver(cfg, ch, cfg["clickhouse_url"]).start()   # FQDNs for remote addresses from the DNS query log
         threading.Thread(target=health_loop, daemon=True).start()
         from .zeek import ZEEK_DIR, ZeekIngest
         if os.path.isdir(ZEEK_DIR):   # optional sensor: only when its log directory is mounted

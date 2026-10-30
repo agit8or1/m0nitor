@@ -269,7 +269,10 @@ const NM = (() => {
           ? el("a", { href: href(`/netmon/servers/${r.server}`), text: r.server_name, title: r.server })
           : ipCell(r.server, "", href(`/netmon/servers/${r.server}`)) },
       { label: "Direction", get: (r) => el("span", { title: r.evidence, text: r.direction }) },
-      { label: "Remote IP", get: (r) => ipCell(r.remote, r.remote_name) },
+      { label: "Remote IP", get: (r) => r.fqdn
+          ? el("span", {}, ipCell(r.remote, r.remote_name), el("div", { class: "sub fqdn", title: r.fqdn.basis },
+              `${r.fqdn.mine ? "" : "≈ "}${r.fqdn.names.join(", ")}${r.fqdn.more ? ` +${r.fqdn.more}` : ""}`))
+          : ipCell(r.remote, r.remote_name) },
       { label: "Country", get: (r) => r.cc ? el("a", { href: href(`/netmon/countries/${r.cc}`), text: r.cc_name }) : "Unknown" },
       { label: "Organization", get: (r) => r.asname || (r.asn ? `AS${r.asn}` : "—") },
       { label: "Service", get: (r) => el("span", {}, r.service, el("div", { class: "sub", text: r.service_evidence })) },

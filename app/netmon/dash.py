@@ -140,6 +140,17 @@ class Dash:
                 w.append(f"{REMOTE_IP} = {{rip:String}}")
         return " AND ".join(w)
 
+    def _fqdns(self, rows, sc):
+        """r["fqdn"]: the name the server (or its LAN host behind 1:1 NAT) looked up for this remote, from the DNS query log."""
+        from .dnsresolve import names_for
+        pairs = {(self.cfg.binat.get(r["server"], r["server"]), r["remote"]) for r in rows}
+        try:
+            got = names_for(self.ch, [s["id"] for s in sc.sites], pairs, sc.start, sc.end)
+        except Exception:   # names are context only: no DNS table / ClickHouse hiccup -> no names
+            got = {}
+        for r in rows:
+            r["fqdn"] = got.get((self.cfg.binat.get(r["server"], r["server"]), r["remote"]))
+
     def q(self, sc: Scope, s: str, extra=None, ttl=10):
         macros, fp = flow_predicates(self.cfg, sc.sites)
         sql = expand_flow_sql(s, macros)
@@ -470,6 +481,7 @@ class Dash:
             r["cc_name"] = cname(r["cc"] or "??")
             r["remote_name"] = self.cfg.label(r["remote"])
         self._names(rows, "asn", "asname", sc)
+        self._fqdns(rows, sc)
         ports = sorted({(r["proto"], r["svc_port"]) for r in rows if r["svc_port"]})
         if ports:
             names = {(n["p"], n["port"]): n["name"] for n in self.q(sc, """
