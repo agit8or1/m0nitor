@@ -1,7 +1,7 @@
 # Security policy
 
 ## Reporting
-This repository is private. Report vulnerabilities to the maintainer directly (GitHub private vulnerability
+Report vulnerabilities to the maintainer directly (GitHub private vulnerability
 reporting on this repository), not in issues. Please include affected version/commit, impact and reproduction steps.
 
 ## Design rules the code follows

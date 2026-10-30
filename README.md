@@ -4,7 +4,7 @@ Self-hosted network monitoring for OPNsense (and, with limits, pfSense) firewall
 *sends* telemetry (NetFlow v9, remote syslog, optional SNMP); the monitor never sits in the forwarding path, so if it
 stops, traffic is unaffected.
 
-> **Status:** private pre-release. No license has been chosen yet — all rights reserved until one is added.
+> **Status:** pre-release. No license has been chosen yet — all rights reserved until one is added.
 > The internal Python package is still called `netmon`.
 
 ## What it does
