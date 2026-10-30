@@ -132,7 +132,9 @@ def test_ack_button_on_lists():
     r = a.post(f"/netmon/alert/{aid}/status", data={"status": "acked", "csrf": web.csrf_token(sid(a))},
                headers={"Accept": "application/json"})
     assert r.json() == {"ok": True, "id": aid, "status": "acked"}
-    assert form not in a.get("/netmon/security?status=acked").text   # no Ack on an already-acked finding
+    acked = a.get("/netmon/security?status=acked").text   # an acked finding offers Unack, not Ack
+    card = acked[acked.index(form):].split("</form>", 1)[0]
+    assert ">Unack</button>" in card and ">Ack</button>" not in card
 
 
 def test_ack_all_covers_every_open_finding_up_to_page_load():
@@ -155,6 +157,22 @@ def test_ack_all_covers_every_open_finding_up_to_page_load():
     q = lambda i: web.conn.execute("SELECT status FROM alerts WHERE id=?", (i,)).fetchone()[0]  # noqa: E731
     assert q(first) == q(max_id) == "acked" and q(later) == "open"
     assert web.conn.execute("SELECT count(*) FROM alerts WHERE status='open' AND test=0 AND id<=?", (max_id,)).fetchone()[0] == 0
+
+
+def test_unack_button_on_acked_tab():
+    aid = make_alert()
+    a = client("admin", ADMINPW)
+    tok = web.csrf_token(sid(a))
+    a.post(f"/netmon/alert/{aid}/status", data={"status": "acked", "csrf": tok})
+    form = f"action='/netmon/alert/{aid}/status' class='inline ack'"
+    acked = a.get("/netmon/security?status=acked").text
+    assert form in acked and ">Unack</button>" in acked
+    assert form not in client("viewer1", VIEWPW).get("/netmon/security?status=acked").text
+    r = a.post(f"/netmon/alert/{aid}/status", data={"status": "open", "list": "1", "back": "/netmon/security?status=acked",
+                                                     "csrf": tok}, follow_redirects=False)
+    assert r.headers["location"] == "/netmon/security?status=acked"   # stays on the acked tab
+    assert tuple(web.conn.execute("SELECT status, acked_by, acked_at FROM alerts WHERE id=?", (aid,)).fetchone()) == ("open", None, None)
+    assert form not in a.get("/netmon/security?status=acked").text
 
 
 def test_block_refused_for_internal():

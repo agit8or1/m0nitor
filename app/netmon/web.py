@@ -515,8 +515,14 @@ def lan_hosts_dd(a, req=None, can_edit=False):
 
 
 def ack_form(req, a, back):
+    """Per-card triage on the Security list: Ack on open findings, Unack (back to open) on acked ones."""
+    if a["status"] not in ("open", "acked"):
+        return ""
+    to, label, tip = (("acked", "Ack", "Acknowledge: moves it to the acked tab") if a["status"] == "open" else
+                      ("open", "Unack", "Unacknowledge: moves it back to the open tab"))
     return (f"<form method=post action='/netmon/alert/{a['id']}/status' class='inline ack'>{csrf_field(req)}{back_field(back)}"
-            f"<input type=hidden name=status value=acked><button class='sm' title='Acknowledge: moves it to the acked tab'>Ack</button></form>")
+            f"<input type=hidden name=list value=1><input type=hidden name=status value={to}>"
+            f"<button class='sm' title='{tip}'>{label}</button></form>")
 
 
 def finding_card(a, ack=""):
@@ -572,7 +578,7 @@ def security_page(req: Request, status: str = "open"):
                if can_ack and status == "open" and n_open else "")
 
     def sec(title, desc, items, empty):
-        cards = "".join(finding_card(a, ack_form(req, a, back) if can_ack and a["status"] == "open" else "")
+        cards = "".join(finding_card(a, ack_form(req, a, back) if can_ack else "")
                         for a in items) or f"<p class='empty'>{e(empty)}</p>"
         return f"<section class='card'><div class='card-h'><h2>{e(title)} <span class='count'>{len(items)}</span></h2><span class='muted small'>{e(desc)}</span></div>{cards}</section>"
     test_btn = (f"<form method=post action='/netmon/test-alert' class='inline'>{csrf_field(req)}"
@@ -824,18 +830,22 @@ def alert_normal(req: Request, aid: int, scope: str = Form(...), reason: str = F
 
 
 @app.post("/netmon/alert/{aid}/status")
-def alert_status(req: Request, aid: int, status: str = Form(...), back: str = Form(""), csrf: str = Form("")):
+def alert_status(req: Request, aid: int, status: str = Form(...), back: str = Form(""), list: str = Form(""),
+                 csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
     if status not in ("open", "acked", "closed"):
         raise HTTPException(400)
-    conn.execute("UPDATE alerts SET status=?, acked_by=?, acked_at=? WHERE id=?", (status, u, time.time(), aid))
+    # reopening clears "acked by" (the audit log keeps who acked and who reopened)
+    conn.execute("UPDATE alerts SET status=?, acked_by=?, acked_at=? WHERE id=?",
+                 (status, None, None, aid) if status == "open" else (status, u, time.time(), aid))
     conn.commit()
     audit(conn, u, "alert_status", {"id": aid, "status": status})
     if "application/json" in req.headers.get("accept", ""):   # list buttons (fetch): no page to go to
         return JSONResponse({"ok": True, "id": aid, "status": status})
-    # acked/closed drop off the open lists, so return to the list rather than leaving the user on the finding
-    return RedirectResponse(safe_next(back) if back and status != "open" else f"/netmon/alert/{aid}", 303)
+    # acked/closed drop off the open lists, so return to the list rather than leaving the user on the finding;
+    # reopening from the finding page stays there, from a list button (Unack) it returns to that list
+    return RedirectResponse(safe_next(back) if back and (status != "open" or list) else f"/netmon/alert/{aid}", 303)
 
 
 @app.post("/netmon/alerts/ack")
