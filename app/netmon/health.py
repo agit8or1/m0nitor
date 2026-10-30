@@ -4,7 +4,7 @@ Each check returns a state:
   ok              working, with evidence
   warn / fail     degraded / broken (thresholds configurable, Settings -> Coverage)
   awaiting        adapter present, no data source connected yet ("awaiting setup" / "awaiting traffic feed")
-  not_configured  feature deliberately not set up (e.g. backups, threat intelligence)
+  not_configured  feature deliberately not set up (e.g. threat intelligence)
   unknown         cannot be measured with the access the monitor has
 
 A quiet IDS is not a broken IDS: Suricata is judged by its transport (the same syslog stream that carries
@@ -308,12 +308,6 @@ class Health:
             set_state(self.conn, "health:quick_check", res)
         out.append(check("db:sqlite", "Storage", "Settings/alerts database (SQLite)", "ok" if res["r"] == "ok" else "fail",
                          f"integrity quick_check: {res['r']}", res["t"]))
-        b, _ = get_state(self.conn, "backup:last", None)
-        out.append(check("backup", "Storage", "Backups", "not_configured" if not b else "ok" if b.get("ok") else "fail",
-                         "no backup job configured" if not b else f"last {'successful' if b.get('ok') else 'FAILED'} backup {_age(b.get('ts'))}",
-                         b.get("ts") if b else None, b.get("detail", "") if b else "",
-                         "A backup is only proven by a test restore.",
-                         "See docs: backup and restore (local job script; off-site copies are your decision)." if not b else ""))
         return out
 
     def c_geoip(self, s):
@@ -328,9 +322,26 @@ class Health:
                                  limits="Country-level only; the firewall's GeoIP alias uses its own source."))
             else:
                 out.append(check("geoip", "Enrichment", "GeoIP country database", "fail", "not readable", evidence=p.get("error", "")))
-        out.append(check("threatintel", "Enrichment", "Threat intelligence feeds", "not_configured", "none configured",
-                         limits="Findings do not depend on reputation lists.", action="Not implemented yet (docs/ROADMAP.md)."))
+        out.append(self.c_threatintel())
         return out
+
+    def c_threatintel(self):
+        from . import threatradar as tr
+        ts = tr.settings(self.conn)
+        lim = "Enrichment only: it lists vulnerabilities, not addresses. Findings never depend on it."
+        if not ts["enabled"]:
+            return check("threatintel", "Enrichment", "Threat intelligence (ExploitHound Threat Radar)", "not_configured", "turned off",
+                         limits=lim, action="Security → Threat intel")
+        st = tr.data(self.conn)
+        if not st.get("fetched"):
+            return check("threatintel", "Enrichment", "Threat intelligence (ExploitHound Threat Radar)", "fail" if st.get("error") else "warn",
+                         "never fetched" + (f": {st['error']}" if st.get("error") else " yet"), limits=lim, action="Security → Threat intel")
+        c = st.get("counts", {})
+        stale = time.time() - st["fetched"] > 2 * ts["interval_hours"] * 3600 + 1800
+        return check("threatintel", "Enrichment", "Threat intelligence (ExploitHound Threat Radar)", "warn" if stale or st.get("error") else "ok",
+                     f"{sum(c.values()):,} CVEs ({c.get('confirmed', 0)} confirmed exploited, {c.get('predicted', 0)} predicted, "
+                     f"{c.get('disclosed', 0)} new) · fetched {_age(st['fetched'])}", st["fetched"],
+                     f"last fetch failed: {st['error']}" if st.get("error") else "", lim, "Security → Threat intel")
 
     def c_notifications(self, s):
         chans = self.conn.execute("SELECT count(*) FROM channels WHERE enabled=1").fetchone()[0]
@@ -396,7 +407,7 @@ class Health:
         out = []
         for cid, label, table, action in (
                 ("dns", "DNS resolver logs", "netmon.dns_events", "See docs/dns-zeek-hostlogs.md (Unbound query logging via remote syslog, or Zeek dns.log)."),
-                ("zeek", "Zeek sensor (internal traffic)", "netmon.zeek_conn", "Awaiting traffic feed: see docs/dns-zeek-hostlogs.md (mirror/TAP placement)."),
+                ("zeek", "Zeek sensor (internal traffic)", "netmon.zeek_conn", "Awaiting traffic feed: see docs/zeek-sensor.md (Proxmox bridge mirror, switch SPAN or firewall bridge span)."),
                 ("hostlogs", "Server authentication logs", "netmon.auth_events", "See docs/dns-zeek-hostlogs.md (forward sshd/sudo logs via syslog).")):
             try:
                 r = self.ch.query(f"SELECT toUInt32(max(received)) AS last, countIf(received > now() - 3600) AS n FROM {table}", {})[0]

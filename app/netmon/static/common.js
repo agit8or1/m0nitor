@@ -302,6 +302,7 @@ const NM = (() => {
       el("label", {}, "Name", inp("name", d.name, d.internal ? "server name" : "e.g. Office VPN, Backup provider", { autofocus: true })),
       el("label", {}, "Aliases", inp("aliases", (d.aliases || []).join(", "), "other names, comma-separated (e.g. ns1, cp.example.com)", { maxlength: 400 })),
       d.internal ? el("label", {}, "Role", inp("role", d.role, "web, mail, backup…")) : null,
+      d.internal ? el("label", {}, "Software", inp("software", (d.software || []).join(", "), "products it runs (e.g. nextcloud, proxmox ve) — matched against threat intel", { maxlength: 400 })) : null,
       d.internal ? el("label", { class: "check" }, el("input", { type: "checkbox", name: "sensitive", value: "1", checked: d.sensitive }), " Sensitive — new outbound destinations raised one severity level") : null,
       el("label", {}, "Notes", inp("notes", d.notes, "optional")),
       d.can_edit ? null : el("p", { class: "warnline", text: `Naming ${d.internal ? "servers" : "external addresses"} requires the ${d.needs} role.` }),

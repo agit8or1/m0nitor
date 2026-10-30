@@ -8,4 +8,3 @@ Not commitments; ordered roughly by value.
 - External exposure checks (certificate expiry for published services) — only against your own addresses, opt-in.
 - Health notifications (off by default) once destinations are tested.
 - Installer script for a fresh host; restore drill on a fresh VM.
-- License decision.

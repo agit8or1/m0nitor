@@ -70,7 +70,7 @@ def capabilities():
     lan = _q1("SELECT count() AS n FROM netmon.zeek_conn WHERE ts > now() - 3600", {}, {}).get("n", 0)
     caps.append(("LAN ↔ LAN (server-to-server, same subnet)", "verified" if lan else "awaiting",
                  f"{int(lan):,} Zeek connection records in the last hour" if lan else "Bridged/switched locally: never crosses the firewall",
-                 "Needs a mirror port or TAP feeding a Zeek sensor (docs/dns-zeek-hostlogs.md); same-host VM traffic needs a Proxmox bridge mirror.", None))
+                 "Needs a Zeek sensor fed by a mirror (docs/zeek-sensor.md); same-host VM traffic needs the Proxmox bridge mirror option.", None))
     fw = _q1("SELECT count() AS n, toUInt32(max(received)) AS last FROM netmon.fw_events WHERE received > now() - 3600", {}, {})
     caps.append(("Blocked / denied traffic", "verified" if fw.get("n") else "awaiting",
                  f"{int(fw.get('n') or 0):,} firewall log records in the last hour; counts reconciled with the Countries map",

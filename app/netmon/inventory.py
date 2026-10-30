@@ -24,20 +24,20 @@ def clean(v, rx, what, limit):
     return v
 
 
-def clean_aliases(v, name):
-    """Comma-separated other names for one address (e.g. a DNS name and a short name). At most 8, deduplicated,
-    never repeating the main name; same character rules as names."""
+def clean_list(v, what, exclude=""):
+    """Comma-separated list (aliases: other names for one address; software: products the server runs, matched
+    against threat intel). At most 8, deduplicated, never repeating `exclude`; same character rules as names."""
     out = []
     for a in (v or "").split(","):
-        a = clean(a, NAME_RE, "Alias", 64)
-        if a and a.lower() != name.lower() and a.lower() not in (x.lower() for x in out):
+        a = clean(a, NAME_RE, what, 64)
+        if a and a.lower() != exclude.lower() and a.lower() not in (x.lower() for x in out):
             out.append(a)
     if len(out) > 8:
-        raise ValueError("at most 8 aliases")
+        raise ValueError(f"at most 8 entries in {what}")
     return out
 
 
-def save(ip, name, role, sensitive, notes, user, role_of_user, aliases=""):
+def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", software=""):
     """Set or clear the name (and aliases) for `ip`. Internal addresses (servers) need admin: `sensitive` changes detection
     severity. External labels need analyst. Returns a status message."""
     try:
@@ -50,7 +50,8 @@ def save(ip, name, role, sensitive, notes, user, role_of_user, aliases=""):
         raise PermissionError(f"naming {'servers' if internal else 'external addresses'} requires role {need_role}")
     name = clean(name, NAME_RE, "Name", 64)
     notes = " ".join((notes or "").split())[:300].replace("<", "‹").replace(">", "›")
-    alias_list = clean_aliases(aliases, name) if name else []
+    alias_list = clean_list(aliases, "Aliases", name) if name else []
+    sw = clean_list(software, "Software") if name and internal else []
     key = "assets:db" if internal else "labels:db"
     db = get_setting(conn, key, {}) or {}
     old = db.get(ip)
@@ -59,7 +60,7 @@ def save(ip, name, role, sensitive, notes, user, role_of_user, aliases=""):
         msg = f"Removed the name for {ip}."
     elif internal:
         db[ip] = {"name": name, "role": clean(role, ROLE_RE, "Role", 32), "sensitive": bool(sensitive), "notes": notes,
-                  **({"aliases": alias_list} if alias_list else {})}
+                  **({"aliases": alias_list} if alias_list else {}), **({"software": sw} if sw else {})}
         msg = f"Saved {name} ({ip})."
     else:
         db[ip] = {"name": name, "notes": notes, **({"aliases": alias_list} if alias_list else {})}   # no "source": a person's label, never replaced by a sync
@@ -167,13 +168,13 @@ def back_to(url, msg):
 
 @app.post("/netmon/names")
 def post_name(req: Request, ip: str = Form(...), name: str = Form(""), role: str = Form(""), sensitive: str = Form(""),
-              notes: str = Form(""), aliases: str = Form(""), clear: str = Form(""), back: str = Form(""), csrf: str = Form("")):
+              notes: str = Form(""), aliases: str = Form(""), software: str = Form(""), clear: str = Form(""), back: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
     _, r = user_of(req)
     js = req.headers.get("x-nm-fetch") == "1"   # the in-page ✎ editor wants JSON, plain forms get a redirect
     try:
-        msg = save(ip, "" if clear else name, role, sensitive == "1", notes, u, r, aliases)
+        msg = save(ip, "" if clear else name, role, sensitive == "1", notes, u, r, aliases, software)
     except PermissionError as ex:
         if js:
             return JSONResponse({"ok": False, "error": str(ex)}, 403)
@@ -192,7 +193,7 @@ def name_json(ip, role):
     internal = cfg.is_internal(ip)
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
     return {"ip": ip, "internal": internal, "name": a.get("name", ""), "role": a.get("role", ""), "sensitive": bool(a.get("sensitive")),
-            "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
+            "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "software": a.get("software", []), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
             "needs": "admin" if internal else "analyst"}
 
 
@@ -211,7 +212,8 @@ def name_form(req, ip, back, compact=False):
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
     extra = (f"""<label>Role<input name=role value="{e(a.get('role', ''))}" maxlength=32 placeholder="web, mail, backup…"></label>
 <label class="check"><input type=checkbox name=sensitive value=1 {'checked' if a.get('sensitive') else ''}> Sensitive
-<span class="muted small">— new outbound destinations from this server are raised one severity level</span></label>""" if internal else "")
+<span class="muted small">— new outbound destinations from this server are raised one severity level</span></label>
+<label>Software<input name=software value="{e(', '.join(a.get('software', [])))}" maxlength=400 placeholder="products it runs, comma-separated (e.g. nextcloud, proxmox ve) — matched against threat intel"></label>""" if internal else "")
     return f"""<form method=post action="/netmon/names" class="stackform{'' if compact else ' wide'} nameform">{csrf_field(req)}
 <input type=hidden name=ip value="{e(ip)}"><input type=hidden name=back value="{e(back)}">
 <label>Name<input name=name value="{e(a.get('name', ''))}" maxlength=64 placeholder="{'server name' if internal else 'e.g. Office VPN, Backup provider'}"></label>

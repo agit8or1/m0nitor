@@ -21,7 +21,7 @@ SETTINGS_TABS = [("Health", "/netmon/settings"), ("Coverage", "/netmon/coverage"
                  ("Users & 2FA", "/netmon/users"), ("Integrations", "/netmon/settings/integrations"),
                  ("My account", "/netmon/account"), ("Audit log", "/netmon/audit")]
 SECURITY_TABS = [("Findings", "/netmon/security"), ("Firewall events", "/netmon/firewall"), ("IDS alerts", "/netmon/ids"),
-                 ("Block requests", "/netmon/blocks"), ("Suppressions", "/netmon/exceptions")]
+                 ("Threat intel", "/netmon/threat-intel"), ("Block requests", "/netmon/blocks"), ("Suppressions", "/netmon/exceptions")]
 
 
 # ---- OPNsense setup tips (menu paths verified on 26.7.7 where marked) ----------------------------------

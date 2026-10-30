@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added
+- Optional Zeek sensor service (`docker compose --profile zeek`, pinned zeek/zeek 9.0.0, read-only, capture caps
+  only) and three documented feeds: Proxmox bridge mirror (`host/pve-mirror.sh` + timer), switch SPAN, firewall
+  bridge span — docs/zeek-sensor.md.
+- Threat intelligence from the ExploitHound Threat Radar (Security → Threat intel): IDS findings citing a radar CVE
+  are marked (optional one-level raise for CISA KEV), servers get a *Software* list matched against the radar, firewalls
+  are matched on their vendor. Enrichment only.
+- Server aliases (other names per address), editable from the Servers list; "This is normal" on findings
+  (suppress the finding type, the exact finding or the device, and close matching open findings).
 - Demo mode (`demo/`): isolated compose project, synthetic seed and live feeder, screenshots from it.
 - Expected devices: operator-declared legitimate hosts are excluded from findings, including their destinations
   behind a shared NAT address; managed on Security → Suppressions or from a finding's LAN host list.

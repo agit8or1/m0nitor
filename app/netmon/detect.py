@@ -11,6 +11,7 @@ import time
 
 import os
 
+from . import threatradar
 from .core import (get_setting, DATA_DIR, PROTO, apply_overrides, audit, expand_flow_sql, expected_devices, expected_match,
                    flow_predicates, set_state)
 
@@ -496,7 +497,8 @@ class Detector:
                groupUniqArray(5)(dport) AS dports, any(proto) AS proto, toUInt32(max(ts)) AS last,
                any(JSONExtractString(raw, 'flow', 'src_ip')) AS initiator,
                any(JSONExtractString(raw, 'flow', 'dest_ip')) AS responder,
-               any(JSONExtractString(raw, 'direction')) AS pkt_dir
+               any(JSONExtractString(raw, 'direction')) AS pkt_dir,
+               arraySlice(arrayDistinct(arrayFlatten(groupArray(extractAll(raw, '(?i)cve[-_][0-9]{4}[-_][0-9]{4,7}')))), 1, 10) AS cves
         FROM netmon.ids_events WHERE ts >= toDateTime({ws:UInt32}) AND ts < toDateTime({we:UInt32}) AND site = {site:String}
         GROUP BY sig_id, src, dst ORDER BY severity, hits DESC LIMIT 200"""
         params = {"ws": ws, "we": we, "site": self.site["id"]}
@@ -507,15 +509,25 @@ class Detector:
             asset = self.cfg.binat.get(asset, asset)   # a 1:1 NAT address is exactly one server
             sev = {1: "high", 2: "medium"}.get(int(r["severity"]), "low")
             client, server = (r["initiator"], r["responder"]) if r["initiator"] else (r["s"], r["d"])
+            radar = threatradar.lookup(self.conn, r.get("cves") or [])
+            intel, steps = "", []
+            if radar:
+                top = radar[0]
+                intel = (" Threat intel (ExploitHound Threat Radar): " + "; ".join(
+                    f"{h['cve']}: {threatradar.SECTIONS[h['section']]}" + (f", EPSS {100 * h['epss']:.1f}%" if h["epss"] is not None else "")
+                    for h in radar[:3]) + ". This says the vulnerability is exploited or likely to be, not that this server is vulnerable.")
+                steps = [f"Check whether the target runs software affected by {top['cve']} ({', '.join(top['products'][:2]) or 'see NVD'}) and is patched"]
+                if top["section"] == "confirmed" and threatradar.settings(self.conn)["raise_known_exploited"]:
+                    sev = {"low": "medium", "medium": "high", "high": "critical"}.get(sev, sev)
             out.append(dict(
                 rule="ids_alert", severity=sev, confidence="medium", asset=asset, subject=f"{r['sig_id']}|{remote}",
                 title=f"IDS: {r['signature']} — {client} → {server} ({r['hits']}×)",
-                window=(ws, we), evidence=[{**r, "peer": remote}], query=(sql.strip(), params),
-                baseline=f"Suricata signature {r['sig_id']} ({r['category']}), priority {r['severity']}; action {', '.join(r['actions'])}.",
+                window=(ws, we), evidence=[{**r, "peer": remote, **({"threat_radar": radar[:5]} if radar else {})}], query=(sql.strip(), params),
+                baseline=f"Suricata signature {r['sig_id']} ({r['category']}), priority {r['severity']}; action {', '.join(r['actions'])}.{intel}",
                 alternatives=["Signature false positive (check rule documentation and the matched traffic)",
                               "Internet background scanning that the service is not vulnerable to",
                               "Authorized vulnerability scan"],
-                next_steps=["Check whether the target service is exposed and patched",
+                next_steps=steps + ["Check whether the target service is exposed and patched",
                             "Look up the signature ID and its known false-positive conditions",
                             "Review other traffic from the remote address in Connections"],
                 akvorado_filter=self.akv(f"SrcAddr = {remote} OR DstAddr = {remote}"),

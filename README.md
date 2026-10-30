@@ -19,6 +19,8 @@ stops, traffic is unaffected.
 - **Firewall context:** logged block decisions by country, the live GeoIP policy (policy vs. enforcement), Suricata
   alerts, configuration-change and authentication events from syslog.
 - **Coverage page:** which telemetry is actually arriving, judged per source, and what each capability can and cannot see.
+- **Threat intelligence (enrichment):** the public ExploitHound Threat Radar (CISA KEV, EPSS) marks IDS findings that
+  cite an exploited CVE and lists CVEs naming software your servers run — see [docs/threat-intel.md](docs/threat-intel.md).
 - **Expected devices:** mark known-legitimate hosts (crawlers, scanners you run) so they stop raising findings —
   including their share of traffic behind a shared NAT address.
 - **Optional, off by default:** approval-gated blocking through one firewall alias, a switchable auto-response
@@ -50,6 +52,8 @@ All screenshots come from the isolated demo (docs/demo.md): synthetic data, docu
     docs/install.md          install, upgrade, uninstall, backup, restore, rollback
     docs/opnsense-setup.md   NetFlow, syslog, SNMP, Suricata, API user (read-only + one alias)
     docs/BLOCKING.md         one-time blocking setup per firewall
+    docs/zeek-sensor.md      optional Zeek sensor: Proxmox bridge mirror, switch SPAN or firewall bridge span
+    docs/threat-intel.md     ExploitHound Threat Radar enrichment (CVE intelligence, not IP reputation)
     docs/privacy-hardening.md  ports, users, secrets, data retention
     docs/troubleshooting.md
     docs/api.md              HTTP API and ClickHouse schema

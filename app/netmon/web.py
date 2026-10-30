@@ -18,7 +18,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth
+from . import auth, threatradar
 from . import block as blk
 from .core import (DATA_DIR, EXPECTED_KEY, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
                    load_config, put_setting, set_state)
@@ -1158,6 +1158,10 @@ def responder_loop():
             except Exception as ex:
                 print(f"vip sync failed: {ex}", flush=True)
         try:
+            threatradar.refresh(rconn)   # self-limiting: only fetches when the interval is due
+        except Exception as ex:
+            print(f"threat intel refresh failed: {ex}", flush=True)
+        try:
             set_state(rconn, "responder", r.run_once())
         except Exception as ex:
             set_state(rconn, "responder", {"ts": time.time(), "errors": [f"fatal: {str(ex)[:300]}"]})
@@ -1219,3 +1223,4 @@ from . import wallboards  # noqa: E402,F401
 from . import inventory  # noqa: E402,F401  (server names and external address labels)
 from . import autoresp  # noqa: E402,F401  (auto-response settings, firewall setup, decision log)
 from . import coverage  # noqa: E402,F401  (coverage & source health)
+from . import intel  # noqa: E402,F401  (threat intel: ExploitHound Threat Radar)

@@ -4,7 +4,7 @@
 |---|---|---|
 | Flow metadata (always) | DNS transport per host: which resolvers, DoT (853), possible DoH to public resolvers | nothing |
 | Unbound log-queries/replies | client, name, type, rcode (no answers) | firewall setting, syslog app `unbound` |
-| Zeek dns/conn/ssl/http/notice | answers + TTLs (enables DNS→connection correlation), LAN-to-LAN connections the mirror sees, TLS SNI (not content), cleartext HTTP request lines | a sensor on a mirror/TAP port, JSON logs mounted at `NETMON_ZEEK_DIR` |
+| Zeek dns/conn/ssl/http/notice ([setup](zeek-sensor.md)) | answers + TTLs (enables DNS→connection correlation), LAN-to-LAN connections the mirror sees, TLS SNI (not content), cleartext HTTP request lines | a sensor on a mirror/TAP port, JSON logs mounted at `NETMON_ZEEK_DIR` |
 | Server auth logs via syslog | sshd/sudo/su events, OPNsense audit (config changes) | forward to the monitor's 5514 |
 
 DNS correlation confidence: **high** — the host's own query answered with the address, connection within the TTL,

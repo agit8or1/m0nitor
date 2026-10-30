@@ -183,7 +183,7 @@ def test_settings_pages_render_for_admin():
     a = client("admin", ADMINPW)
     for p in ("/netmon/settings/notifications", "/netmon/settings/rules", "/netmon/settings/maintenance", "/netmon/users",
               "/netmon/settings/integrations", "/netmon/account", "/netmon/firewall", "/netmon/ids", "/netmon/security",
-              "/netmon/settings/inventory", "/netmon/settings/response", "/netmon/blocks"):
+              "/netmon/settings/inventory", "/netmon/settings/response", "/netmon/blocks", "/netmon/threat-intel"):
         r = a.get(p)
         assert r.status_code == 200, (p, r.text[:300])
 

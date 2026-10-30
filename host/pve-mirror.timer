@@ -1,0 +1,10 @@
+# Re-applies the mirror every minute: new VMs add bridge ports, and a sensor VM restart creates a new tap.
+[Unit]
+Description=Keep the netmon Zeek mirror in place
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

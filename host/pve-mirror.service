@@ -1,0 +1,7 @@
+# Proxmox host only (docs/zeek-sensor.md, option A). Edit the bridge and the sensor tap (tap<vmid>i<n>).
+[Unit]
+Description=Mirror vmbr0 into the netmon Zeek sensor NIC
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pve-mirror.sh vmbr0 tap105i1
