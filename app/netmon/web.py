@@ -576,6 +576,12 @@ def security_page(req: Request, status: str = "open"):
                f"{csrf_field(req)}{back_field(back)}<input type=hidden name=max_id value='{max_id}'>"
                f"<button title='Acknowledge every open finding, including any beyond the 300 listed'>Ack all ({n_open:,})</button></form>"
                if can_ack and status == "open" and n_open else "")
+    # Unack all on the acked tab: everything acked before the page loaded (acks made since then stay acked)
+    n_acked = conn.execute("SELECT count(*) FROM alerts WHERE status='acked' AND test=0").fetchone()[0]
+    if can_ack and status == "acked" and n_acked:
+        ack_all = (f"<form method=post action='/netmon/alerts/unack' class='inline' data-confirm='Move all {n_acked:,} acked findings back to open?'>"
+                   f"{csrf_field(req)}{back_field(back)}<input type=hidden name=asof value='{time.time():.3f}'>"
+                   f"<button title='Move every acked finding back to the open tab'>Unack all ({n_acked:,})</button></form>")
 
     def sec(title, desc, items, empty):
         cards = "".join(finding_card(a, ack_form(req, a, back) if can_ack else "")
@@ -860,6 +866,20 @@ def alerts_ack(req: Request, max_id: int = Form(...), back: str = Form(""), csrf
         conn.commit()
         audit(conn, u, "alert_status", {"ids": acked, "status": "acked", "reason": "ack all"})
     return RedirectResponse(safe_next(back) if back else "/netmon/security", 303)
+
+
+@app.post("/netmon/alerts/unack")
+def alerts_unack(req: Request, asof: float = Form(...), back: str = Form(""), csrf: str = Form("")):
+    """Unack all: moves every finding acked before the page loaded (acked_at <= asof) back to open."""
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    ids = [x[0] for x in conn.execute("SELECT id FROM alerts WHERE status='acked' AND test=0 AND (acked_at IS NULL OR acked_at<=?)",
+                                      (asof,)).fetchall()]
+    if ids:
+        conn.executemany("UPDATE alerts SET status='open', acked_by=NULL, acked_at=NULL WHERE id=?", [(i,) for i in ids])
+        conn.commit()
+        audit(conn, u, "alert_status", {"ids": ids, "status": "open", "reason": "unack all"})
+    return RedirectResponse(safe_next(back) if back else "/netmon/security?status=acked", 303)
 
 
 @app.post("/netmon/test-alert")

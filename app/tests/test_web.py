@@ -175,6 +175,29 @@ def test_unack_button_on_acked_tab():
     assert form not in a.get("/netmon/security?status=acked").text
 
 
+def test_unack_all_reopens_findings_acked_before_page_load():
+    import time
+    ids = [make_alert() for _ in range(3)]
+    a = client("admin", ADMINPW)
+    tok = web.csrf_token(sid(a))
+    for i in ids[:2]:
+        a.post(f"/netmon/alert/{i}/status", data={"status": "acked", "csrf": tok})
+    n_acked = web.conn.execute("SELECT count(*) FROM alerts WHERE status='acked' AND test=0").fetchone()[0]
+    page_ = a.get("/netmon/security?status=acked").text
+    assert f"Unack all ({n_acked:,})" in page_ and "action='/netmon/alerts/unack'" in page_
+    assert "action='/netmon/alerts/unack'" not in a.get("/netmon/security").text   # only on the acked tab
+    assert "action='/netmon/alerts/unack'" not in client("viewer1", VIEWPW).get("/netmon/security?status=acked").text
+    asof = time.time()
+    a.post(f"/netmon/alert/{ids[2]}/status", data={"status": "acked", "csrf": tok})   # acked after the page loaded
+    web.conn.execute("UPDATE alerts SET acked_at=? WHERE id=?", (asof + 5, ids[2]))
+    web.conn.commit()
+    r = a.post("/netmon/alerts/unack", data={"asof": str(asof), "back": "/netmon/security?status=acked", "csrf": tok},
+               follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/netmon/security?status=acked"
+    q = lambda i: tuple(web.conn.execute("SELECT status, acked_by FROM alerts WHERE id=?", (i,)).fetchone())  # noqa: E731
+    assert q(ids[0]) == q(ids[1]) == ("open", None) and q(ids[2])[0] == "acked"
+
+
 def test_block_refused_for_internal():
     a = client("admin", ADMINPW)
     r = a.post("/netmon/blocks", data={"address": "10.40.0.8", "reason": "x", "csrf": web.csrf_token(sid(a))})
