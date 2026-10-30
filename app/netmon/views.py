@@ -13,7 +13,7 @@ from fastapi import Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from urllib.parse import quote
 
-from . import counters
+from . import counters, geocity
 from .ai import AI
 from .core import audit, get_state
 from .dash import META, cname
@@ -198,12 +198,29 @@ def site_locations():
         loc = s.get("location", {})
         name = loc.get("label") or s["name"]
         if loc.get("lat") is not None and loc.get("lon") is not None:
-            out.append({"id": s["id"], "name": name, "lat": loc["lat"], "lon": loc["lon"], "source": "location configured in Settings"})
+            out.append({"id": s["id"], "name": name, "lat": loc["lat"], "lon": loc["lon"], "cc": loc.get("country") or "",
+                        "source": "location configured in Settings"})
         elif loc.get("country") in META:
             ll = META[loc["country"]]["ll"]
-            out.append({"id": s["id"], "name": name, "lat": ll[0], "lon": ll[1],
+            out.append({"id": s["id"], "name": name, "lat": ll[0], "lon": ll[1], "cc": loc["country"],
                         "source": f"{cname(loc['country'])} country centroid (exact location not set — Settings → Sites)"})
     return out
+
+
+def home_regions(sc, sites, countries):
+    """The site's own country has no meaningful country-centroid arc, so its busiest endpoints are placed by region
+    (city-level GeoIP). `covered` = share of that country's bytes the located endpoints carry; the rest stays a ring."""
+    home = sites[0] if sites else None
+    cc = home and home.get("cc")
+    tot = next((c["in_b"] + c["out_b"] for c in countries if c["cc"] == cc), 0) if cc else 0
+    if not tot:
+        return {"cc": cc or "", "regions": [], "covered": 0, "geo": geocity.GEO.provenance()}
+    rows = dash.top_remotes(sc, cc)
+    # city database puts the address in another country: typically anycast CDNs (one address, many locations)
+    disputed = sum(r["in_b"] + r["out_b"] for r in rows if (g := geocity.GEO.loc(r["ip"])) and g["cc"] != cc)
+    regs = geocity.regions(rows)
+    return {"cc": cc, "regions": regs, "covered": min(1, sum(r["in_b"] + r["out_b"] for r in regs) / tot),
+            "disputed": min(1, disputed / tot), "geo": geocity.GEO.provenance()}
 
 
 def named_novelty(sc):
@@ -249,8 +266,9 @@ def api_overview(req: Request):
         srv = r.pop("srv")
         from .admin import sources
         sel = {s["id"] for s in sc.sites}
+        locs = [l for l in site_locations() if l["id"] in sel]
         return {"ok": True, "scope": scope_json(sc), "collection": coll, **r, "counters": counter_series(sc), "sources": sources(),
-                "sites": [l for l in site_locations() if l["id"] in sel], "alerts": alerts[:12], "alert_summary": alert_summary(),
+                "sites": locs, "home": home_regions(sc, locs, r["countries"]), "alerts": alerts[:12], "alert_summary": alert_summary(),
                 "blocked": geo_blocked(),
                 "servers": srv["servers"][:10], "server_count": len(srv["servers"]), "unattributed_nat_tx": srv["unattributed_nat_tx"]}
     return guard(run)
@@ -295,6 +313,16 @@ def api_alert_traffic(req: Request, aid: int):
         sc = dash.scope(site=a["site"] or "all", range_key="custom", start=t0, end=t1)
         d = dash.finding_traffic(sc, subj, sorted(set(peers))[:200])
         named = set(peers)
+        geocity.locate(d["remotes"])
+        # named endpoints with no flows (e.g. a scan the firewall blocked: blocked packets create no flow records)
+        seen = {r["ip"] for r in d["remotes"]}
+        d["evidence_only"] = []
+        for ip in sorted(named - seen)[:40]:
+            cc = blocks().geo.cc(ip) or "??"
+            ev = next((x for x in evs if ip in (x.get("peer"), x.get("s"), x.get("src"))), {})
+            d["evidence_only"].append({"ip": ip, "cc": cc, "cc_name": cname(cc), "events": int(ev.get("events") or 0),
+                                       "blocked": a["rule"].startswith("fw_blocked"), "name": cfg.label(ip)})
+        geocity.locate(d["evidence_only"])
         marks = {}
         for r in d["remotes"]:
             if r["ip"] in named and r["cc"] != "??":
@@ -303,7 +331,9 @@ def api_alert_traffic(req: Request, aid: int):
                                                                                     "asset_label": cfg.asset_label(a["asset"]) if a["asset"] else "", "endpoints": []}]})
                 m["items"][0]["endpoints"].append(r["ip"])
         sel = {s["id"] for s in sc.sites}
-        return {"ok": True, **d, "subject": subj, "subject_label": cfg.asset_label(subj) if subj else "", "peers": sorted(named),
+        finding = {"id": a["id"], "title": a["title"], "severity": a["severity"], "last_seen": a["last_seen"], "asset": a["asset"] or "",
+                   "asset_label": cfg.asset_label(a["asset"]) if a["asset"] else "", "security": CATEGORY.get(a["rule"], "security") == "security"}
+        return {"ok": True, **d, "finding": finding, "geo": geocity.GEO.provenance(), "subject": subj, "subject_label": cfg.asset_label(subj) if subj else "", "peers": sorted(named),
                 "scope": scope_json(sc), "sites": [x for x in site_locations() if x["id"] in sel],
                 "alert_countries": marks if CATEGORY.get(a["rule"], "security") == "security" else {}}
     return guard(run)
@@ -379,7 +409,7 @@ def api_countries(req: Request):
             r["in_policy"] = r["cc"] in pol
             r["blocked_in"], r["blocked_out"] = r["cc"] in geo["blocked_in"], r["cc"] in geo["blocked_out"]
         return {"ok": True, "scope": scope_json(sc), "collection": coll, "countries": rows, "summary": dash.summary(sc),
-                "alert_countries": alert_countries(), "sites": site_locations(), "policy": policy_json(),
+                "alert_countries": alert_countries(), "sites": site_locations(), "home": home_regions(sc, site_locations(), rows), "policy": policy_json(),
                 "policy_sites": policy_sites(sc.sites), "blocks": block_stats(sc)}
     return guard(run)
 

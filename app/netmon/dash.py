@@ -243,6 +243,14 @@ class Dash:
         self._names(out, "top_asn", "top_asname", sc)
         return out
 
+    def top_remotes(self, sc: Scope, cc: str, limit=500):
+        """The busiest remote endpoints in one country (for placing that country's traffic by region on the map)."""
+        rows = self.q(sc, f"""
+            SELECT {REMOTE_IP} AS ip, sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b, count() AS flows
+            FROM flows WHERE {self.where(sc)} AND if(INB, SrcCountry, DstCountry) = {{cc:String}}
+            GROUP BY ip ORDER BY in_b + out_b DESC LIMIT {{l:UInt32}}""", {"cc": cc, "l": limit}, ttl=60)
+        return [{"ip": r["ip"], "cc": cc, "in_b": int(r["in_b"]), "out_b": int(r["out_b"]), "flows": int(r["flows"])} for r in rows]
+
     def finding_traffic(self, sc: Scope, subject: str, peers: list[str]):
         """WAN-boundary traffic behind one finding: flows whose local side is the finding's subject address,
         plus any flow with a remote peer the finding names. Per remote, per country (map) and per destination port."""
@@ -257,7 +265,7 @@ class Dash:
             SELECT {REMOTE_IP} AS ip, any(if(INB, SrcCountry, DstCountry)) AS cc, any(if(INB, SrcAS, DstAS)) AS asn,
                    sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b, count() AS flows,
                    topK(8)(DstPort) AS ports, any(Proto) AS proto, min(toUnixTimestamp(TimeReceived)) AS first, max(toUnixTimestamp(TimeReceived)) AS last
-            FROM flows WHERE {w} GROUP BY ip ORDER BY in_b + out_b DESC LIMIT 40""", x, ttl=60)
+            FROM flows WHERE {w} GROUP BY ip ORDER BY has({{peers:Array(String)}}, ip) DESC, in_b + out_b DESC LIMIT 40""", x, ttl=60)   # named peers first, never cut off
         ports = self.q(sc, f"""
             SELECT DstPort AS port, Proto AS proto, count() AS flows, uniqExact({REMOTE_IP}) AS remotes,
                    sum(Bytes * SamplingRate) AS b, countIf(INB) AS in_flows, countIf(OUTB) AS out_flows,

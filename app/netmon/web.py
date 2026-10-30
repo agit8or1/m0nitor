@@ -731,14 +731,14 @@ def alert_view(req: Request, aid: int, back: str = ""):
 <div class="grid2 even"><div><h3>Other possible explanations</h3><ul>{lis(a['alternatives'])}</ul></div>
 <div><h3>Next investigation steps</h3><ul>{lis(a['next_steps'])}</ul>
 <p>{'<a class="btn" href="#aibox">Analyze with AI ↓</a> ' if can_ai else ''}<a class="btn" href="/visualize" target="_blank" rel="noopener">Open flow explorer</a></p></div></div></div>
-<div class="card"><div class="card-h"><h2>Evidence</h2><span class="muted small">values from flow records; strings are untrusted telemetry</span></div>
-{evidence_table(evs)}</div>
 <section class="card" id="ftraffic" data-aid="{aid}"><div class="card-h"><h2>Traffic behind this finding</h2>
 <div class="panelctl"><span class="muted small" id="ftscope"></span><div class="seg" id="mapdir" role="group" aria-label="Direction"><button data-v="both">Both</button><button data-v="in">Inbound</button><button data-v="out">Outbound</button></div>
 <details class="info"><summary aria-label="About this view" title="About this view">i</summary><div class="pop" id="mapnote"></div></details></div></div>
 <div class="grid2"><div><div id="map" class="map"></div><div class="legend" id="maplegend"></div></div>
 <div><h3 class="grp">Destination ports</h3><div id="ft-ports" class="wrap"></div></div></div>
 <h3 class="grp">Remote endpoints (to and from)</h3><div id="ft-remotes" class="wrap"></div></section>
+<div class="card"><div class="card-h"><h2>Evidence</h2><span class="muted small">values from flow records; strings are untrusted telemetry</span></div>
+{evidence_table(evs)}</div>
 {ai_box}
 <div class="card"><div class="card-h"><h2>Technical details</h2></div>
 <details><summary>Technical details: raw evidence, Akvorado filter and triggering query</summary>
@@ -1238,6 +1238,11 @@ def responder_loop():
             threatradar.refresh(rconn)   # self-limiting: only fetches when the interval is due
         except Exception as ex:
             print(f"threat intel refresh failed: {ex}", flush=True)
+        try:
+            from . import geocity
+            geocity.refresh(rconn)   # monthly city database for map placement; self-limiting like threat intel
+        except Exception as ex:
+            print(f"city geo refresh failed: {ex}", flush=True)
         try:
             set_state(rconn, "responder", r.run_once())
         except Exception as ex:

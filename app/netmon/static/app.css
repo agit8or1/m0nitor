@@ -169,6 +169,9 @@ details.tech summary { cursor: pointer; color: var(--accent); font-size: 12px; }
 @keyframes flow { to { stroke-dashoffset: -28; } }
 @media (prefers-reduced-motion: reduce) { .arc.anim { animation: none; stroke-dasharray: none; } }
 .site { fill: var(--site); stroke: var(--surface); stroke-width: 2; } .site-ring { fill: none; stroke: var(--site-ring); stroke-width: 1.5; opacity: .45; }
+.arc.blk { stroke: var(--ink-2); stroke-dasharray: 2 4; opacity: .8; }
+.pt { fill: var(--ink); stroke: var(--surface); stroke-width: 1px; cursor: pointer; } .pt.blk { fill: var(--surface); stroke: var(--ink-2); stroke-width: 1.5px; } .pt.named { fill: var(--surface); stroke: var(--ink); stroke-width: 2px; }
+.site-sub { font-size: 11px; font-weight: 600; fill: var(--ink-2); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; pointer-events: none; }
 .local-in { fill: var(--in); opacity: .85; } .local-out { fill: var(--out); opacity: .85; } .localhit { fill: transparent; cursor: pointer; }
 .amark { fill: var(--bad); stroke: var(--surface); stroke-width: 1.5; cursor: pointer; } .amark-ring { fill: none; stroke: var(--bad); stroke-width: 1.2; opacity: .55; }
 .site-t { font-size: 12px; font-weight: 650; fill: var(--ink); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
@@ -180,7 +183,7 @@ details.tech summary { cursor: pointer; color: var(--accent); font-size: 12px; }
 .blksw.in { background-image: repeating-linear-gradient(45deg, var(--blk-line) 0 1.4px, transparent 1.4px 4px); }
 .blksw.out { background-image: repeating-linear-gradient(135deg, var(--blk-line) 0 1.4px, transparent 1.4px 4px); }
 .blksw.both { background-image: repeating-linear-gradient(45deg, var(--blk-line) 0 1.4px, transparent 1.4px 4px), repeating-linear-gradient(135deg, var(--blk-line) 0 1.4px, transparent 1.4px 4px); }
-.arcsw.in { border-color: var(--in); } .arcsw.out { border-color: var(--out); }
+.arcsw.blk { border-top: 3px dotted var(--ink-2); } .lgdot.pt { width: 6px; height: 6px; background: var(--ink); } .lgdot.pt.named { width: 9px; height: 9px; background: var(--surface); border: 2px solid var(--ink); } .arcsw.in { border-color: var(--in); } .arcsw.out { border-color: var(--out); }
 .lgdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; } .lgdot.site { background: var(--site); } .lgdot.local { border: 3px solid var(--in); border-right-color: var(--out); border-bottom-color: var(--out); width: 12px; height: 12px; }
 .lgdiamond { width: 9px; height: 9px; background: var(--bad); transform: rotate(45deg); display: inline-block; margin: 0 2px; }
 .gridline { stroke: var(--grid); stroke-width: 1; } .axis text { fill: var(--muted); font-size: 11px; }

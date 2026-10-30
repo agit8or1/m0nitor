@@ -181,7 +181,7 @@
 
   function renderMapSel(d) {
     const ac = d.alert_countries || {};
-    map.render({ countries: d.countries, alerts: ac, sites: d.sites, span: d.scope.span, window: `${d.scope.range === "custom" ? "custom range" : "last " + d.scope.range}`, selected: NM.scope.cc,
+    map.render({ countries: d.countries, alerts: ac, sites: d.sites, home: d.home, span: d.scope.span, window: `${d.scope.range === "custom" ? "custom range" : "last " + d.scope.range}`, selected: NM.scope.cc,
       legendNode: $("maplegend"), noteNode: $("mapnote"), blocked: d.blocked });
     const h = document.querySelector(".map-card .card-h h2");
     h.replaceChildren("Where traffic goes", NM.scope.cc ? el("a", { class: "small sel-link", href: NM.href(`/netmon/countries/${NM.scope.cc}`), text: ` · open ${d.scope.cc_name} details →` }) : "");

@@ -213,6 +213,40 @@ def test_ack_clears_map_marker_without_waiting_for_cache():
     assert "ZZ" not in views.alert_countries()   # within the 60 s cache window
 
 
+def test_finding_map_places_endpoints_and_blocked_scanners(monkeypatch):
+    from netmon import geocity, views
+    now = time.time()
+    aid = web.conn.execute(
+        "INSERT INTO alerts(key,rule,severity,confidence,asset,subject,title,first_seen,last_seen,window_start,window_end,"
+        "evidence,query,baseline,alternatives,next_steps,akvorado_filter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("bs" + str(now), "fw_blocked_scan", "medium", "medium", "", "45.83.64.9", "blocked scan", now, now, now, now,
+         json.dumps([{"s": "45.83.64.9", "events": 393, "peer": "45.83.64.9"}]), "{}", "", "[]", "[]", "")).lastrowid
+    web.conn.commit()
+    flows = {"remotes": [{"ip": "45.83.64.7", "cc": "DE", "in_b": 5, "out_b": 0}], "countries": [], "ports": []}
+    monkeypatch.setattr(web.dash, "finding_traffic", lambda sc, subj, peers: {k: [dict(x) for x in v] for k, v in flows.items()})
+    de = {"lat": 50.1, "lon": 8.7, "city": "Frankfurt", "region": "Hesse", "cc": "DE"}
+    monkeypatch.setattr(geocity, "GEO", type("G", (), {"loc": lambda self, ip: de, "provenance": lambda self: {}})())
+    monkeypatch.setattr(views, "blocks", lambda: type("B", (), {"geo": type("C", (), {"cc": lambda self, ip: "DE"})()})())
+    d = client("admin", ADMINPW).get(f"/netmon/api/alert/{aid}/traffic").json()
+    assert d["remotes"][0]["loc"] == de
+    assert d["finding"]["id"] == aid and d["finding"]["security"] is False   # blocked scans are info: no red marker
+    assert d["evidence_only"] == [{"ip": "45.83.64.9", "cc": "DE", "cc_name": d["evidence_only"][0]["cc_name"], "events": 393,
+                                   "blocked": True, "name": d["evidence_only"][0]["name"], "loc": de}]
+    page_ = client("admin", ADMINPW).get(f"/netmon/alert/{aid}").text
+    assert page_.index('id="ftraffic"') < page_.index("<h2>Evidence</h2>")   # the map comes before the evidence table
+
+
+def test_home_country_regions_on_overview(monkeypatch):
+    from netmon import geocity, views
+    fl = {"lat": 30.0, "lon": -81.0, "city": "Jacksonville", "region": "Florida", "cc": "US"}
+    monkeypatch.setattr(geocity, "GEO", type("G", (), {"loc": lambda self, ip: fl if ip.endswith(".1") else None, "provenance": lambda self: {}})())
+    monkeypatch.setattr(web.dash, "top_remotes", lambda sc, cc, limit=500: [
+        {"ip": "45.83.64.1", "cc": cc, "in_b": 75, "out_b": 0, "flows": 1}, {"ip": "45.83.64.2", "cc": cc, "in_b": 25, "out_b": 0, "flows": 1}])
+    h = views.home_regions(None, [{"cc": "US"}], [{"cc": "US", "in_b": 100, "out_b": 0}])
+    assert h["cc"] == "US" and [r["region"] for r in h["regions"]] == ["Florida"] and h["covered"] == 0.75 and h["disputed"] == 0
+    assert views.home_regions(None, [{"cc": "US"}], [])["regions"] == []   # no home traffic: no query
+
+
 def test_block_refused_for_internal():
     a = client("admin", ADMINPW)
     r = a.post("/netmon/blocks", data={"address": "10.40.0.8", "reason": "x", "csrf": web.csrf_token(sid(a))})

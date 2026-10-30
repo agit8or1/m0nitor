@@ -20,3 +20,6 @@ Used at runtime, not bundled (installed by pip or pulled as container images):
   net-snmp tools (BSD-style).
 GeoIP data: the IPinfo free country/ASN database fetched by Akvorado's geoipupdate service is licensed
   CC BY-SA 4.0 by IPinfo (https://ipinfo.io); attribution is shown in the UI where GeoIP data is used.
+City-level map placement: the DB-IP "IP to City Lite" database, downloaded monthly at runtime into the data
+  volume (not distributed with this repository), is licensed CC BY 4.0 by DB-IP (https://db-ip.com); attribution is
+  shown on maps that use it. It only places endpoints on the map; countries always come from the IPinfo database.

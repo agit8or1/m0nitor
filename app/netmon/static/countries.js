@@ -61,7 +61,7 @@
       const p = d.policy;
       const common = { countries: d.countries, sites: d.sites, span: d.scope.span, scope: d.scope, blocked: { in: p.blocked_in, out: p.blocked_out },
         policySites: d.policy_sites, blocks: d.blocks, clickHint: "Click for connections, rules, and blocked-event details" };
-      map.render({ ...common, alerts: d.alert_countries, legendNode: $("maplegend"), noteNode: $("mapnote") });
+      map.render({ ...common, home: d.home, alerts: d.alert_countries, legendNode: $("maplegend"), noteNode: $("mapnote") });
       coverage(d.blocks);
       $("policy").replaceChildren(
         el("p", {}, `Blocked inbound: ${p.blocked_in.length} countries · blocked outbound: ${p.blocked_out.length}. `, el("a", { href: "#blocked", text: "See the lists" }),

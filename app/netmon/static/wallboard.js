@@ -26,7 +26,7 @@ const WB = (() => {
     kpi_ids: (b, d) => d.sources.ids.last ? kpi(b, fmtNum(d.sources.ids.alerts24), "Suricata alerts in 24 h") : kpi(b, "Not connected", "Suricata IDS", "na"),
     clock: (b, d) => { const s = d.sites[0]; kpi(b, new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), `${new Date().toLocaleDateString()} · ${NM.tz} · ${s ? s.name : ""}`); },
     map: (b, d, w) => { let m = maps[w._k]; if (!m || !b.contains(m.node)) { b.replaceChildren(); const n = el("div", { class: "map" }); b.append(n); m = maps[w._k] = { node: n, map: NMMap.create(n, { onSelect: (cc) => { location.href = H(`/netmon/countries/${cc}`); } }) }; }
-      m.map.render({ countries: d.countries, alerts: d.alert_countries, sites: d.sites, span: d.scope.span }); },
+      m.map.render({ countries: d.countries, alerts: d.alert_countries, sites: d.sites, home: d.home, span: d.scope.span }); },
     security: (b, d) => NM.alertList(b, d.alerts, { limit: 8, empty: "No open findings", ack: false }),
     capacity: (b) => { const L = NM.live(); NM.meters(b, ((L && L.capacity) || []).filter((x) => layout.site === "all" || !layout.site || x.id === layout.site)); },
     bandwidth: (b, d) => { const c = (d.counters || []).find((x) => x.points && x.points.some((p) => p.in_bps != null));

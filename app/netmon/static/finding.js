@@ -15,10 +15,29 @@
         const d = await NM.get(`/netmon/api/alert/${aid}/traffic`);
         const sc = d.scope;
         $("ftscope").textContent = `${fmtTime(sc.start, true)} → ${fmtTime(sc.end, true)} · ${d.subject_label || d.subject || "named peers"}`;
-        map.render({ countries: d.countries, alerts: d.alert_countries, sites: d.sites, span: sc.span, window: "finding window",
+        // every remote endpoint at its own (city-level) location; named ones carry the finding marker
+        const named0 = new Set(d.peers), item = d.finding && d.finding.security ? d.finding : null;   // red ◆ for security findings only
+        const points = [...d.remotes, ...(d.evidence_only || []).map((r) => ({ ...r, in_b: 0, out_b: 0, flows: 0 }))].filter((r) => r.loc).map((r) => ({
+          key: r.ip, ip: r.ip, name: r.name, asname: r.asname, cc: r.cc, ll: [r.loc.lat, r.loc.lon], city: r.loc.city, region: r.loc.region,
+          in_b: r.in_b, out_b: r.out_b, flows: r.flows, ports: r.ports, blocked: !!r.blocked, events: r.events,
+          named: named0.has(r.ip), flag: named0.has(r.ip) && item ? item : null, href: NM.href("/netmon/connections", { rip: r.ip }) }));
+        // country markers only for named endpoints the city database could not place
+        const located = new Set(points.map((x) => x.ip)), alerts = {};
+        for (const [cc, c] of Object.entries(d.alert_countries || {})) {
+          const items = (c.items || []).map((x) => ({ ...x, endpoints: x.endpoints.filter((ip) => !located.has(ip)) })).filter((x) => x.endpoints.length);
+          if (items.length) alerts[cc] = { ...c, items };
+        }
+        const unlocatedNamed = (d.evidence_only || []).filter((r) => !r.loc && r.cc !== "??");
+        if (item) for (const r of unlocatedNamed) {
+          const c = alerts[r.cc] || (alerts[r.cc] = { security: 1, info: 0, items: [{ ...item, endpoints: [] }] });
+          c.items[0].endpoints.push(r.ip);
+        }
+        map.render({ countries: d.countries, alerts, points, sites: d.sites, span: sc.span, window: "finding window",
           legendNode: $("maplegend"), noteNode: $("mapnote") });
+        const blockedOnly = (d.evidence_only || []).filter((r) => r.blocked).length;
         $("mapnote").prepend(el("p", { text: `Flows at the WAN boundary between ${d.subject_label || d.subject || "the site"} and the Internet during this finding's evidence window` +
-          (d.peers.length ? `, plus any flow with the ${d.peers.length} remote address(es) the finding names (red ◆).` : ".") }));
+          (d.peers.length ? `, plus any flow with the ${d.peers.length} remote address(es) the finding names (red ◆).` : ".") +
+          (blockedOnly ? ` ${blockedOnly} named address(es) were blocked by the firewall, so they have no flows; they are drawn as dotted grey arcs.` : "") }));
         NM.table($("ft-ports"), [
           { label: "Port", cls: "num", get: (p) => String(p.port) },
           { label: "Service", get: (p) => portName(p) || el("span", { class: "muted", text: "—" }) },
@@ -30,18 +49,22 @@
         ], d.ports.slice(0, 15), { empty: "No flows in this window (data may have aged out)" });
         const named = new Set(d.peers), PER = 10;
         const pager = el("div", { class: "pager" }); $("ft-remotes").after(pager);
-        const show = (pg) => { NM.table($("ft-remotes"), REMOTE_COLS, d.remotes.slice((pg - 1) * PER, pg * PER), { empty: "No flows in this window (data may have aged out)" });
-          NM.pager(pager, pg, PER, d.remotes.length, show); };
+        const rows = [...d.remotes, ...(d.evidence_only || []).map((r) => ({ ...r, in_b: 0, out_b: 0, flows: 0, ports: [], last: 0, nofl: true }))];
+        const show = (pg) => { NM.table($("ft-remotes"), REMOTE_COLS, rows.slice((pg - 1) * PER, pg * PER), { empty: "No flows in this window (data may have aged out)" });
+          NM.pager(pager, pg, PER, rows.length, show); };
         const REMOTE_COLS = [
           { label: "Remote IP", get: (r) => el("span", {}, NM.ipCell(r.ip, r.name),
-              named.has(r.ip) ? el("span", { class: "tag", title: "named in this finding's evidence", text: "in evidence" }) : null) },
+              named.has(r.ip) ? el("span", { class: "tag", title: "named in this finding's evidence", text: "in evidence" }) : null,
+              r.nofl ? el("span", { class: "tag", title: r.blocked ? "the firewall blocked it, so there are no flow records" : "no flow records in this window",
+                text: r.blocked ? `blocked · ${fmtNum(r.events)} pkts` : "no flows" }) : null) },
           { label: "Country", get: (r) => r.cc_name || r.cc },
+          { label: "Location", get: (r) => r.loc ? el("span", { title: "city-level GeoIP (DB-IP Lite), approximate", text: [r.loc.city, r.loc.region].filter(Boolean).join(", ") || "—" }) : el("span", { class: "muted", text: "—" }) },
           { label: "Organization", get: (r) => r.asname || (r.asn ? `AS${r.asn}` : "—") },
           { label: "⬇ Received", cls: "num", get: (r) => r.in_b ? fmtBytes(r.in_b) : "—" },
           { label: "⬆ Sent", cls: "num", get: (r) => r.out_b ? fmtBytes(r.out_b) : "—" },
           { label: "Flows", cls: "num", get: (r) => fmtNum(r.flows) },
           { label: "Ports", get: (r) => el("span", { class: "mono", text: r.ports.slice(0, 8).join(", ") + (r.ports.length > 8 ? " …" : "") }) },
-          { label: "Last seen", cls: "num", get: (r) => fmtTime(r.last, true) },
+          { label: "Last seen", cls: "num", get: (r) => r.last ? fmtTime(r.last, true) : "—" },
         ];
         show(1);
       } catch (e) { NM.state($("ft-remotes"), "error", `Could not load traffic: ${e.message}`); }

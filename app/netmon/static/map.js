@@ -115,6 +115,7 @@ const NMMap = (() => {
     const win = () => last.window || `${Math.round(last.span / 60)} min`;
     const secLine = (cc) => { const a = last.alerts[cc] || {}, n = a.security || 0, ep = new Set((a.items || []).flatMap((x) => x.endpoints)).size;
       return n ? `${n} open finding${n > 1 ? "s" : ""} name ${ep || "some"} endpoint${ep === 1 ? "" : "s"} here — not all traffic` : "No open findings"; };
+    const fill = (n, ...kids) => n.replaceChildren(...kids.flat().filter(Boolean));   // null = nothing, never the text "null"
     const row = (k, v) => el("div", { class: "r" }, k, el("b", { text: v }));
     // policy state of a country across the firewalls in scope: "in" | "out" | "both" | "" (not in block policy) |
     // "mixed" (firewalls differ) | "unknown" (no ISO code for the shape, or a firewall's policy is unreadable)
@@ -170,21 +171,46 @@ const NMMap = (() => {
         row("Location", "country-level GeoIP (approximate)"), row("Security", secLine(cc)), blkRow(cc),
         hint()] : [blkRow(cc), el("div", { class: "muted small", text: "No observed traffic in this scope" })])];
     }
+    const CITY = "city-level GeoIP (DB-IP Lite), approximate";
     function arcTip(a) {
-      const c = last.byCc[a.cc], b = a.dir === "in" ? c.in_b : c.out_b;
-      return [el("div", { class: "t", text: a.dir === "in" ? `${cname(a.cc)} → ${a.site}` : `${a.site} → ${cname(a.cc)}` }),
+      const t = a.t, c = t.c;
+      if (t.kind === "point") return pointTip(c, a.dir);
+      const b = a.dir === "in" ? c.in_b : c.out_b;
+      return [el("div", { class: "t", text: a.dir === "in" ? `${cname(c.cc)} → ${a.site}` : `${a.site} → ${cname(c.cc)}` }),
         row("Direction", a.dir === "in" ? "Inbound (Internet → servers)" : "Outbound (servers → Internet)"),
         row("Volume", `${fmtBytes(b)} · avg ${fmtBps(b * 8 / last.span)}`), row("Window", win()),
-        row("Endpoint", `${cname(a.cc)} — country centroid, approximate`), row("Security", secLine(a.cc)),
+        row("Endpoint", `${cname(c.cc)} — country centroid, approximate`),
+        c.resid ? row("Shown here", "the part of this country's traffic not placed by city") : null,
+        row("Security", secLine(c.cc)),
         el("div", { class: "muted small", text: "Click to filter by this country" })];
     }
+    // a region (several endpoints in the site's own country) or one endpoint of a finding
+    function pointTip(x, dir) {
+      const where = x.ip ? [x.city, x.region, cname(x.cc)].filter(Boolean).join(", ") : `${x.region}, ${cname(x.cc)}`;
+      const title = x.ip ? (x.name && x.name !== x.ip ? `${x.name} (${x.ip})` : x.ip) : where;
+      const site = last.sites && last.sites[0] ? last.sites[0].name : "site";
+      return [el("div", { class: "t", text: dir === "in" ? `${title} → ${site}` : dir === "out" ? `${site} → ${title}` : title }),
+        x.ip ? row("Location", where || cname(x.cc)) : row("Cities", (x.cities || []).join(", ") || "—"),
+        x.asname ? row("Organization", x.asname) : null,
+        row(sw("in", "Inbound"), `${fmtBytes(x.in_b)} · avg ${fmtBps(x.in_b * 8 / last.span)}`),
+        row(sw("out", "Outbound"), `${fmtBytes(x.out_b)} · avg ${fmtBps(x.out_b * 8 / last.span)}`),
+        x.ip ? row("Flows", fmtNum(x.flows || 0)) : row("Endpoints", `${fmtNum(x.peers)} of the busiest in ${cname(x.cc)}`),
+        x.ports && x.ports.length ? row("Ports", x.ports.slice(0, 8).join(", ")) : null,
+        x.blocked && !x.in_b && !x.out_b ? row("Firewall", `${fmtNum(x.events || 0)} logged blocked packets — blocked, so no flows`) : null,
+        x.named ? row("Finding", "named in this finding's evidence") : null,
+        x.named && !x.in_b && !x.out_b && !x.blocked ? row("Flows", "none in the evidence window (it may have aged out or fallen between flow exports)") : null,
+        row("Placed by", CITY), row("Window", win()),
+        el("div", { class: "muted small", text: x.href ? "Click to open its connections" : "Click to filter by this country" })];
+    }
     function localTip(L) {
-      const tin = d3.sum(L.items, (x) => x.c.in_b), tout = d3.sum(L.items, (x) => x.c.out_b);
-      return [el("div", { class: "t", text: `Near ${L.site}: ${L.items.map((x) => cname(x.c.cc)).join(", ")}` }),
+      const all = [...L.items, ...L.pts], tin = d3.sum(all, (x) => x.c.in_b), tout = d3.sum(all, (x) => x.c.out_b);
+      const names = [...new Set([...L.items.map((x) => cname(x.c.cc)), ...L.pts.map((x) => x.c.region || x.c.city || x.c.ip)])];
+      return [el("div", { class: "t", text: `Near ${L.site}: ${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}` }),
         row(sw("in", "Inbound"), `${fmtBytes(tin)} · avg ${fmtBps(tin * 8 / last.span)}`),
         row(sw("out", "Outbound"), `${fmtBytes(tout)} · avg ${fmtBps(tout * 8 / last.span)}`), row("Window", win()),
-        row("Location", "same country as the site (GeoIP country only)"), ...L.items.map((x) => row("Security", secLine(x.c.cc))),
-        el("div", { class: "muted small", text: "Remote endpoints are somewhere in this country — not at the site. Click to filter." })];
+        row("Location", L.pts.length ? "close to the site, or in its country with no city location" : "same country as the site (GeoIP country only)"),
+        ...[...new Set(L.items.map((x) => x.c.cc))].map((cc) => row("Security", secLine(cc))),
+        el("div", { class: "muted small", text: "Remote endpoints are near the site or somewhere in its country — not at the site itself. Click to filter." })];
     }
     function alertTip(m, pin) {
       const items = m.a.items || [];
@@ -192,7 +218,7 @@ const NMMap = (() => {
       if (x) x.addEventListener("click", unpin);
       return [x,
         el("div", { class: "t", text: `Security findings · ${cname(m.cc)}` }),
-        el("div", { class: "muted small", text: `${m.local ? "Marker beside the site: these endpoints are in the site's own country (GeoIP country only)" : "Marker at the country centroid (approximate)"}. Only the endpoints listed are implicated.` }),
+        el("div", { class: "muted small", text: `${m.at ? `Marker at the endpoint (${CITY})` : m.local ? "Marker beside the site: these endpoints are in the site's own country" : "Marker at the country centroid (approximate)"}. Only the endpoints listed are implicated.` }),
         ...items.slice(0, 4).map((x) => el("div", { class: "al" }, NM.sev(x.severity), " ",
           pin ? el("a", { href: `/netmon/alert/${x.id}`, text: x.title }) : el("span", { text: x.title }),
           el("div", { class: "muted small", text: `endpoint ${x.endpoints.join(", ")}${x.asset_label ? ` · server ${x.asset_label}` : ""} · ${NM.ago(Date.now() / 1000 - x.last_seen)}` }))),
@@ -228,65 +254,98 @@ const NMMap = (() => {
         const v = st.shade === "blocks" ? nBlk(f.properties.cc) : val(last.byCc[f.properties.cc]); return v > 0 ? color(v) : "var(--map-empty)"; })
         .classed("sel", (f) => !!f.properties.cc && f.properties.cc === data.selected);
 
-      // Arcs run site -> country centroid. Colour = direction only; findings are separate markers, never a red arc.
-      // The site's own country (and centroids within a few px) has no meaningful arc: it becomes a ring around the site.
+      // Arcs run site -> target. Targets are located endpoints or regions (city-level GeoIP: data.points on a finding page,
+      // data.home.regions for the site's own country) and country centroids for whatever traffic is not placed more
+      // precisely. Colour = direction only; findings are separate markers, never a red arc. Traffic that would land on the
+      // site itself (its own country without a region, or anything within a few px) is the ring around the site.
       const sites = data.sites || [], home = sites[0];
-      const homeCc = home ? (features.find((f) => f.properties.cc && d3.geoContains(f, [home.lon, home.lat])) || { properties: {} }).properties.cc : null;
-      const ranked = data.countries.filter((c) => c.ll && c.cc !== "??").map((c) => ({ c, v: vol(c, st.dir) })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
-      const arcs = [], local = { site: home && home.name, items: [] };
+      const homeCc = home ? (home.cc || (features.find((f) => f.properties.cc && d3.geoContains(f, [home.lon, home.lat])) || { properties: {} }).properties.cc) : null;
       const p0 = home ? proj([home.lon, home.lat]) : null;
-      const far = [];
-      for (const x of ranked) {
-        if (!p0 || policyOnly) break;
-        const p1 = proj([x.c.ll[1], x.c.ll[0]]);
-        if (x.c.cc === homeCc || (p1 && Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) < 18)) local.items.push(x); else if (p1) far.push({ ...x, p1 });
+      const pts = (data.points || (data.home && data.home.cc === homeCc ? data.home.regions : null) || []).filter((x) => x.ll);
+      const placed = {};
+      for (const x of pts) { const k = placed[x.cc] || (placed[x.cc] = { in_b: 0, out_b: 0 }); k.in_b += x.in_b; k.out_b += x.out_b; }
+      const resid = (c) => { const k = placed[c.cc]; return k ? { ...c, in_b: Math.max(0, c.in_b - k.in_b), out_b: Math.max(0, c.out_b - k.out_b), resid: true } : c; };
+      const near = (p1) => Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) < 18;
+      const local = { site: home && home.name, items: [], pts: [] }, farC = [], farP = [];
+      if (p0 && !policyOnly) {
+        for (const c0 of data.countries) {
+          if (!c0.ll || c0.cc === "??") continue;
+          const c = resid(c0), v = vol(c, st.dir), p1 = proj([c.ll[1], c.ll[0]]);
+          if (v <= 0 || !p1) continue;
+          if (c.cc === homeCc || near(p1)) local.items.push({ c, v }); else farC.push({ kind: "country", key: c.cc, c, v, p1 });
+        }
+        for (const x of pts) {
+          const v = vol(x, st.dir), p1 = proj([x.ll[1], x.ll[0]]);
+          if (!p1 || (v <= 0 && !x.named && !(x.blocked && st.dir !== "out"))) continue;   // named endpoints always shown
+          if (near(p1)) local.pts.push({ c: x, v }); else farP.push({ kind: "point", key: `p:${x.key}`, c: x, v, p1 });
+        }
       }
-      const shown = far.slice(0, 8), rest = far.slice(8);
-      const maxV = d3.max([...shown, ...local.items], (x) => Math.max(x.c.in_b, x.c.out_b)) || 1;
+      farC.sort((a, b) => b.v - a.v); farP.sort((a, b) => b.v - a.v);
+      const nP = data.points ? 30 : 10;
+      const shown = farC.slice(0, 8), rest = farC.slice(8), shownP = farP.slice(0, nP), restP = farP.slice(nP);
+      const tin = d3.sum([...local.items, ...local.pts], (x) => st.dir === "out" ? 0 : x.c.in_b);
+      const tout = d3.sum([...local.items, ...local.pts], (x) => st.dir === "in" ? 0 : x.c.out_b);
+      const maxV = d3.max([...shown, ...shownP].map((x) => Math.max(x.c.in_b, x.c.out_b)).concat([tin, tout])) || 1;
       const w = d3.scaleSqrt().domain([0, maxV]).range([0.8, 5]);
-      for (const { c, p1 } of shown) {
-        const d = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+      const arcs = [];
+      for (const t of [...shown, ...shownP]) {
+        const { c, p1 } = t, d = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
         for (const dir of st.dir === "both" ? ["in", "out"] : [st.dir]) {
-          const bytes = dir === "in" ? c.in_b : c.out_b; if (!bytes) continue;
+          const bytes = dir === "in" ? c.in_b : c.out_b, blocked = !bytes && dir === "in" && !!c.blocked;
+          if (!bytes && !blocked) continue;
           const sign = dir === "in" ? 1 : -1, bend = Math.min(0.22, 30 / d + 0.08);
           const mx = (p0[0] + p1[0]) / 2 - sign * (p1[1] - p0[1]) * bend, my = (p0[1] + p1[1]) / 2 + sign * (p1[0] - p0[0]) * bend - d * 0.1;
-          arcs.push({ key: c.cc + dir, dir, cc: c.cc, site: home.name, w: w(bytes),
+          arcs.push({ key: t.key + dir, dir, t, site: home.name, w: blocked ? 1.2 : w(bytes), blocked,
             d: dir === "in" ? `M${p1[0]},${p1[1]} Q${mx},${my} ${p0[0]},${p0[1]}` : `M${p0[0]},${p0[1]} Q${mx},${my} ${p1[0]},${p1[1]}` });
         }
       }
+      const pick = (t) => { unpin(); if (t.c.href) location.href = t.c.href; else if (onSelect) onSelect(t.c.cc); };
       gA.selectAll("path").data(arcs, (a) => a.key).join("path")
-        .attr("class", (a) => `arc ${a.dir}${reduce ? "" : " anim"}`).attr("d", (a) => a.d)
+        .attr("class", (a) => `arc ${a.dir}${a.blocked ? " blk" : ""}${reduce || a.blocked ? "" : " anim"}`).attr("d", (a) => a.d)
         .attr("stroke-width", (a) => a.w).attr("vector-effect", "non-scaling-stroke")
         .on("pointermove", (ev, a) => !pinned && show(ev, arcTip(a))).on("pointerleave", hide)
-        .on("click", (ev, a) => { unpin(); if (onSelect) onSelect(a.cc); });
+        .on("click", (ev, a) => pick(a.t));
+      // endpoint / region dots at the far end of point arcs
+      gA.selectAll("circle").data(shownP, (t) => t.key).join("circle").attr("class", (t) => `pt${t.c.blocked && !t.v ? " blk" : ""}${t.c.named ? " named" : ""}`)
+        .attr("cx", (t) => t.p1[0]).attr("cy", (t) => t.p1[1]).attr("r", (t) => t.c.named ? 4.5 : 2.6).attr("vector-effect", "non-scaling-stroke")
+        .on("pointermove", (ev, t) => !pinned && show(ev, pointTip(t.c, null))).on("pointerleave", hide)
+        .on("click", (ev, t) => pick(t));
 
-      // local ring: inbound share teal, outbound share purple, thickness = volume
+      // local ring: inbound share teal, outbound share purple, thickness = volume (its own, larger scale: it is often most traffic)
       gL.selectAll("*").remove();
-      if (p0 && local.items.length) {
-        const tin = d3.sum(local.items, (x) => st.dir === "out" ? 0 : x.c.in_b), tout = d3.sum(local.items, (x) => st.dir === "in" ? 0 : x.c.out_b);
-        if (tin + tout > 0) {
-          const t = Math.max(2.5, w(Math.max(tin, tout))), r0 = 12, split = 2 * Math.PI * tin / (tin + tout);
-          const arc = d3.arc().innerRadius(r0).outerRadius(r0 + t);
-          const gg = gL.append("g").attr("transform", `translate(${p0[0]},${p0[1]})`);
-          if (tin) gg.append("path").attr("class", "local-in").attr("d", arc({ startAngle: 0, endAngle: split }));
-          if (tout) gg.append("path").attr("class", "local-out").attr("d", arc({ startAngle: split, endAngle: 2 * Math.PI }));
-          gg.append("circle").attr("class", "localhit").attr("r", r0 + t + 3)
-            .on("pointermove", (ev) => !pinned && show(ev, localTip(local))).on("pointerleave", hide)
-            .on("click", () => { unpin(); if (onSelect && local.items.length === 1) onSelect(local.items[0].c.cc); });
-        }
+      const homeC = homeCc && last.byCc[homeCc];
+      if (p0 && tin + tout > 0) {
+        const t = Math.max(3, d3.scaleSqrt().domain([0, maxV]).range([0, 11])(Math.max(tin, tout))), r0 = 11, split = 2 * Math.PI * tin / (tin + tout);
+        const arc = d3.arc().innerRadius(r0).outerRadius(r0 + t);
+        const gg = gL.append("g").attr("transform", `translate(${p0[0]},${p0[1]})`);
+        if (tin) gg.append("path").attr("class", "local-in").attr("d", arc({ startAngle: 0, endAngle: split }));
+        if (tout) gg.append("path").attr("class", "local-out").attr("d", arc({ startAngle: split, endAngle: 2 * Math.PI }));
+        gg.append("circle").attr("class", "localhit").attr("r", r0 + t + 3)
+          .on("pointermove", (ev) => !pinned && show(ev, localTip(local))).on("pointerleave", hide)
+          .on("click", () => { unpin(); if (onSelect && homeCc) onSelect(homeCc); });
+        local.r = r0 + t;
       }
       gS.selectAll("*").remove();
       for (const s of sites) { const [x, y] = proj([s.lon, s.lat]);
+        const dx = 10 + (s === home && local.r ? local.r : 4);
         gS.append("circle").attr("class", "site").attr("cx", x).attr("cy", y).attr("r", 5).attr("vector-effect", "non-scaling-stroke").style("pointer-events", "none");
-        gS.append("text").attr("class", "site-t").attr("x", x + 14 + (s === home && local.items.length ? 10 : 0)).attr("y", y + 4).text(s.name); }
+        gS.append("text").attr("class", "site-t").attr("x", x + dx).attr("y", y + 1).text(s.name);
+        // the site's own country in numbers: it is usually most of the traffic and has no arc of its own
+        if (s === home && homeC && !policyOnly && !data.points) gS.append("text").attr("class", "site-sub").attr("x", x + dx).attr("y", y + 14)
+          .text(`${homeCc} ⬇ ${fmtBytes(homeC.in_b)} ⬆ ${fmtBytes(homeC.out_b)}`); }
 
       // red = evidence-backed findings only: one marker per country whose endpoints are named in an open finding
       const marks = policyOnly ? [] : Object.entries(last.alerts).filter(([cc, a]) => a.security > 0 && (a.items || []).length).map(([cc, a]) => {
         let p = null;
         if (cc === homeCc && p0) p = [p0[0] + 22, p0[1] - 20];
         else { const c = last.byCc[cc], ll = (c && c.ll) || (meta[cc] && meta[cc].ll); if (ll) p = proj([ll[1], ll[0]]); }
-        return p ? { cc, a, p, local: cc === homeCc } : null; }).filter(Boolean);
-      gM.selectAll("g").data(marks, (m) => m.cc).join((en) => { const gg = en.append("g");
+        return p ? { key: cc, cc, a, p, local: cc === homeCc } : null; }).filter(Boolean);
+      // a finding's named endpoints that city-level GeoIP places: the marker sits on the endpoint itself
+      for (const x of policyOnly ? [] : pts) if (x.flag) {
+        const p1 = proj([x.ll[1], x.ll[0]]); if (!p1) continue;
+        marks.push({ key: `p:${x.key}`, cc: x.cc, a: { security: 1, items: [{ ...x.flag, endpoints: [x.ip] }] }, p: p0 && near(p1) ? [p0[0] + 22, p0[1] - 20] : p1, at: x });
+      }
+      gM.selectAll("g").data(marks, (m) => m.key).join((en) => { const gg = en.append("g");
           gg.append("circle").attr("class", "amark-ring").attr("r", 9); gg.append("path").attr("class", "amark").attr("d", d3.symbol(d3.symbolDiamond, 70)());
           gg.append("circle").attr("class", "amark-hit").attr("r", 12).attr("fill", "transparent").style("cursor", "pointer"); return gg; })
         .attr("transform", (m) => `translate(${m.p[0]},${m.p[1]})`)
@@ -311,27 +370,36 @@ const NMMap = (() => {
           ? [rampLegend("Logged block events", lo, hi, fmtNum), el("span", { class: "item muted small" }, "firewall log records, not attacks or connections")]
           : [rampLegend("Observed traffic", lo, hi, fmtBytes)]),
         el("span", { class: "item" }, el("span", { class: "lgdot site" }), "Site"));
-      else if (lg) lg.replaceChildren(
+      else if (lg) fill(lg,
         el("span", { class: "item" }, el("span", { class: "arcsw in" }), "Inbound"),
         el("span", { class: "item" }, el("span", { class: "arcsw out" }), "Outbound"),
         el("span", { class: "item" }, el("span", { class: "lgdot site" }), "Site"),
-        local.items.length ? el("span", { class: "item", title: "Traffic with endpoints in the site's own country; GeoIP gives the country only, so it is drawn as a ring, not an arc" },
-          el("span", { class: "lgdot local" }), `Same country (${local.items.map((x) => x.c.cc).join(", ")})`) : null,
+        tin + tout ? el("span", { class: "item", title: "Traffic with endpoints next to the site or in its own country without a city location: drawn as a ring, not an arc" },
+          el("span", { class: "lgdot local" }), `Near site / same country${local.items.length ? ` (${[...new Set(local.items.map((x) => x.c.cc))].join(", ")})` : ""}`) : null,
+        shownP.some((t) => t.c.named) ? el("span", { class: "item", title: "Remote address this finding's evidence names" }, el("span", { class: "lgdot pt named" }), "Named in evidence") : null,
+        shownP.length ? el("span", { class: "item", title: CITY }, el("span", { class: "lgdot pt" }), data.points ? "Endpoint (by city)" : `${cname(homeCc)} region (by city)`) : null,
+        arcs.some((a) => a.blocked) ? el("span", { class: "item" }, el("span", { class: "arcsw blk" }), "Blocked by firewall (no flows)") : null,
         el("span", { class: "item", title: "Country with endpoints named in an open medium+ finding. Arcs are never red." }, el("span", { class: "lgdiamond" }), "Security finding"),
         ...(byBlock && last.blocked ? policyLegend() : st.shade === "blocks" ? [rampLegend("Logged block events", lo, hi, fmtNum)] :
-        [el("span", { class: "item" }, st.shade === "alerts" ? "Findings " : st.shade === "flows" ? "Flows " : "Bytes ",
+        !vals.length ? [] : [el("span", { class: "item" }, st.shade === "alerts" ? "Findings " : st.shade === "flows" ? "Flows " : "Bytes ",
           el("span", { class: "ramp", style: `background:linear-gradient(90deg,${NM.css(ramp[0])},${NM.css(ramp[1])})` }),
           st.shade === "alerts" ? " more" : ` ${st.shade === "flows" ? fmtNum(lo) : fmtBytes(lo)}–${st.shade === "flows" ? fmtNum(hi) : fmtBytes(hi)}`)]));
-      if (data.noteNode) data.noteNode.replaceChildren(
-        el("p", { text: `Arcs: top ${shown.length} countries by ${st.dir === "both" ? "total" : st.dir + "bound"} volume, from ${home ? home.name : "the site"} to each country's centroid. ` +
+      if (data.noteNode) fill(data.noteNode,
+        el("p", { text: `Arcs: top ${shown.length} countries by ${st.dir === "both" ? "total" : st.dir + "bound"} volume, from ${home ? home.name : "the site"} to each country's centroid` +
+          (shownP.length ? (data.points ? `, plus ${shownP.length} of this finding's remote endpoints at their own location. ` : `, plus the top ${shownP.length} regions of ${cname(homeCc)}. `) : ". ") +
           "Line width = volume; teal = inbound, purple = outbound. Arcs show communication aggregated over the window — not routes, packets, or real-time paths." }),
-        el("p", { text: `Locations are country-level GeoIP (no city): every endpoint is drawn at its country's centroid, so arc ends are approximate. ` +
-          (local.items.length ? `Traffic with ${local.items.map((x) => cname(x.c.cc)).join(", ")} is the ring around the site — not a loop and not traffic returning to the site. ` : "") +
+        el("p", { text: "Countries are counted by country-level GeoIP (the database Akvorado uses) and drawn at their centroid. " +
+          (pts.length ? `${data.points ? "Endpoints" : `In ${cname(homeCc)}, the busiest endpoints`} are placed by city-level GeoIP (DB-IP Lite) — usually the ISP's registered city, so approximate` +
+            (data.home && !data.points && data.home.covered ? `; regions cover ${Math.round(data.home.covered * 100)}% of ${cname(homeCc)} bytes` +
+              (data.home.disputed > 0.05 ? `, and ${Math.round(data.home.disputed * 100)}% stays in the ring because the city database puts those addresses in another country (usually anycast CDNs, which have no single location)` : "") : "") + ". " : "") +
+          (tin + tout ? "The ring around the site is traffic with endpoints next to it, or in its own country with no city location — not a loop and not traffic returning to the site. " : "") +
           (home ? `${home.name}: ${home.source}.` : "") }),
         el("p", { text: (rest.length ? `${rest.length} more countries (${fmtBytes(restB)}) appear as shading only. ` : "") +
+          (restP.length ? `${restP.length} more ${data.points ? "endpoints" : "regions"} (${fmtBytes(d3.sum(restP, (x) => x.v))}) are not drawn. ` : "") +
           (unknown ? `No GeoIP country: ${fmtBytes(unknown.in_b + unknown.out_b)} (not mapped). ` : "") +
           "Only public Internet endpoints at the WAN boundary are mapped; internal addresses never are." }),
-        el("p", { text: "Red ◆ = an open security finding (medium+ severity and confidence) names endpoints in that country. It marks those findings only — other traffic with the country is not implicated." }));
+        el("p", { text: "Red ◆ = an open security finding (medium+ severity and confidence) names endpoints there. It marks those findings only — other traffic with the country is not implicated." }),
+        pts.length ? el("p", { class: "muted small", text: "IP geolocation by DB-IP (db-ip.com), CC BY 4.0." }) : null);
     }
     return {
       render, setDir: (d) => { st.dir = d; if (last) render(last); }, setShade: (s) => { st.shade = s; if (last) render(last); },
