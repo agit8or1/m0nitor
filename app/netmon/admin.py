@@ -88,7 +88,7 @@ FQDN_RE = re.compile(r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+
 def monitor_settings():
     """This monitor's own identity (Settings → Firewalls & sites → This monitor): the FQDN the UI is served and linked
     under, and the address firewalls send NetFlow/syslog to. Empty values fall back to config.yaml."""
-    return {"fqdn": "", "address": "", **(get_setting(conn, MONITOR_KEY, {}) or {})}
+    return {"fqdn": "", "address": "", "via_proxy": False, "proxy_by": "", "proxy_at": None, **(get_setting(conn, MONITOR_KEY, {}) or {})}
 
 
 def monitor_address():
@@ -122,6 +122,9 @@ def monitor_card(req, admin):
             via = [f"{cfg.asset_label(a)}" for a in got if cfg.asset_label(a) not in ("", a)]
             if ok:
                 verdict = "<span class='sev s-good'>● points at this monitor</span>"
+            elif got and m["via_proxy"]:
+                verdict = (f"<span class='sev s-good'>● reached through reverse proxy {e(', '.join(via) or ', '.join(got))}</span> "
+                           f"(confirmed by {e(m['proxy_by'])} {e(fmt_ts(m['proxy_at']))})")
             elif via:
                 verdict = (f"<span class='sev s-warning'>● points at {e(', '.join(via))}</span> — fine if that reverse proxy forwards "
                            f"to https://{e(addr)}; otherwise add a host override (Unbound) or DNS record for {e(addr)}")
@@ -139,6 +142,8 @@ def monitor_card(req, admin):
 <form method=post action="/netmon/settings/monitor" class="stackform wide">{csrf_field(req)}
 <div class="formgrid"><label>FQDN<input name=fqdn value="{e(m['fqdn'])}" maxlength=253 placeholder="e.g. monitor.example.com" class="mono" {dis}></label>
 <label>Address firewalls send to<input name=address value="{e(m['address'])}" placeholder="automatic: {e(addr)}" class="mono" {dis}></label></div>
+<label class="check"><input type=checkbox name=via_proxy value=1 {'checked' if m['via_proxy'] else ''} {dis}> Reached through a reverse proxy
+<span class="muted small">— the FQDN resolves to a proxy that forwards to this monitor</span></label>
 <p class="muted small">The FQDN is added to the TLS front end (the IP address keeps working) and used for links in notifications. A previous
 FQDN stops being served once you save a new one. The address is what the setup steps tell firewalls to send NetFlow and syslog to.</p>
 {'<div class="row"><button class="primary">Save</button></div>' if admin else ''}</form></section>"""
@@ -151,7 +156,7 @@ def monitor_url():
 
 
 @app.post("/netmon/settings/monitor")
-def save_monitor(req: Request, fqdn: str = Form(""), address: str = Form(""), csrf: str = Form("")):
+def save_monitor(req: Request, fqdn: str = Form(""), address: str = Form(""), via_proxy: str = Form(""), csrf: str = Form("")):
     u = need(req, "admin")
     check_csrf(req, csrf)
     try:
@@ -163,8 +168,12 @@ def save_monitor(req: Request, fqdn: str = Form(""), address: str = Form(""), cs
                 raise ValueError("address must be this monitor's reachable IP address")
             a = str(ip)
         old = monitor_settings()
-        put_setting(conn, MONITOR_KEY, {"fqdn": f, "address": a}, u)
-        audit(conn, u, "monitor_identity", {"old": old, "new": {"fqdn": f, "address": a}})
+        vp = via_proxy == "1" and bool(f)
+        new = {"fqdn": f, "address": a, "via_proxy": vp,
+               **({"proxy_by": old["proxy_by"], "proxy_at": old["proxy_at"]} if vp and old["via_proxy"] else
+                  {"proxy_by": u, "proxy_at": time.time()} if vp else {"proxy_by": "", "proxy_at": None})}
+        put_setting(conn, MONITOR_KEY, new, u)
+        audit(conn, u, "monitor_identity", {"old": old, "new": new})
         sync_sites()   # hands the name to the root helper, which updates the TLS front end
         msg = "Saved. The TLS front end is updated within a few seconds." if f != old["fqdn"] else "Saved."
     except ValueError as ex:

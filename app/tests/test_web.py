@@ -286,3 +286,20 @@ def test_admin_sets_monitor_fqdn_for_tls_front_end_and_links():
     assert v.post("/netmon/settings/monitor", data={"fqdn": "x.example.com", "csrf": web.csrf_token(sid(v))}).status_code == 403
     a.post("/netmon/settings/monitor", data={"fqdn": "", "address": "", "csrf": tok})
     assert web.notifier.base == web.cfg["akvorado_url"].rstrip("/") and json.load(open(admin.HOST_JSON))["monitor"]["fqdn"] is None
+
+
+def test_monitor_reverse_proxy_confirmation():
+    from netmon import admin
+    a = client("admin", ADMINPW)
+    tok = web.csrf_token(sid(a))
+    a.post("/netmon/settings/monitor", data={"fqdn": "monitor.example.net", "via_proxy": "1", "csrf": tok})
+    m = admin.monitor_settings()
+    assert m["via_proxy"] and m["proxy_by"] == "admin" and m["proxy_at"]
+    first = m["proxy_at"]
+    a.post("/netmon/settings/monitor", data={"fqdn": "monitor.example.net", "via_proxy": "1", "csrf": tok})
+    assert admin.monitor_settings()["proxy_at"] == first          # re-saving keeps who/when it was confirmed
+    assert 'name=via_proxy value=1 checked' in a.get("/netmon/settings/sites").text
+    a.post("/netmon/settings/monitor", data={"fqdn": "monitor.example.net", "csrf": tok})
+    assert not admin.monitor_settings()["via_proxy"] and admin.monitor_settings()["proxy_by"] == ""
+    a.post("/netmon/settings/monitor", data={"fqdn": "", "via_proxy": "1", "csrf": tok})
+    assert not admin.monitor_settings()["via_proxy"]               # no FQDN, nothing to proxy
