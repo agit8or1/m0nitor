@@ -245,7 +245,23 @@ const NM = (() => {
     }
   }
   const DIRECTION = { inbound: "⬇ Inbound", outbound: "⬆ Outbound", internal: "↔ Internal", both: "⇅ Both directions", transit: "Transit" };
-  function alertList(node, alerts, { limit = 10, empty = "No open findings" } = {}) {
+  // "Ack" on a list row: acknowledges in place and removes the row (analyst/admin, open findings only)
+  function ackButton(a, onDone) {
+    if (a.status !== "open" || !canName()) return null;
+    const b = el("button", { class: "sm ack", type: "button", text: "Ack", title: "Acknowledge: moves it to the acked tab" });
+    b.addEventListener("click", async (ev) => {
+      ev.preventDefault(); b.disabled = true;
+      const fd = new FormData(); fd.set("status", "acked"); fd.set("csrf", meta("nm-csrf"));
+      try {
+        const r = await fetch(`/netmon/alert/${a.id}/status`, { method: "POST", body: fd, headers: { Accept: "application/json" } });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const li = b.closest("li"); if (li) li.remove();
+        if (onDone) onDone(a);
+      } catch (e) { b.disabled = false; b.textContent = "Ack failed"; b.title = e.message; }
+    });
+    return b;
+  }
+  function alertList(node, alerts, { limit = 10, empty = "No open findings", ack = true } = {}) {
     node.replaceChildren();
     if (!alerts.length) { node.append(el("div", { class: "state empty", text: empty })); return; }
     const groups = { security: "Security alerts", response: "Auto-response actions", health: "Monitoring health", info: "Informational changes" };
@@ -256,7 +272,7 @@ const NM = (() => {
       for (const a of items) ul.append(el("li", {}, sev(a.severity), el("div", {},
         a.direction ? el("span", { class: `dir dir-${a.direction}${a.direction_verified ? "" : " unverified"}`, title: a.direction_basis || "" },
           DIRECTION[a.direction] || a.direction, el("small", { text: a.direction_verified ? "✓ verified" : "? unverified" })) : null, " ",
-        el("a", { href: `/netmon/alert/${a.id}`, text: a.title }),
+        el("a", { href: `/netmon/alert/${a.id}`, text: a.title }), ack ? ackButton(a) : null,
         el("div", { class: "muted small", text: `${a.rule} · confidence ${a.confidence} · ${a.count}× · ${ago(Date.now() / 1000 - a.last_seen)}` }),
         a.next ? el("div", { class: "small next", text: `Next: ${a.next}` }) : null)));
       node.append(ul);
@@ -338,6 +354,6 @@ const NM = (() => {
   // Back/forward can restore a page from the browser's memory cache with stale lists (e.g. a finding just acked): reload it
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) location.reload(); });
   return { el, $, fmtBytes, fmtBps, fmtNum, ago, fmtTime, tz, css, sev, scope, qs, href, setScope, onScope, every, get, state, table, rank,
-    legendInOut, pager, lineChart, cards, alertList, meters, convTable, scopeDesc, ipCell, namer, onLive: (f) => liveL.push(f), live: () => live,
+    legendInOut, pager, lineChart, cards, alertList, ackButton, meters, convTable, scopeDesc, ipCell, namer, onLive: (f) => liveL.push(f), live: () => live,
     isPaused: () => paused };
 })();

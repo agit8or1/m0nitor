@@ -123,6 +123,18 @@ def test_ack_returns_to_list_it_came_from():
     assert r.headers["location"] == f"/netmon/alert/{aid}"   # reopening stays on the finding
 
 
+def test_ack_button_on_lists():
+    aid = make_alert()
+    a = client("admin", ADMINPW)
+    form = f"action='/netmon/alert/{aid}/status' class='inline ack'"
+    assert form in a.get("/netmon/security").text
+    assert form not in client("viewer1", VIEWPW).get("/netmon/security").text   # viewers cannot triage
+    r = a.post(f"/netmon/alert/{aid}/status", data={"status": "acked", "csrf": web.csrf_token(sid(a))},
+               headers={"Accept": "application/json"})
+    assert r.json() == {"ok": True, "id": aid, "status": "acked"}
+    assert form not in a.get("/netmon/security?status=acked").text   # no Ack on an already-acked finding
+
+
 def test_block_refused_for_internal():
     a = client("admin", ADMINPW)
     r = a.post("/netmon/blocks", data={"address": "10.40.0.8", "reason": "x", "csrf": web.csrf_token(sid(a))})

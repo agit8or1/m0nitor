@@ -62,7 +62,7 @@
       const [head, tail] = a.title.split(" — ");
       const b = sev(a.severity); b.classList.add("badge");
       ul.append(el("li", {},
-        el("div", { class: "row1" }, b, el("a", { href: `/netmon/alert/${a.id}`, text: head, title: a.title }), el("span", { class: "when", text: ago(Date.now() / 1000 - a.last_seen) })),
+        el("div", { class: "row1" }, b, el("a", { href: `/netmon/alert/${a.id}`, text: head, title: a.title }), el("span", { class: "when", text: ago(Date.now() / 1000 - a.last_seen) }), NM.ackButton(a)),
         el("div", { class: "meta" }, a.asset ? (a.asset_internal ? el("a", { href: NM.href(`/netmon/servers/${a.asset}`), text: a.asset_label || a.asset })
           : el("span", { text: a.asset_label || a.asset, title: "Public/NAT address — no single internal server" })) : "site-wide",
           a.direction ? ` · ${DIRS[a.direction] || a.direction}${a.direction_verified ? " ✓" : " (unverified)"}` : "", tail ? el("span", { class: "muted mono", text: ` · ${tail}` }) : null,

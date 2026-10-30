@@ -81,7 +81,7 @@ def alert_brief(a):
             "asset_internal": _internal(a["asset"]),
             "last_seen": a["last_seen"], "count": a["count"], "why": a["baseline"], "next": nxt,
             "direction": a["direction"], "direction_verified": bool(a["direction_verified"]), "direction_basis": a["direction_basis"],
-            "site": a["site"], "lan_hosts": lan_hosts_text(a)}
+            "site": a["site"], "lan_hosts": lan_hosts_text(a), "status": a["status"]}
 
 
 _alert_cc = {"t": 0, "v": {}}

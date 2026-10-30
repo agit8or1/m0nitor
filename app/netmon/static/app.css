@@ -356,3 +356,5 @@ form.inline input.sm { width: 12em; padding: 2px 6px; font-size: 12px; } button.
 .stackform fieldset legend { font-size: 13px; color: var(--ink-2); padding: 0 4px; }
 .stackform input.short { width: 7.5em; }
 .tbl a.mono { white-space: nowrap; }
+
+.finding .fh form.ack { margin: 0; } .alist button.ack { margin-left: 8px; vertical-align: baseline; } .slist .row1 button.ack { flex: none; }

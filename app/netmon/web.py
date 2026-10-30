@@ -514,13 +514,18 @@ def lan_hosts_dd(a, req=None, can_edit=False):
             f"— unanswered probes cannot be attributed from flow records.</span></div>")
 
 
-def finding_card(a):
+def ack_form(req, a, back):
+    return (f"<form method=post action='/netmon/alert/{a['id']}/status' class='inline ack'>{csrf_field(req)}{back_field(back)}"
+            f"<input type=hidden name=status value=acked><button class='sm' title='Acknowledge: moves it to the acked tab'>Ack</button></form>")
+
+
+def finding_card(a, ack=""):
     nxt = (json.loads(a["next_steps"] or "[]") or [""])[0]
     asset = cfg.asset_label(a["asset"]) if a["asset"] else "—"
     link = f"/netmon/servers/{quote(a['asset'])}" if a["asset"] and _is_internal_safe(a["asset"]) else ""
     return f"""<article class="finding f-{SEV_STATUS.get(a['severity'], 'muted')}">
 <div class="fh">{sev(a['severity'])}{direction_badge(a)}<span class="muted small">{(e(site_name(a['site'])) + ' · ') if len(cfg.sites) > 1 and 'site' in a.keys() else ''}confidence {e(a['confidence'])} · {e(RULE_LABEL.get(a['rule'], a['rule']))}
- · {e(a['count'])}× · last {e(fmt_ts(a['last_seen']))}</span>{score_chip(sc[-1]['score']) if (sc := ai_scores(a['id'])) else ''}<span class="tag">{e(ongoing(a)['state'] if a['status'] != 'closed' else 'closed')}</span><span class="tag">{e(a['status'])}</span></div>
+ · {e(a['count'])}× · last {e(fmt_ts(a['last_seen']))}</span>{score_chip(sc[-1]['score']) if (sc := ai_scores(a['id'])) else ''}<span class="tag">{e(ongoing(a)['state'] if a['status'] != 'closed' else 'closed')}</span><span class="tag">{e(a['status'])}</span>{ack}</div>
 <a class="ft" href="/netmon/alert/{a['id']}">{e(a['title'])}</a>
 <div class="fg"><div><span class="k">Server</span>{f'<a href="{link}">{e(asset)}</a>' if link else e(asset)}{f'<div class="small">{e(lh)}</div>' if (lh := lan_hosts_text(a)) else ''}</div>
 <div><span class="k">Why it differs from normal</span>{e(a['baseline'])}</div>
@@ -558,8 +563,11 @@ def security_page(req: Request, status: str = "open"):
 <a class="kpi link" href="/netmon/settings/integrations"><div class="k">Threat intelligence</div><div class="v na">No feeds configured</div><div class="s">add licensed feeds in config</div></a>
 <a class="kpi link" href="/netmon/blocks"><div class="k">Enforcement</div><div class="v {'ok' if enforcement()[0] else 'na'}">{f"{enforcement()[0]} of {enforcement()[1]} firewalls" if enforcement()[0] else 'Not set up'}</div><div class="s">block requests →</div></a>
 </section>"""
+    can_ack, back = ROLES[r] >= ROLES["analyst"], f"/netmon/security?status={status}"
+
     def sec(title, desc, items, empty):
-        cards = "".join(finding_card(a) for a in items) or f"<p class='empty'>{e(empty)}</p>"
+        cards = "".join(finding_card(a, ack_form(req, a, back) if can_ack and a["status"] == "open" else "")
+                        for a in items) or f"<p class='empty'>{e(empty)}</p>"
         return f"<section class='card'><div class='card-h'><h2>{e(title)} <span class='count'>{len(items)}</span></h2><span class='muted small'>{e(desc)}</span></div>{cards}</section>"
     test_btn = (f"<form method=post action='/netmon/test-alert' class='inline'>{csrf_field(req)}"
                 f"<button>Create clearly-marked TEST alert</button></form>") if r == "admin" else ""
@@ -818,6 +826,8 @@ def alert_status(req: Request, aid: int, status: str = Form(...), back: str = Fo
     conn.execute("UPDATE alerts SET status=?, acked_by=?, acked_at=? WHERE id=?", (status, u, time.time(), aid))
     conn.commit()
     audit(conn, u, "alert_status", {"id": aid, "status": status})
+    if "application/json" in req.headers.get("accept", ""):   # list buttons (fetch): no page to go to
+        return JSONResponse({"ok": True, "id": aid, "status": status})
     # acked/closed drop off the open lists, so return to the list rather than leaving the user on the finding
     return RedirectResponse(safe_next(back) if back and status != "open" else f"/netmon/alert/{aid}", 303)
 
