@@ -564,11 +564,12 @@ def security_page(req: Request, status: str = "open"):
 <a class="kpi link" href="/netmon/blocks"><div class="k">Enforcement</div><div class="v {'ok' if enforcement()[0] else 'na'}">{f"{enforcement()[0]} of {enforcement()[1]} firewalls" if enforcement()[0] else 'Not set up'}</div><div class="s">block requests →</div></a>
 </section>"""
     can_ack, back = ROLES[r] >= ROLES["analyst"], f"/netmon/security?status={status}"
-    open_ids = [str(a["id"]) for a in rows if a["status"] == "open"]
-    ack_all = (f"<form method=post action='/netmon/alerts/ack' class='inline' data-confirm='Acknowledge all {len(open_ids)} open findings on this page?'>"
-               f"{csrf_field(req)}{back_field(back)}<input type=hidden name=ids value='{','.join(open_ids)}'>"
-               f"<button title='Acknowledge every open finding listed below'>Ack all ({len(open_ids)})</button></form>"
-               if can_ack and open_ids else "")
+    # Ack all covers every open finding (the list shows at most 300), up to the newest one at page load
+    n_open, max_id = conn.execute("SELECT count(*), max(id) FROM alerts WHERE status='open' AND test=0").fetchone()
+    ack_all = (f"<form method=post action='/netmon/alerts/ack' class='inline' data-confirm='Acknowledge all {n_open:,} open findings?'>"
+               f"{csrf_field(req)}{back_field(back)}<input type=hidden name=max_id value='{max_id}'>"
+               f"<button title='Acknowledge every open finding, including any beyond the 300 listed'>Ack all ({n_open:,})</button></form>"
+               if can_ack and status == "open" and n_open else "")
 
     def sec(title, desc, items, empty):
         cards = "".join(finding_card(a, ack_form(req, a, back) if can_ack and a["status"] == "open" else "")
@@ -838,18 +839,12 @@ def alert_status(req: Request, aid: int, status: str = Form(...), back: str = Fo
 
 
 @app.post("/netmon/alerts/ack")
-def alerts_ack(req: Request, ids: str = Form(""), back: str = Form(""), csrf: str = Form("")):
-    """Ack all: acknowledges the open findings that were listed on the page (not ones raised since it loaded)."""
+def alerts_ack(req: Request, max_id: int = Form(...), back: str = Form(""), csrf: str = Form("")):
+    """Ack all: acknowledges every open finding up to the newest one when the page loaded (ids only grow), so findings
+    raised after that stay open. Not limited to the rows the page lists."""
     u = need(req, "analyst")
     check_csrf(req, csrf)
-    try:
-        want = sorted({int(x) for x in ids.split(",") if x.strip()})[:1000]
-    except ValueError:
-        raise HTTPException(400, "bad ids") from None
-    acked = []
-    if want:
-        acked = [x[0] for x in conn.execute(f"SELECT id FROM alerts WHERE status='open' AND test=0 AND id IN ({','.join('?' * len(want))})",
-                                            want).fetchall()]
+    acked = [x[0] for x in conn.execute("SELECT id FROM alerts WHERE status='open' AND test=0 AND id<=?", (max_id,)).fetchall()]
     if acked:
         conn.executemany("UPDATE alerts SET status='acked', acked_by=?, acked_at=? WHERE id=?", [(u, time.time(), i) for i in acked])
         conn.commit()

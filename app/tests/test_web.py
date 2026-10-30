@@ -135,21 +135,26 @@ def test_ack_button_on_lists():
     assert form not in a.get("/netmon/security?status=acked").text   # no Ack on an already-acked finding
 
 
-def test_ack_all_acks_only_listed_open_findings():
-    ids = [make_alert() for _ in range(3)]
+def test_ack_all_covers_every_open_finding_up_to_page_load():
+    first = make_alert()
+    for _ in range(310):   # more than the 300 rows the page lists
+        make_alert()
     a = client("admin", ADMINPW)
     tok = web.csrf_token(sid(a))
+    n_open, max_id = web.conn.execute("SELECT count(*), max(id) FROM alerts WHERE status='open' AND test=0").fetchone()
     page_ = a.get("/netmon/security").text
-    assert "action='/netmon/alerts/ack'" in page_ and "data-confirm=" in page_
+    assert f"Ack all ({n_open:,})" in page_ and f"name=max_id value='{max_id}'" in page_ and "data-confirm=" in page_
     assert "action='/netmon/alerts/ack'" not in client("viewer1", VIEWPW).get("/netmon/security").text
     v = client("viewer1", VIEWPW)
-    assert v.post("/netmon/alerts/ack", data={"ids": str(ids[0]), "csrf": web.csrf_token(sid(v))}).status_code == 403
-    assert a.post("/netmon/alerts/ack", data={"ids": "1,x", "csrf": tok}).status_code == 400
-    r = a.post("/netmon/alerts/ack", data={"ids": f"{ids[0]},{ids[1]}", "back": "/netmon/security?status=open", "csrf": tok},
+    assert v.post("/netmon/alerts/ack", data={"max_id": str(max_id), "csrf": web.csrf_token(sid(v))}).status_code == 403
+    assert a.post("/netmon/alerts/ack", data={"max_id": "x", "csrf": tok}).status_code == 422
+    later = make_alert()   # raised after the page loaded
+    r = a.post("/netmon/alerts/ack", data={"max_id": str(max_id), "back": "/netmon/security?status=open", "csrf": tok},
                follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/netmon/security?status=open"
-    st = dict(web.conn.execute(f"SELECT id, status FROM alerts WHERE id IN ({','.join(map(str, ids))})").fetchall())
-    assert st[ids[0]] == st[ids[1]] == "acked" and st[ids[2]] == "open"   # only the listed ones
+    q = lambda i: web.conn.execute("SELECT status FROM alerts WHERE id=?", (i,)).fetchone()[0]  # noqa: E731
+    assert q(first) == q(max_id) == "acked" and q(later) == "open"
+    assert web.conn.execute("SELECT count(*) FROM alerts WHERE status='open' AND test=0 AND id<=?", (max_id,)).fetchone()[0] == 0
 
 
 def test_block_refused_for_internal():
