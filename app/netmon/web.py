@@ -564,6 +564,11 @@ def security_page(req: Request, status: str = "open"):
 <a class="kpi link" href="/netmon/blocks"><div class="k">Enforcement</div><div class="v {'ok' if enforcement()[0] else 'na'}">{f"{enforcement()[0]} of {enforcement()[1]} firewalls" if enforcement()[0] else 'Not set up'}</div><div class="s">block requests →</div></a>
 </section>"""
     can_ack, back = ROLES[r] >= ROLES["analyst"], f"/netmon/security?status={status}"
+    open_ids = [str(a["id"]) for a in rows if a["status"] == "open"]
+    ack_all = (f"<form method=post action='/netmon/alerts/ack' class='inline' data-confirm='Acknowledge all {len(open_ids)} open findings on this page?'>"
+               f"{csrf_field(req)}{back_field(back)}<input type=hidden name=ids value='{','.join(open_ids)}'>"
+               f"<button title='Acknowledge every open finding listed below'>Ack all ({len(open_ids)})</button></form>"
+               if can_ack and open_ids else "")
 
     def sec(title, desc, items, empty):
         cards = "".join(finding_card(a, ack_form(req, a, back) if can_ack and a["status"] == "open" else "")
@@ -572,7 +577,7 @@ def security_page(req: Request, status: str = "open"):
     test_btn = (f"<form method=post action='/netmon/test-alert' class='inline'>{csrf_field(req)}"
                 f"<button>Create clearly-marked TEST alert</button></form>") if r == "admin" else ""
     from .admin import SECURITY_TABS, tabs
-    body = (tabs(SECURITY_TABS, "/netmon/security") + learn + sources + f"<div class='toolbar'><div class='seg links'>{status_tabs}</div>{test_btn}</div>" +
+    body = (tabs(SECURITY_TABS, "/netmon/security") + learn + sources + f"<div class='toolbar'><div class='seg links'>{status_tabs}</div>{ack_all}{test_btn}</div>" +
             sec("Security alerts", "credible suspicious behavior, with evidence", groups["security"], "No security alerts in this view") +
             sec("Auto-response actions", "addresses netmon blocked automatically, with the evidence and expiry", groups["response"], "No automatic blocks in this view") +
             sec("Informational changes", "new countries or networks — not malicious by themselves", groups["info"], "No informational changes") +
@@ -830,6 +835,26 @@ def alert_status(req: Request, aid: int, status: str = Form(...), back: str = Fo
         return JSONResponse({"ok": True, "id": aid, "status": status})
     # acked/closed drop off the open lists, so return to the list rather than leaving the user on the finding
     return RedirectResponse(safe_next(back) if back and status != "open" else f"/netmon/alert/{aid}", 303)
+
+
+@app.post("/netmon/alerts/ack")
+def alerts_ack(req: Request, ids: str = Form(""), back: str = Form(""), csrf: str = Form("")):
+    """Ack all: acknowledges the open findings that were listed on the page (not ones raised since it loaded)."""
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    try:
+        want = sorted({int(x) for x in ids.split(",") if x.strip()})[:1000]
+    except ValueError:
+        raise HTTPException(400, "bad ids") from None
+    acked = []
+    if want:
+        acked = [x[0] for x in conn.execute(f"SELECT id FROM alerts WHERE status='open' AND test=0 AND id IN ({','.join('?' * len(want))})",
+                                            want).fetchall()]
+    if acked:
+        conn.executemany("UPDATE alerts SET status='acked', acked_by=?, acked_at=? WHERE id=?", [(u, time.time(), i) for i in acked])
+        conn.commit()
+        audit(conn, u, "alert_status", {"ids": acked, "status": "acked", "reason": "ack all"})
+    return RedirectResponse(safe_next(back) if back else "/netmon/security", 303)
 
 
 @app.post("/netmon/test-alert")

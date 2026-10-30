@@ -135,6 +135,23 @@ def test_ack_button_on_lists():
     assert form not in a.get("/netmon/security?status=acked").text   # no Ack on an already-acked finding
 
 
+def test_ack_all_acks_only_listed_open_findings():
+    ids = [make_alert() for _ in range(3)]
+    a = client("admin", ADMINPW)
+    tok = web.csrf_token(sid(a))
+    page_ = a.get("/netmon/security").text
+    assert "action='/netmon/alerts/ack'" in page_ and "data-confirm=" in page_
+    assert "action='/netmon/alerts/ack'" not in client("viewer1", VIEWPW).get("/netmon/security").text
+    v = client("viewer1", VIEWPW)
+    assert v.post("/netmon/alerts/ack", data={"ids": str(ids[0]), "csrf": web.csrf_token(sid(v))}).status_code == 403
+    assert a.post("/netmon/alerts/ack", data={"ids": "1,x", "csrf": tok}).status_code == 400
+    r = a.post("/netmon/alerts/ack", data={"ids": f"{ids[0]},{ids[1]}", "back": "/netmon/security?status=open", "csrf": tok},
+               follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/netmon/security?status=open"
+    st = dict(web.conn.execute(f"SELECT id, status FROM alerts WHERE id IN ({','.join(map(str, ids))})").fetchall())
+    assert st[ids[0]] == st[ids[1]] == "acked" and st[ids[2]] == "open"   # only the listed ones
+
+
 def test_block_refused_for_internal():
     a = client("admin", ADMINPW)
     r = a.post("/netmon/blocks", data={"address": "10.40.0.8", "reason": "x", "csrf": web.csrf_token(sid(a))})

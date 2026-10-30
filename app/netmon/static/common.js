@@ -353,6 +353,8 @@ const NM = (() => {
   document.addEventListener("DOMContentLoaded", () => { bindToolbar(); pollLive(); setInterval(pollLive, 10000); });
   // Back/forward can restore a page from the browser's memory cache with stale lists (e.g. a finding just acked): reload it
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) location.reload(); });
+  // server-rendered forms with data-confirm (e.g. Ack all) ask before submitting (inline handlers are blocked by the CSP)
+  document.addEventListener("submit", (ev) => { const m = ev.target.dataset && ev.target.dataset.confirm; if (m && !confirm(m)) ev.preventDefault(); });
   return { el, $, fmtBytes, fmtBps, fmtNum, ago, fmtTime, tz, css, sev, scope, qs, href, setScope, onScope, every, get, state, table, rank,
     legendInOut, pager, lineChart, cards, alertList, ackButton, meters, convTable, scopeDesc, ipCell, namer, onLive: (f) => liveL.push(f), live: () => live,
     isPaused: () => paused };
