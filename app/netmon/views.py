@@ -362,7 +362,16 @@ def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "
             h["aliases"] = (assets.get(h["ip"]) or {}).get("aliases", [])
         per_ = max(10, min(per, 200))
         p = max(1, page_)
-        return {"ok": True, "scope": scope_json(sc), "rows": rows[(p - 1) * per_: p * per_], "total": len(rows),
+        shown = rows[(p - 1) * per_: p * per_]
+        for h in shown:
+            h["public"] = cfg.binat_ext(h["ip"])
+        rd = dash.rdns.wait([h["ip"] for h in shown] + [x for h in shown for x in h["public"]] +
+                            [h["top_remote"] for h in shown if h.get("top_remote")], timeout=2.0)
+        for h in shown:
+            h["rdns"] = rd.get(h["ip"])
+            h["public"] = [{"ip": x, "fw": cfg.fw_label(x), "rdns": rd.get(x)} for x in h["public"]]
+            h["top_remote_rdns"] = rd.get(h["top_remote"]) if h.get("top_remote") else None
+        return {"ok": True, "scope": scope_json(sc), "rows": shown, "total": len(rows),
                 "page": p, "per": per_, "unattributed_nat_tx": d["unattributed_nat_tx"]}
     return guard(run)
 
@@ -377,9 +386,15 @@ def api_server(req: Request, ip: str):
         coll = dash.collection(sc)
         alerts = [alert_brief(a) for a in conn.execute("SELECT * FROM alerts WHERE asset=? AND test=0 ORDER BY last_seen DESC LIMIT 30", (ip,))]
         a = cfg.asset(ip)
-        return {"ok": True, "scope": scope_json(sc), "ip": ip, "asset": a, "collection": coll,
-                "exposures": [{"proto": x.proto, "ports": f"{x.lo}" + (f"-{x.hi}" if x.hi != x.lo else ""), "public_ip": x.public_ip}
-                              for x in cfg.exposures if x.ip == ip],
+        exps = [x for x in cfg.exposures if x.ip == ip]
+        pub = cfg.binat_ext(ip)
+        rd = dash.rdns.wait([ip] + pub + [x.public_ip for x in exps], timeout=2.0)
+        # the server's own addresses: LAN, then the public 1:1 NAT address(es) it is reached on at the WAN
+        addrs = [{"ip": ip, "kind": "LAN", "rdns": rd.get(ip)}] + \
+                [{"ip": x, "kind": cfg.fw_label(x) or "1:1 NAT", "rdns": rd.get(x)} for x in pub]
+        return {"ok": True, "scope": scope_json(sc), "ip": ip, "asset": a, "collection": coll, "addresses": addrs,
+                "exposures": [{"proto": x.proto, "ports": f"{x.lo}" + (f"-{x.hi}" if x.hi != x.lo else ""), "public_ip": x.public_ip,
+                               "public_fw": cfg.fw_label(x.public_ip), "rdns": rd.get(x.public_ip)} for x in exps],
                 "summary": dash.summary(sc), "flow_series": dash.flow_series(sc, coll), "countries": dash.countries(sc, 30),
                 "orgs": dash.orgs(sc, 12), "services": dash.services(sc, 12), "novelty": named_novelty(sc),
                 "baseline_days": detector_status()["learning_days"],

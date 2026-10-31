@@ -3,6 +3,14 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.07 — 2026-10-31
+
+### Added
+- Server pages: an Addresses line under the title with the server's LAN address and its public 1:1 NAT address
+  (named as its WAN alias), each with reverse DNS; port forwards show the WAN alias and reverse DNS of their address.
+- Servers list: reverse DNS under each server address, the public 1:1 NAT address with its reverse DNS, and reverse
+  DNS for the top remote.
+
 ## v1.06 — 2026-10-31
 
 ### Added

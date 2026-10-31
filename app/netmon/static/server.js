@@ -7,6 +7,11 @@
       const d = await NM.get(`/netmon/api/server?${NM.qs({ ip, host: "" })}`);
       NM.scopeDesc(d.scope);
       const s = d.summary;
+      // the server's addresses with reverse DNS: LAN, then the public (1:1 NAT) address it is reached on
+      $("srvhead").replaceChildren(el("div", { class: "srvaddrs" }, el("span", { class: "muted", text: "Addresses " }),
+        ...d.addresses.map((x) => el("span", { class: "srvaddr" }, `${x.kind} `, el("code", { text: x.ip }),
+          x.rdns ? el("span", { class: "muted", title: "reverse DNS (PTR)", text: ` (${x.rdns})` })
+            : x.rdns === "" ? el("span", { class: "muted", title: "no reverse DNS (PTR) record", text: " (no rDNS)" }) : null))));
       NM.cards($("cards"), [
         { k: "Received (Internet → server)", sw: "--in", href: "#bw", v: fmtBytes(s.in_b), s: `avg ${fmtBps(s.in_avg_bps)} · flow-estimated` },
         { k: "Sent (server → Internet)", sw: "--out", href: "#bw", v: s.out_b ? fmtBytes(s.out_b) : "n/a", s: s.out_b ? `avg ${fmtBps(s.out_avg_bps)} · port-forward replies only` : "sent via shared NAT — not attributable from flows" },
@@ -40,7 +45,8 @@
       NM.alertList($("t-alerts"), d.alerts, { empty: "No alerts for this server" });
       const ex = $("t-exposure"); ex.replaceChildren(
         el("h3", { class: "grp", text: "Reachable from the Internet (port forwards)" }),
-        d.exposures.length ? el("ul", { class: "plain" }, d.exposures.map((x) => el("li", {}, el("code", { text: `${x.proto}/${x.ports}` }), ` via ${x.public_ip}`))) : el("p", { class: "muted", text: "No port forwards" }),
+        d.exposures.length ? el("ul", { class: "plain" }, d.exposures.map((x) => el("li", {}, el("code", { text: `${x.proto}/${x.ports}` }), ` via ${x.public_fw ? `${x.public_fw} ` : ""}${x.public_ip}`,
+          x.rdns ? el("span", { class: "muted", title: "reverse DNS (PTR)", text: ` (${x.rdns})` }) : null))) : el("p", { class: "muted", text: "No port forwards" }),
         el("h3", { class: "grp", text: "AI analysis" }),
         d.ai_enabled ? el("a", { class: "btn", href: NM.href("/netmon/investigations", { kind: "server", target: ip }), text: "Analyze with AI…" })
           : el("p", { class: "muted" }, "AI analysis not configured — ", el("a", { href: "/netmon/investigations", text: "setup" }), ". You can still preview the evidence."));

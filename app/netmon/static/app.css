@@ -364,3 +364,4 @@ form.inline input.sm { width: 12em; padding: 2px 6px; font-size: 12px; } button.
 .finding .fh form.ack { margin: 0; } .alist button.ack { margin-left: 8px; vertical-align: baseline; } .slist .row1 button.ack { flex: none; }
 pre.changelog { max-height: none; overflow: visible; background: none; padding: 0; }
 .changelog { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; margin: 0; }
+.srvaddrs { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: -6px 0 12px; font-size: 13px; } .srvaddr code { font-size: 12.5px; }
