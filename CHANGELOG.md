@@ -3,6 +3,12 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.11 — 2026-10-31
+
+### Fixed
+- IDS findings failed with "'NoneType' object has no attribute 'get'" (detector error) on installs that had never
+  fetched the threat-radar feed, e.g. new or offline installs and the demo.
+
 ## v1.10 — 2026-10-31
 
 ### Fixed

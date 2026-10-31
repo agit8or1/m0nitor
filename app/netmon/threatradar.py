@@ -121,7 +121,7 @@ def data(conn):
     _, ts = get_state(conn, STATE, None)
     if _cache["ts"] != ts:
         _cache["data"], _cache["ts"] = get_state(conn, STATE, None)[0] or {}, ts
-    return _cache["data"]
+    return _cache["data"] or {}   # never fetched yet (fresh or offline install): no radar data, not an error
 
 
 def lookup(conn, cves):

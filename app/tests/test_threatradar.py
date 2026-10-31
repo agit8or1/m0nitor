@@ -96,3 +96,9 @@ def test_ids_findings_marked_and_optionally_raised(cfg, conn, monkeypatch):
     assert "threat_radar" not in plain["evidence"][0] and "Threat intel" not in plain["baseline"]
     tr.save_settings(conn, {"raise_known_exploited": True}, "t")
     assert d.rule_ids(1_000_000)[0]["severity"] == "high"
+
+
+def test_lookup_before_any_feed_was_fetched(conn):
+    from netmon import threatradar as tr
+    tr._cache.update({"ts": None, "data": None})
+    assert tr.lookup(conn, ["CVE-2021-44228"]) == [] and tr.software_matches(conn, ["nextcloud"]) == []
