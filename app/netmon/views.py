@@ -6,6 +6,7 @@ server-side aggregations; the browser never receives raw flow datasets.
 import ipaddress
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +14,7 @@ from fastapi import Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from urllib.parse import quote
 
+from .rdns import LIST_WAIT
 from . import counters, geocity
 from .ai import AI
 from .core import audit, get_state
@@ -181,7 +183,7 @@ def capacity_status():
         sc = dash.scope(range_key="15m")
         exp = {x["exporter"]: x["id"] for x in cfg.sites}
         rows = dash.q(sc, "SELECT ExporterName AS e, sumIf(Bytes, INB) AS ib, sumIf(Bytes, OUTB) AS ob FROM flows "
-                          "WHERE has({exps:Array(String)}, ExporterName) AND TimeReceived >= now() - 360 AND TimeReceived < now() - 60 "
+                          "WHERE ExporterName IN {exps:Array(String)} AND TimeReceived >= now() - 360 AND TimeReceived < now() - 60 "
                           "GROUP BY e", ttl=10)
         got = {exp.get(r["e"]): r for r in rows}
         for row in need_flows:
@@ -258,20 +260,100 @@ def api_overview(req: Request):
             "SELECT * FROM alerts WHERE status='open' AND test=0 ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
             "WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, last_seen DESC LIMIT 40")]
         alerts.sort(key=lambda a: {"security": 0, "health": 1, "info": 2}.get(a["category"], 3))
-        jobs = {"summary": lambda: dash.summary(sc), "flow_series": lambda: dash.flow_series(sc, coll),
-                "countries": lambda: dash.countries(sc), "srv": lambda: dash.servers(sc, limit=200),
-                "orgs": lambda: dash.orgs(sc, 10), "services": lambda: dash.services(sc, 8),
-                "recent": lambda: dash.conversations(sc, page=1, per=24, sort="time"), "alert_countries": alert_countries}
-        r = {k: f.result() for k, f in {k: POOL.submit(fn) for k, fn in jobs.items()}.items()}
-        srv = r.pop("srv")
+        traffic, scope = rolling(sc, "overview", overview_traffic)
         from .admin import sources
         sel = {s["id"] for s in sc.sites}
         locs = [l for l in site_locations() if l["id"] in sel]
-        return {"ok": True, "scope": scope_json(sc), "collection": coll, **r, "counters": counter_series(sc), "sources": sources(),
-                "sites": locs, "home": home_regions(sc, locs, r["countries"]), "alerts": alerts[:12], "alert_summary": alert_summary(),
-                "blocked": geo_blocked(),
-                "servers": srv["servers"][:10], "server_count": len(srv["servers"]), "unattributed_nat_tx": srv["unattributed_nat_tx"]}
+        # live parts (alerts, collection state, sources, policy) are always current; traffic is per window step
+        return {"ok": True, "scope": scope, "collection": coll, **traffic, "recent": fresh_rdns(traffic["recent"]),
+                "alert_countries": alert_countries(), "sources": sources(), "sites": locs, "alerts": alerts[:12],
+                "alert_summary": alert_summary(), "blocked": geo_blocked()}
     return guard(run)
+
+
+def overview_traffic(sc):
+    """The window-bound (traffic) part of the overview."""
+    coll = dash.collection(sc)
+    jobs = {"summary": lambda: dash.summary(sc), "flow_series": lambda: dash.flow_series(sc, coll),
+            "countries": lambda: dash.countries(sc), "srv": lambda: dash.servers(sc, limit=200),
+            "orgs": lambda: dash.orgs(sc, 10), "services": lambda: dash.services(sc, 8),
+            "recent": lambda: dash.conversations(sc, page=1, per=24, sort="time")}
+    r = {k: f.result() for k, f in {k: POOL.submit(fn) for k, fn in jobs.items()}.items()}
+    srv = r.pop("srv")
+    sel = {s["id"] for s in sc.sites}
+    locs = [l for l in site_locations() if l["id"] in sel]
+    return {**r, "counters": counter_series(sc), "home": home_regions(sc, locs, r["countries"]),
+            "servers": srv["servers"][:10], "server_count": len(srv["servers"]), "unattributed_nat_tx": srv["unattributed_nat_tx"]}
+
+
+def servers_traffic(sc):
+    return dash.servers(sc, limit=500)
+
+
+def countries_traffic(sc):
+    rows = dash.countries(sc)
+    return {"countries": rows, "summary": dash.summary(sc), "home": home_regions(sc, site_locations(), rows), "blocks": block_stats(sc)}
+
+
+def connections_traffic(sc, page, sort, direction, proto):
+    return dash.conversations(sc, page=page, per=50, sort=sort, direction=direction, proto=proto)
+
+
+def fresh_rdns(d):
+    """Copy of a cached conversations result with reverse DNS names re-read from the name cache (never waits), so names
+    resolved after the traffic was computed still appear."""
+    rows = [dict(r) for r in d["rows"]]
+    rd = dash.rdns.wait([r["remote"] for r in rows if r.get("remote")], timeout=0)
+    for r in rows:
+        if r.get("remote") and r.get("rdns") is None:
+            r["rdns"] = rd.get(r["remote"])
+    return {**d, "rows": rows}
+
+
+# ---- rolling windows: serve the previous step while the next one is computed ---------------------------------------
+_ROLL, _ROLL_BUSY, _ROLL_LOCK = {}, set(), threading.Lock()
+
+
+def rolling(sc, name, fn, *extra):
+    """(fn(sc), scope_json) for the scope. For a preset window ending now ("last 24 hours"), when the window steps
+    forward the previous step's result is returned (with its own scope, so numbers and time labels always match) while
+    the new one is computed once in the background; a result more than two steps old is never served. Custom and
+    historical windows are computed directly."""
+    from .dash import QUANTUM
+    if sc.range_key not in QUANTUM:
+        return fn(sc, *extra), scope_json(sc)
+    shape = (name, extra, tuple(s["id"] for s in sc.sites), sc.range_key, sc.cc, sc.host, sc.asn, sc.port, sc.rip)
+    with _ROLL_LOCK:
+        hit = _ROLL.get(shape)
+        if hit and hit["end"] == sc.end:
+            return hit["v"]
+        stale = bool(hit) and 0 < sc.end - hit["end"] <= 2 * QUANTUM[sc.range_key]
+        if stale and shape not in _ROLL_BUSY:
+            _ROLL_BUSY.add(shape)
+            threading.Thread(target=_roll_refresh, args=(shape, sc, fn, extra), daemon=True).start()
+    if stale:
+        return hit["v"]
+    return _roll_compute(shape, sc, fn, extra)
+
+
+def _roll_compute(shape, sc, fn, extra):
+    v = (fn(sc, *extra), scope_json(sc))
+    with _ROLL_LOCK:
+        if len(_ROLL) > 300:
+            _ROLL.clear()
+        if sc.end >= _ROLL.get(shape, {}).get("end", 0):
+            _ROLL[shape] = {"end": sc.end, "v": v}
+    return v
+
+
+def _roll_refresh(shape, sc, fn, extra):
+    try:
+        _roll_compute(shape, sc, fn, extra)
+    except Exception as ex:   # the next request computes it on demand
+        print(f"refresh {shape[0]} {sc.range_key}: {str(ex)[:200]}", flush=True)
+    finally:
+        with _ROLL_LOCK:
+            _ROLL_BUSY.discard(shape)
 
 
 def scope_json(sc):
@@ -348,8 +430,8 @@ def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "
     sc = scope_of(req)
 
     def run():
-        d = dash.servers(sc, limit=500)
-        rows = d["servers"]
+        d, scope = rolling(sc, "servers", servers_traffic)
+        rows = [dict(h) for h in d["servers"]]   # the cached result is shared: annotate copies
         key = {"total": lambda h: h["rx"] + h["tx"], "in": lambda h: h["rx"], "out": lambda h: h["tx"],
                "last": lambda h: h["last"] or 0, "countries": lambda h: h["countries"]}.get(sort, lambda h: h["rx"] + h["tx"])
         rows.sort(key=key, reverse=True)
@@ -366,12 +448,12 @@ def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "
         for h in shown:
             h["public"] = cfg.binat_ext(h["ip"])
         rd = dash.rdns.wait([h["ip"] for h in shown] + [x for h in shown for x in h["public"]] +
-                            [h["top_remote"] for h in shown if h.get("top_remote")], timeout=2.0)
+                            [h["top_remote"] for h in shown if h.get("top_remote")], timeout=LIST_WAIT)
         for h in shown:
             h["rdns"] = rd.get(h["ip"])
             h["public"] = [{"ip": x, "fw": cfg.fw_label(x), "rdns": rd.get(x)} for x in h["public"]]
             h["top_remote_rdns"] = rd.get(h["top_remote"]) if h.get("top_remote") else None
-        return {"ok": True, "scope": scope_json(sc), "rows": shown, "total": len(rows),
+        return {"ok": True, "scope": scope, "rows": shown, "total": len(rows),
                 "page": p, "per": per_, "unattributed_nat_tx": d["unattributed_nat_tx"]}
     return guard(run)
 
@@ -408,9 +490,10 @@ def api_connections(req: Request, page_: int = Query(1, alias="page"), sort: str
     sc = scope_of(req)
     dir = dir if dir in ("in", "out", "unknown") else ""
     proto = proto if proto in ("tcp", "udp", "icmp", "other") else ""
-    return guard(lambda: {"ok": True, "scope": scope_json(sc), "filters": {"dir": dir, "proto": proto},
-                          **dash.conversations(sc, page=max(1, page_), per=50, sort="time" if sort == "time" else "bytes",
-                                               direction=dir, proto=proto)})
+    def run():
+        d, scope = rolling(sc, "connections", connections_traffic, max(1, page_), "time" if sort == "time" else "bytes", dir, proto)
+        return {"ok": True, "scope": scope, "filters": {"dir": dir, "proto": proto}, **fresh_rdns(d)}
+    return guard(run)
 
 
 @app.get("/netmon/api/countries")
@@ -421,14 +504,15 @@ def api_countries(req: Request):
     def run():
         coll = dash.collection(sc)
         pol = set(geo_policy()["countries"])
-        rows = dash.countries(sc)
+        traffic, scope = rolling(sc, "countries", countries_traffic)
+        rows = [dict(r) for r in traffic["countries"]]   # the cached result is shared: annotate copies
         geo = geo_policy()
-        for r in rows:
+        for r in rows:   # the GeoIP policy is live, not per window step
             r["in_policy"] = r["cc"] in pol
             r["blocked_in"], r["blocked_out"] = r["cc"] in geo["blocked_in"], r["cc"] in geo["blocked_out"]
-        return {"ok": True, "scope": scope_json(sc), "collection": coll, "countries": rows, "summary": dash.summary(sc),
-                "alert_countries": alert_countries(), "sites": site_locations(), "home": home_regions(sc, site_locations(), rows), "policy": policy_json(),
-                "policy_sites": policy_sites(sc.sites), "blocks": block_stats(sc)}
+        return {"ok": True, "scope": scope, "collection": coll, "countries": rows, "summary": traffic["summary"],
+                "alert_countries": alert_countries(), "sites": site_locations(), "home": traffic["home"], "policy": policy_json(),
+                "policy_sites": policy_sites(sc.sites), "blocks": traffic["blocks"]}
     return guard(run)
 
 
@@ -441,6 +525,31 @@ def blocks():
         from .geoblocks import Blocks
         _BLOCKS.append(Blocks(cfg, dash.ch, geo_policy, blk.enforcer))
     return _BLOCKS[0]
+
+
+def warm_once(rk, last):
+    """Compute the default (all sites) Overview, Servers, Connections and Countries data for one long range, once per
+    window step, so the first viewer gets cached results instead of waiting for scans over days of raw flows."""
+    sc = dash.scope(site="all", range_key=rk)
+    if last.get(rk) == sc.end:
+        return False
+    last[rk] = sc.end
+    rolling(sc, "overview", overview_traffic)
+    rolling(sc, "servers", servers_traffic)
+    rolling(sc, "countries", countries_traffic)
+    rolling(sc, "connections", connections_traffic, 1, "bytes", "", "")
+    return True
+
+
+def warm_loop(ranges=("24h", "7d"), pause=20):
+    last = {}
+    while True:
+        for rk in ranges:
+            try:
+                warm_once(rk, last)
+            except Exception as ex:   # never affects pages: they compute on demand as before
+                print(f"cache warm-up {rk}: {str(ex)[:200]}", flush=True)
+        time.sleep(pause)
 
 
 def block_stats(sc):
@@ -477,7 +586,7 @@ def api_country_blocks(req: Request, cc: str):
     def run():
         ev = blocks().events(sc.sites, sc.start, sc.end, cc)
         rows = ev.get("rows") or []
-        rd = dash.rdns.wait([r[k] for r in rows for k in ("src", "dst") if r.get(k)], timeout=2.0)
+        rd = dash.rdns.wait([r[k] for r in rows for k in ("src", "dst") if r.get(k)], timeout=LIST_WAIT)
         for r in rows:   # reverse DNS, and the firewall's own addresses named as WAN / WAN alias
             for k in ("src", "dst"):
                 if r.get(k):
@@ -667,7 +776,7 @@ def address_prefix_matches(q):
         rows = dash.q(sc, """
             SELECT ip, sum(b) AS bytes, sum(n) AS flows, toUInt32(max(l)) AS last FROM (
               SELECT replaceOne(IPv6NumToString(if(INB, SrcAddr, DstAddr)), '::ffff:', '') AS ip, Bytes AS b, 1 AS n, TimeReceived AS l
-              FROM flows WHERE has({exps:Array(String)}, ExporterName) AND TimeReceived > now() - INTERVAL 7 DAY AND (INB OR OUTB))
+              FROM flows WHERE ExporterName IN {exps:Array(String)} AND TimeReceived > now() - INTERVAL 7 DAY AND (INB OR OUTB))
             WHERE isIPAddressInRange(ip, {net:String}) AND startsWith(ip, {pre:String})
             GROUP BY ip ORDER BY bytes DESC LIMIT 15""", {"net": str(net), "pre": pre}, ttl=120)
         for r in rows:
@@ -742,7 +851,7 @@ def api_search(req: Request, q: str = ""):
                           {"a": int(asq)}, ttl=3600)
         else:
             rows = dash.q(sc, """SELECT asn, dictGetOrDefault('asns', 'name', toUInt64(asn), '') AS name FROM
-                          (SELECT DISTINCT if(INB, SrcAS, DstAS) AS asn FROM flows_1h0m0s WHERE has({exps:Array(String)}, ExporterName)
+                          (SELECT DISTINCT if(INB, SrcAS, DstAS) AS asn FROM flows_1h0m0s WHERE ExporterName IN {exps:Array(String)}
                            AND TimeReceived > now() - INTERVAL 30 DAY AND (INB OR OUTB))
                           WHERE positionCaseInsensitive(name, {s:String}) > 0 LIMIT 8""", {"s": q}, ttl=600)
         for r in rows:

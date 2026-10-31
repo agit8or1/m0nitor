@@ -233,6 +233,39 @@ def scopebar():
 </div><div id="chips" class="chips"></div>"""
 
 
+_ATTRIB = {"t": 0.0, "v": ""}
+
+
+def geo_attribution():
+    """Footer credits for the GeoIP data actually loaded (licenses require attribution; never credit unused data).
+    Akvorado reads the same country/ASN database volume as the app. Cached 5 min: it runs on every page."""
+    now = time.time()
+    if now - _ATTRIB["t"] < 300 and _ATTRIB["v"]:
+        return _ATTRIB["v"]
+    from . import geocity
+    from .views import blocks
+    try:
+        c = (blocks().geo.provenance().get("database") or "").lower()
+    except Exception:
+        c = ""
+    if "ipinfo" in c:
+        parts = ['Country and ASN data: <a href="https://ipinfo.io" rel="noopener">IP address data powered by IPinfo</a> (CC BY-SA 4.0)']
+    elif "geolite" in c or "maxmind" in c:
+        parts = ['Country data: <a href="https://www.maxmind.com" rel="noopener">GeoLite2 data created by MaxMind</a>']
+    elif c.startswith("csv"):
+        parts = ["Country data: synthetic (demo/offline)"]
+    else:
+        parts = [f"Country data: {e(c)}" if c else "Country data: no database loaded"]
+    city = (geocity.GEO.provenance().get("database") or "")
+    if "dbip" in city.lower():
+        parts.append('City placement: <a href="https://db-ip.com" rel="noopener">IP geolocation by DB-IP</a> (CC BY 4.0)')
+    elif city:
+        parts.append(f"City placement: {e(city)}")
+    parts.append("map: Natural Earth")
+    _ATTRIB.update(t=now, v=" · ".join(parts))
+    return _ATTRIB["v"]
+
+
 def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtitle=""):
     u, r = user_of(req)
     nav = "".join(f'<a href="{href}" class="{"on" if href == active else ""}">{e(name)}</a>'
@@ -249,8 +282,7 @@ def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtit
 <main class="{'wide' if wide else ''}">
 <div class="titlerow"><h1>{e(title)}</h1>{f'<span class="muted">{e(subtitle)}</span>' if subtitle else ''}<span id="scopedesc" class="muted small"></span></div>
 {scopebar() if scoped else '<div id="fresh" class="pill solo">…</div>'}
-{body}<p class="attrib muted small">Country and ASN data: <a href="https://ipinfo.io" rel="noopener">IP address data powered by IPinfo</a>
-(CC BY-SA 4.0) · map: Natural Earth · <a href="/netmon/coverage">what is visible</a> · <a href="/netmon/changelog">v{VERSION}</a></p></main><script src="/netmon/static/common.js?v={ASSET_V}"></script>{scr}</body></html>""", headers=SECURITY_HEADERS)
+{body}<p class="attrib muted small">{geo_attribution()} · <a href="/netmon/coverage">what is visible</a> · <a href="/netmon/changelog">v{VERSION}</a></p></main><script src="/netmon/static/common.js?v={ASSET_V}"></script>{scr}</body></html>""", headers=SECURITY_HEADERS)
 
 
 def sev(s):
@@ -1341,6 +1373,8 @@ def start():
         from .dnsresolve import NameResolver
         NameResolver(cfg, ch, cfg["clickhouse_url"]).start()   # FQDNs for remote addresses from the DNS query log
         threading.Thread(target=health_loop, daemon=True).start()
+        from .views import warm_loop
+        threading.Thread(target=warm_loop, daemon=True).start()
         from .zeek import ZEEK_DIR, ZeekIngest
         if os.path.isdir(ZEEK_DIR):   # optional sensor: only when its log directory is mounted
             ZeekIngest(cfg, cfg["clickhouse_url"]).start()

@@ -10,6 +10,8 @@ import time
 from .dnsresolve import query
 
 POS_MIN, POS_MAX, NEG_TTL, MAX_CACHE = 3600, 86400, 6 * 3600, 50000
+WORKERS = 16        # PTR lookups for Internet addresses often take seconds (slow or missing authoritative servers)
+LIST_WAIT = 0.4     # list pages refresh: names not answered yet show on the next refresh instead of delaying the page
 
 
 class RDNS:
@@ -61,7 +63,7 @@ class RDNS:
         if self.thread is None:
             with self.lock:
                 if self.thread is None:
-                    self.thread = [threading.Thread(target=self._run, daemon=True, name=f"rdns-{i}") for i in range(4)]
+                    self.thread = [threading.Thread(target=self._run, daemon=True, name=f"rdns-{i}") for i in range(WORKERS)]
                     for t in self.thread:
                         t.start()
 

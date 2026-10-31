@@ -285,6 +285,9 @@ def parse_line(line, site_of, device_of=None):
     return "sys_events", {**base, "ts": t, "app": app, "severity": pri & 7, "kind": KIND.get(app, "other"), "message": msg[:2000]}
 
 
+PASS_LINES = 20000   # lines read per pass at most (a backlog is read without pausing)
+PACE = 1.0           # seconds between passes once caught up
+
 class RateLimit:
     """Per-sender cap on lines per *receipt* second (the rsyslog timestamp, so a backlog read after a restart is not
     dropped): a flooding or misconfigured sender cannot starve the others. Drops are counted, never silent."""
@@ -360,9 +363,10 @@ class Ingest:
                 device_of = smap.get
                 per_dev = stats.setdefault("devices", {})
                 limit = self.__dict__.setdefault("_limit", RateLimit(self.cfg.get("syslog_max_lines_per_second", 5000)))
+                lines_before = stats["lines"]
                 with open(cur_file, "r", errors="replace") as fh:
                     fh.seek(offset)
-                    for _ in range(20000):
+                    for _ in range(PASS_LINES):
                         line = fh.readline()
                         if not line or not line.endswith("\n"):
                             break
@@ -424,6 +428,8 @@ class Ingest:
                 set_state(conn, "ingest", {**stats, "files": len(files), "file": os.path.basename(cur_file)})
                 if not moved:
                     time.sleep(2)
+                elif stats["lines"] - lines_before < PASS_LINES:
+                    time.sleep(PACE)   # caught up: one insert per table per second, not one per few lines (fewer parts)
             except Exception as ex:
                 stats["errors"] += 1
                 stats["error"] = str(ex)[:300]

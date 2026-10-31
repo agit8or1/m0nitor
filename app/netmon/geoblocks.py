@@ -158,7 +158,7 @@ def aggregate(rows, ours_by_site, geo_rids, lookup):
 
 
 BLOCK_SQL = """
-SELECT site, rid, iface, IPv6NumToString(src) AS src, IPv6NumToString(dst) AS dst,
+SELECT site, rid, iface, replaceOne(IPv6NumToString(src), '::ffff:', '') AS src, replaceOne(IPv6NumToString(dst), '::ffff:', '') AS dst,
        count() AS events, sum(length) AS bytes, countIf(length = 0) AS nolen, toUInt32(max(ts)) AS last
 FROM (SELECT DISTINCT site, ts, rid, iface, dir, src, dst, sport, dport, proto, length, tcpflags FROM netmon.fw_events
       WHERE has({sites:Array(String)}, site) AND action IN ('block', 'reject')
@@ -171,6 +171,7 @@ class Blocks:
         self.cfg, self.ch, self.geo_policy, self.enforcer = cfg, ch, geo_policy, enforcer
         self.geo = Geo()
         self._cache, self._rules, self._lock = {}, {}, threading.Lock()
+        self._latest, self._inflight = {}, set()   # newest result per (sites, window length); refreshes running
 
     # ---- firewall rule list: which block rules log (logging coverage) and rule names for drill-down ----
     def rules(self, site):
@@ -221,12 +222,37 @@ class Blocks:
         return out
 
     def stats(self, sites, t0, t1):
-        """Per-country logged blocks for the sites and window, cached 60 s (the map hover reads this one result)."""
+        """Per-country logged blocks for the sites and window (the map hover reads this one result).
+        Cached for the window's life. For a rolling window ending now, the previous step's result is served while the
+        new one is computed in the background (it carries its own `window`), so a page never waits on the window
+        rolling over; historical windows are always computed exactly."""
         key = (tuple(s["id"] for s in sites), t0 // 60, t1 // 60)
+        ttl = 300 if t1 - t0 > 86400 else 120 if t1 - t0 > 21600 else 60   # long windows: matches the scope rounding
+        skey = (key[0], (t1 - t0) // 60)
+        now = time.time()
         with self._lock:
             hit = self._cache.get(key)
-            if hit and time.time() - hit["t"] < 60:
+            if hit and now - hit["t"] < ttl:
                 return hit["v"]
+            prev = self._latest.get(skey) if now - t1 < 2 * ttl else None
+            if prev and now - prev["t"] < 3 * ttl:
+                if key not in self._inflight:
+                    self._inflight.add(key)
+                    threading.Thread(target=self._refresh, args=(sites, t0, t1), daemon=True).start()
+                return prev["v"]
+        return self._compute(sites, t0, t1)
+
+    def _refresh(self, sites, t0, t1):
+        try:
+            self._compute(sites, t0, t1)
+        except Exception:
+            pass   # the next request computes it on demand
+        finally:
+            with self._lock:
+                self._inflight.discard((tuple(s["id"] for s in sites), t0 // 60, t1 // 60))
+
+    def _compute(self, sites, t0, t1):
+        key = (tuple(s["id"] for s in sites), t0 // 60, t1 // 60)
         geo_rids = set()
         for s in sites:
             try:
@@ -256,6 +282,9 @@ class Blocks:
             if len(self._cache) > 50:
                 self._cache.clear()
             self._cache[key] = {"t": time.time(), "v": v}
+            skey = (key[0], (t1 - t0) // 60)
+            if t1 >= self._latest.get(skey, {}).get("end", 0):
+                self._latest[skey] = {"t": time.time(), "v": v, "end": t1}
         return v
 
     def public(self, v):

@@ -15,13 +15,24 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from .rdns import LIST_WAIT
 from .core import PROTO, expand_flow_sql, flow_predicates
 
 IPS = "replaceOne(IPv6NumToString({c}), '::ffff:', '')"
 REMOTE_IP = IPS.format(c="if(INB, SrcAddr, DstAddr)")
 LOCAL_IP = IPS.format(c="if(INB, DstAddr, SrcAddr)")
 PUBS = "(SELECT arrayJoin(arrayMap(x -> toIPv6(concat('::ffff:', x)), {pubs:Array(String)})))"
+
+
+def ip_set(col, param):
+    """`col IN <address list parameter>` on the raw IPv6 column. The list is converted once (entries that are not IP
+    addresses are skipped). Formatting every row's address to a string for has() was 5-6x slower."""
+    return (f"{col} IN (SELECT toIPv6(x) FROM (SELECT arrayJoin({{{param}:Array(String)}}) AS x) "
+            f"WHERE isIPv4String(x) OR isIPv6String(x))")
 PRESETS = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800}
+# Window end rounding per preset (seconds). A query bound to the window is reusable for the window's whole life, so
+# long ranges (minutes of CPU over raw flows) are computed once per step instead of once per viewer and refresh.
+QUANTUM = {"15m": 10, "1h": 30, "6h": 60, "24h": 120, "7d": 300}
 MAX_SPAN = 31 * 86400
 MGMT_PORTS = {21, 22, 23, 3389, 5900, 8006, 8007, 10000, 2222, 9090}
 META = json.load(open(os.path.join(os.path.dirname(__file__), "static", "countries-meta.json")))
@@ -108,7 +119,8 @@ class Dash:
     # ---- scope -------------------------------------------------------------
     def scope(self, site="all", range_key="15m", start=None, end=None, cc="", host="", asn="", port="", rip=""):
         sites = [s for s in self.cfg["sites"] if site in ("all", "", s["id"])] or self.cfg["sites"]
-        now = int(time.time()) // 10 * 10   # quantized so concurrent viewers share the query cache
+        step = QUANTUM.get(range_key, 10)
+        now = int(time.time()) // step * step   # quantized so concurrent viewers share the query cache
         if range_key == "custom" and start and end:
             start, end = int(start), int(end)
             end = min(end, now)
@@ -139,7 +151,7 @@ class Dash:
 
     def where(self, sc: Scope, table="flows"):
         """WHERE clause for the WAN accounting boundary + scope filters."""
-        w = ["has({exps:Array(String)}, ExporterName)",
+        w = ["ExporterName IN {exps:Array(String)}",
              "TimeReceived >= toDateTime({t0:UInt32}) AND TimeReceived < toDateTime({t1:UInt32})",
              "(INB OR OUTB)"]
         if sc.cc:
@@ -150,13 +162,13 @@ class Dash:
             if sc.host:
                 # exact for inbound; outbound only where a port-forward reply maps uniquely to this host
                 # outbound is exact for a 1:1 NAT address (every port is this host's)
-                w.append(f"((INB AND TOLAN AND {IPS.format(c='DstAddr')} = {{host:String}}) OR "
-                         f"(OUTB AND has({{hbin:Array(String)}}, {IPS.format(c='SrcAddr')})) OR "
+                w.append(f"((INB AND TOLAN AND DstAddr = toIPv6({{host:String}})) OR "
+                         f"(OUTB AND {ip_set('SrcAddr', 'hbin')}) OR "
                          f"(OUTB AND SrcAddr IN {PUBS} AND has({{hexp:Array(Tuple(String, UInt16))}}, ({IPS.format(c='SrcAddr')}, SrcPort))))")
             if sc.port:
                 w.append("(SrcPort = {port:UInt16} OR DstPort = {port:UInt16})")
             if sc.rip:
-                w.append(f"{REMOTE_IP} = {{rip:String}}")
+                w.append("if(INB, SrcAddr, DstAddr) = toIPv6({rip:String})")
         return " AND ".join(w)
 
     def _fqdns(self, rows, sc):
@@ -173,6 +185,8 @@ class Dash:
     def q(self, sc: Scope, s: str, extra=None, ttl=10):
         macros, fp = flow_predicates(self.cfg, sc.sites)
         sql = expand_flow_sql(s, macros)
+        if "{t0:" in sql:   # bound to the scope window (not to now()): valid for as long as the window is current
+            ttl = max(ttl, QUANTUM.get(sc.range_key, 10))
         p = {**self.params(sc), **fp, **(extra or {})}
         key = (sql, json.dumps(p, sort_keys=True, default=str))
         now = time.time()
@@ -195,7 +209,7 @@ class Dash:
     # ---- collection state -------------------------------------------------------
     def collection(self, sc: Scope):
         r = self.q(sc, "SELECT toUInt32(min(TimeReceived)) AS first, toUInt32(max(TimeReceived)) AS last, "
-                       "countIf(TimeReceived > now() - 300) AS f5 FROM flows WHERE has({exps:Array(String)}, ExporterName)", ttl=5)[0]
+                       "countIf(TimeReceived > now() - 300) AS f5 FROM flows WHERE ExporterName IN {exps:Array(String)}", ttl=5)[0]
         last = r["last"] or None
         return {"first": r["first"] or None, "last": last, "age": (time.time() - last) if last else None,
                 "flows_5m": int(r["f5"])}
@@ -292,7 +306,7 @@ class Dash:
             SELECT {REMOTE_IP} AS ip, sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b, count() AS flows,
                    topKWeighted(1)({LOCAL_IP}, toUInt64(Bytes * SamplingRate)) AS loc
             FROM flows WHERE {self.where(sc)} AND if(INB, SrcCountry, DstCountry) = {{cc:String}}
-            GROUP BY ip ORDER BY in_b + out_b DESC LIMIT {{l:UInt32}}""", {"cc": cc, "l": limit}, ttl=60)
+            GROUP BY if(INB, SrcAddr, DstAddr) ORDER BY in_b + out_b DESC LIMIT {{l:UInt32}}""", {"cc": cc, "l": limit}, ttl=60)
         return [{"ip": r["ip"], "cc": cc, "in_b": int(r["in_b"]), "out_b": int(r["out_b"]), "flows": int(r["flows"]),
                  "pair": self._rpair(r["ip"], r["loc"], r["in_b"], r["out_b"], r["flows"])} for r in rows]
 
@@ -307,7 +321,7 @@ class Dash:
         plus any flow with a remote peer the finding names. Per remote, per country (map) and per destination port."""
         cond = [f"if(INB, {IPS.format(c='DstAddr')}, {IPS.format(c='SrcAddr')}) = {{subj:String}}"] if subject else []
         if peers:
-            cond.append(f"has({{peers:Array(String)}}, {REMOTE_IP})")
+            cond.append(ip_set("if(INB, SrcAddr, DstAddr)", "peers"))
         if not cond:
             return {"remotes": [], "countries": [], "ports": []}
         w = f"{self.where(sc)} AND ({' OR '.join(cond)})"
@@ -317,16 +331,16 @@ class Dash:
                    sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b, count() AS flows,
                    topK(8)(DstPort) AS ports, any(Proto) AS proto, topKWeighted(1)({LOCAL_IP}, toUInt64(Bytes * SamplingRate)) AS loc,
                    min(toUnixTimestamp(TimeReceived)) AS first, max(toUnixTimestamp(TimeReceived)) AS last
-            FROM flows WHERE {w} GROUP BY ip ORDER BY has({{peers:Array(String)}}, ip) DESC, in_b + out_b DESC LIMIT 40""", x, ttl=60)   # named peers first, never cut off
+            FROM flows WHERE {w} GROUP BY if(INB, SrcAddr, DstAddr) ORDER BY has({{peers:Array(String)}}, ip) DESC, in_b + out_b DESC LIMIT 40""", x, ttl=60)   # named peers first, never cut off
         ports = self.q(sc, f"""
-            SELECT DstPort AS port, Proto AS proto, count() AS flows, uniqExact({REMOTE_IP}) AS remotes,
+            SELECT DstPort AS port, Proto AS proto, count() AS flows, uniqExact(if(INB, SrcAddr, DstAddr)) AS remotes,
                    sum(Bytes * SamplingRate) AS b, countIf(INB) AS in_flows, countIf(OUTB) AS out_flows,
                    if(Proto = 6, dictGetOrDefault('tcp', 'name', toUInt64(DstPort), ''),
                       if(Proto = 17, dictGetOrDefault('udp', 'name', toUInt64(DstPort), ''), '')) AS svc
             FROM flows WHERE {w} GROUP BY port, proto ORDER BY flows DESC LIMIT 30""", x, ttl=60)
         cc = self.q(sc, f"""
             SELECT if(INB, SrcCountry, DstCountry) AS cc, sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b,
-                   count() AS flows, uniq({REMOTE_IP}) AS peers, topK(1)(if(INB, SrcAS, DstAS)) AS top_as
+                   count() AS flows, uniq(if(INB, SrcAddr, DstAddr)) AS peers, topK(1)(if(INB, SrcAS, DstAS)) AS top_as
             FROM flows WHERE {w} GROUP BY cc ORDER BY in_b + out_b DESC LIMIT 250""", x, ttl=60)
         out_r = [{"ip": r["ip"], "cc": (r["cc"] or "").strip("\x00") or "??", "asn": int(r["asn"] or 0), "in_b": int(r["in_b"]), "out_b": int(r["out_b"]),
                   "flows": int(r["flows"]), "ports": sorted({int(p) for p in r["ports"]}), "proto": PROTO.get(int(r["proto"] or 0), str(r["proto"])),
@@ -369,7 +383,7 @@ class Dash:
         exp = tuples(sorted({(e.public_ip, p) for e in self.cfg.exposures for p in range(e.lo, e.hi + 1) if e.public_ip not in bins}))
         btx = self.q(sc, f"""
             SELECT {IPS.format(c='SrcAddr')} AS src, sum(Bytes * SamplingRate) AS tx, toUInt32(max(TimeReceived)) AS last
-            FROM flows WHERE {self.where(sc)} AND OUTB AND has({{bins:Array(String)}}, {IPS.format(c='SrcAddr')})
+            FROM flows WHERE {self.where(sc)} AND OUTB AND {ip_set('SrcAddr', 'bins')}
             GROUP BY SrcAddr""", {"bins": sorted(bins)}) if bins else []
         tx = self.q(sc, f"""
             SELECT {IPS.format(c='SrcAddr')} AS src, SrcPort AS sport, Proto AS proto, sum(Bytes * SamplingRate) AS tx,
@@ -431,7 +445,7 @@ class Dash:
                 SELECT toStartOfMinute(TimeReceived) AS m, toStartOfFiveMinutes(TimeReceived) AS b5, DstAddr AS x, DstPort AS p, Proto AS pr,
                        sum(Bytes * SamplingRate) AS bytes,
                        countIf(Proto = 6 AND bitAnd(TCPFlags, 2) != 0 AND bitAnd(TCPFlags, 16) = 0) AS syn_only
-                FROM flows WHERE {self.where(sc)} AND OUTB AND has({{nat:Array(String)}}, {IPS.format(c='SrcAddr')})
+                FROM flows WHERE {self.where(sc)} AND OUTB AND {ip_set('SrcAddr', 'nat')}
                 GROUP BY m, b5, x, p, pr),
             r1 AS ({ret("toStartOfMinute(TimeReceived)")}),
             r5 AS ({ret("toStartOfFiveMinutes(TimeReceived)")}),
@@ -543,7 +557,7 @@ class Dash:
             r["remote_name"] = self.cfg.label(r["remote"])
         self._names(rows, "asn", "asname", sc)
         self._fqdns(rows, sc)
-        rd = self.rdns.wait([r["remote"] for r in rows], timeout=2.0)   # reverse DNS: "" = no PTR, None = not answered yet
+        rd = self.rdns.wait([r["remote"] for r in rows], timeout=LIST_WAIT)   # reverse DNS: "" = no PTR, None = not answered yet
         for r in rows:
             r["rdns"] = rd.get(r["remote"])
         ports = sorted({(r["proto"], r["svc_port"]) for r in rows if r["svc_port"]})
@@ -567,14 +581,14 @@ class Dash:
         rows = self.q(sc, f"""
             SELECT 'country' AS kind, SrcCountry AS v FROM flows
             WHERE {self.where(sc)} AND INB AND TOLAN AND SrcCountry != ''
-              AND SrcCountry NOT IN (SELECT SrcCountry FROM flows WHERE has({{exps:Array(String)}}, ExporterName)
+              AND SrcCountry NOT IN (SELECT SrcCountry FROM flows WHERE ExporterName IN {{exps:Array(String)}}
                     AND TimeReceived >= toDateTime({{b0:UInt32}}) AND TimeReceived < toDateTime({{t0:UInt32}})
                     AND INB AND TOLAN AND {IPS.format(c='DstAddr')} = {{host:String}})
             GROUP BY v
             UNION ALL
             SELECT 'asn' AS kind, toString(SrcAS) AS v FROM flows
             WHERE {self.where(sc)} AND INB AND TOLAN AND SrcAS != 0
-              AND SrcAS NOT IN (SELECT SrcAS FROM flows WHERE has({{exps:Array(String)}}, ExporterName)
+              AND SrcAS NOT IN (SELECT SrcAS FROM flows WHERE ExporterName IN {{exps:Array(String)}}
                     AND TimeReceived >= toDateTime({{b0:UInt32}}) AND TimeReceived < toDateTime({{t0:UInt32}})
                     AND INB AND TOLAN AND {IPS.format(c='DstAddr')} = {{host:String}})
             GROUP BY v LIMIT 100""", p)

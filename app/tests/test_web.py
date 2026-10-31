@@ -476,3 +476,22 @@ def test_features_card_names_the_geoip_databases_actually_loaded(monkeypatch):
     monkeypatch.setattr(geo, "provenance", lambda: {"database": None, "error": "No such file"})
     monkeypatch.setattr(geocity.GEO, "provenance", lambda: {"database": "DBIP-City-Lite", "built": "2026-10-01"})
     assert views.geo_sources() == "no country database: No such file · DBIP-City-Lite (city placement, built 2026-10-01)"
+
+
+def test_footer_credits_only_the_geoip_data_loaded(monkeypatch):
+    from netmon import geocity, views
+    geo = views.blocks().geo
+
+    def footer(country, city):
+        web._ATTRIB.update(t=0.0, v="")
+        monkeypatch.setattr(geo, "provenance", lambda: {"database": country})
+        monkeypatch.setattr(geocity.GEO, "provenance", lambda: {"database": city})
+        return web.geo_attribution()
+    f = footer("ipinfo generic_country_free.mmdb", "DBIP-City-Lite")
+    assert "powered by IPinfo" in f and "IP geolocation by DB-IP" in f and "CC BY 4.0" in f
+    f = footer("csv (synthetic/offline)", None)
+    assert "synthetic" in f and "IPinfo" not in f and "DB-IP" not in f
+    assert "MaxMind" in footer("GeoLite2-Country", None)
+    assert "no database loaded" in footer(None, None)
+    monkeypatch.setattr(geo, "provenance", lambda: {"database": "ipinfo x"})
+    assert "no database loaded" in web.geo_attribution()      # cached for 5 min: no per-page database work

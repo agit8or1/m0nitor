@@ -879,7 +879,7 @@ def site_health():
     exp = [x["exporter"] for x in cfg.sites]
     try:
         flows = {r["e"]: r["t"] for r in dash.ch.query(
-            "SELECT ExporterName AS e, toUInt32(max(TimeReceived)) AS t FROM flows WHERE has({exps:Array(String)}, ExporterName) "
+            "SELECT ExporterName AS e, toUInt32(max(TimeReceived)) AS t FROM flows WHERE ExporterName IN {exps:Array(String)} "
             "AND TimeReceived > now() - INTERVAL 7 DAY GROUP BY e", {"exps": exp})}
         logs = {r["s"]: r["t"] for r in dash.ch.query(
             "SELECT site AS s, toUInt32(max(m)) AS t FROM (SELECT site, max(received) AS m FROM netmon.fw_events GROUP BY site "
