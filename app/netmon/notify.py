@@ -18,6 +18,7 @@ from email.message import EmailMessage
 
 import httpx
 
+from . import secretbox
 from .core import audit, get_setting
 
 SEV = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -184,7 +185,7 @@ class Notifier:
         err = ""
         for attempt in range(1, 5):
             try:
-                send(ch["type"], json.loads(ch["config"]), msg)
+                send(ch["type"], channel_config(ch), msg)
                 self._log(ch, alert_id, kind, "delivered", attempt)
                 return "delivered"
             except Exception as ex:
@@ -214,7 +215,7 @@ class Notifier:
             msg = {"title": "netmon daily summary", "severity": "info", "text": text, "link": f"{self.base}/netmon/security", "test": False}
             for ch in conn.execute("SELECT * FROM channels WHERE enabled=1 AND summary_daily=1").fetchall():
                 try:
-                    send(ch["type"], json.loads(ch["config"]), msg)
+                    send(ch["type"], channel_config(ch), msg)
                     conn.execute("INSERT INTO deliveries(ts,channel_id,channel,kind,status,attempts) VALUES (?,?,?,?,?,1)",
                                  (time.time(), ch["id"], ch["name"], "summary", "delivered"))
                 except Exception as ex:
@@ -246,6 +247,14 @@ def _smtp(c, subject, body):
         if c.get("username"):
             s.login(c["username"], c.get("password", ""))
         s.send_message(msg)
+
+
+def channel_config(ch) -> dict:
+    """A channel's settings and credentials (sealed in the database, see netmon.secretbox)."""
+    text = secretbox.reveal(ch["config"], "channel")
+    if text is None:
+        raise RuntimeError("channel credentials cannot be decrypted (master key missing or changed); re-create the channel")
+    return json.loads(text)
 
 
 def send(kind, c, m):

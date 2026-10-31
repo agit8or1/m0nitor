@@ -15,8 +15,10 @@ Local users with roles viewer / analyst / admin, optional TOTP 2FA (can be requi
 HttpOnly + Secure + SameSite, CSRF tokens on every form.
 
 ## Secrets
-Files only (see .env.example). Never in config.yaml, logs, URLs or the UI after entry. Rotate the firewall API key if
-it is ever exposed; the app re-reads key files without a restart.
+Never in config.yaml, logs, URLs or the UI after entry. Stored credentials (UI-entered key files, notification channel
+credentials, TOTP seeds) are encrypted at rest with AES-256-GCM under a master key kept outside the data directory;
+see [configuration.md](configuration.md#secrets-at-rest) for the key, sealing operator files, rotation and limits.
+Rotate the firewall API key if it is ever exposed; the app re-reads key files without a restart.
 
 ## Data and retention (defaults)
 Raw flows 30 days, 1-minute 7 days, 5-minute 90 days, 1-hour 1 year (Akvorado); firewall events 14 days, IDS 90 days,

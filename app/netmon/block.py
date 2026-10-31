@@ -13,12 +13,12 @@ list is read, changed and written back under a per-site lock.
 """
 import ipaddress
 import json
-import os
 import ssl
 import time
 
 import httpx
 
+from . import secretbox
 from .core import audit
 
 
@@ -51,9 +51,9 @@ def validate_target(cfg, address: str) -> str:
 
 
 def read_key(path):
-    if not path or not os.path.exists(path):
+    text = secretbox.read_file(path)
+    if not text:
         return None
-    text = open(path).read().strip()
     if "secret=" in text:  # OPNsense apikey.txt download: key=...\nsecret=...
         kv = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
         return (kv.get("key", ""), kv.get("secret", ""))

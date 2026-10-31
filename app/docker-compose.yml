@@ -1,7 +1,7 @@
 services:
   netmon-app:
     build: .
-    image: netmon-app:1.25   # = netmon/__init__.py __version__ (tests/test_version.py)
+    image: netmon-app:1.26   # = netmon/__init__.py __version__ (tests/test_version.py)
     restart: unless-stopped
     read_only: true
     group_add: ["10001"]
@@ -15,6 +15,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       - ../data:/data
       - ../secrets:/run/secrets:ro
+      - ../keys:/run/keys:ro      # master key for secrets at rest (netmon.secretbox), kept out of data/
       - /var/log/netmon:/var/log/netmon:ro   # rsyslog-written OPNsense logs (group netmon, gid 10001)
       - akvorado-geoip:/usr/share/GeoIP:ro      # the IPinfo country database Akvorado enriches flows with (same source for block events)
       - zeek-logs:/var/log/zeek:ro              # optional Zeek sensor's JSON logs (empty until the zeek profile runs)

@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 
+from . import secretbox
 from .core import db_connect, set_state
 
 OID_IN = ".1.3.6.1.2.1.31.1.1.1.6."    # ifHCInOctets
@@ -41,10 +42,10 @@ def auth_args(cred):
     if isinstance(cred, str):
         return ["-v2c", "-c", cred]
     if cred.get("version", "v2c") == "v3":
-        sec = json.load(open(cred["v3_file"]))
+        sec = json.loads(secretbox.read_file(cred["v3_file"]) or "{}")
         return ["-v3", "-l", "authPriv", "-u", cred["user"], "-a", cred.get("auth_proto", "SHA"), "-A", sec["auth"],
                 "-x", cred.get("priv_proto", "AES"), "-X", sec["priv"]]
-    return ["-v2c", "-c", open(cred["community_file"]).read().strip()]
+    return ["-v2c", "-c", secretbox.read_file(cred["community_file"]) or ""]
 
 
 def snmp_get(host, cred, oids, timeout=3):
@@ -121,7 +122,7 @@ class Poller:
         last_prune = 0
         while True:
             for site, sn in self.targets():
-                comm = open(sn["community_file"]).read().strip() if sn.get("version", "v2c") == "v2c" else sn
+                comm = (secretbox.read_file(sn["community_file"]) or "") if sn.get("version", "v2c") == "v2c" else sn
                 for name, idx in sn["interfaces"].items():
                     try:
                         vin, vout, speed = snmp_get(sn["host"], comm, [OID_IN + str(idx), OID_OUT + str(idx), OID_SPEED + str(idx)])

@@ -15,6 +15,7 @@ guessing on web-1, an NXDOMAIN/random-label burst and firewall configuration cha
 Additional devices (Settings -> Devices): a FortiGate and a PAN-OS firewall whose synthetic log lines go through the
 app's real parsers, and a generic switch sending sFlow-style samples and an interface flap.
 """
+import base64
 import ipaddress
 import json
 import os
@@ -463,6 +464,11 @@ def write_files():
         with open(pw_file, "w") as fh:
             fh.write(secrets.token_urlsafe(18))
         os.chmod(pw_file, 0o640)
+    key_file = os.path.join(SECRETS, "master.key")   # secrets at rest (netmon.secretbox); demo-only key, own volume
+    if not os.path.exists(key_file):
+        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(base64.b64encode(os.urandom(32)).decode())
 
 
 def seed_db():

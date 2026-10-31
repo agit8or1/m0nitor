@@ -3,11 +3,12 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import secrets
 import struct
 import time
 from urllib.parse import quote
+
+from . import secretbox
 
 SESSION_COOKIE = "netmon_session"
 SESSION_TTL = 12 * 3600
@@ -62,6 +63,15 @@ def totp_check(secret: str, code: str, last_counter: int = 0, now=None, window=1
     return None
 
 
+def totp_seal(secret: str, username: str) -> str:
+    return secretbox.seal(secret, "totp:" + username)
+
+
+def totp_secret_of(stored, username: str):
+    """The TOTP seed from the users table (sealed, or legacy plaintext until the startup migration seals it)."""
+    return secretbox.reveal(stored, "totp:" + username) if stored else None
+
+
 def totp_uri(secret: str, username: str, issuer="netmon") -> str:
     return f"otpauth://totp/{quote(issuer)}:{quote(username)}?secret={secret}&issuer={quote(issuer)}&algorithm=SHA1&digits=6&period=30"
 
@@ -88,7 +98,7 @@ def verify_second_factor(conn, username: str, code: str) -> str | None:
     u = conn.execute("SELECT totp_secret, totp_last FROM users WHERE username=? AND totp_enabled=1", (username,)).fetchone()
     if not u:
         return None
-    c = totp_check(u["totp_secret"], code, u["totp_last"] or 0)
+    c = totp_check(totp_secret_of(u["totp_secret"], username), code, u["totp_last"] or 0)
     if c is not None:
         conn.execute("UPDATE users SET totp_last=? WHERE username=?", (c, username))
         conn.commit()
@@ -145,9 +155,9 @@ def bootstrap_admin(conn, password_file: str):
     """Create the first admin from a secret file if no users exist."""
     if conn.execute("SELECT count(*) FROM users").fetchone()[0]:
         return False
-    if not os.path.exists(password_file):
+    pw = secretbox.read_file(password_file)
+    if not pw:
         return False
-    pw = open(password_file).read().strip()
     if password_problem(pw):
         return False
     conn.execute("INSERT INTO users(username,pw_hash,role,created_at) VALUES (?,?,?,?)",

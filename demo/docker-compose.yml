@@ -24,6 +24,7 @@ services:
       NETMON_DB: /data/netmon.db
       NETMON_GEOIP_DB: /demo-data/geoip.csv
       NETMON_ADMIN_PASSWORD_FILE: /run/demo/admin_password
+      NETMON_MASTER_KEY_FILE: /run/demo/master.key
       DEMO_DAYS: "4"
     volumes: &vols
       - ./:/demo:ro
