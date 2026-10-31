@@ -311,23 +311,17 @@ const NMMap = (() => {
         .on("pointermove", (ev, t) => !pinned && show(ev, pointTip(t.c, null))).on("pointerleave", hide)
         .on("click", (ev, t) => pick(t));
 
-      // local ring: inbound share teal, outbound share purple, thickness = volume (its own, larger scale: it is often most traffic)
+      // home-country / near-site traffic has no arc and no ring (the ring hid the site): an invisible hover target on the
+      // site dot keeps its tooltip, and the numbers are in the label under the site name.
       gL.selectAll("*").remove();
       const homeC = homeCc && last.byCc[homeCc];
-      if (p0 && tin + tout > 0) {
-        const t = Math.max(3, d3.scaleSqrt().domain([0, maxV]).range([0, 11])(Math.max(tin, tout))), r0 = 11, split = 2 * Math.PI * tin / (tin + tout);
-        const arc = d3.arc().innerRadius(r0).outerRadius(r0 + t);
-        const gg = gL.append("g").attr("transform", `translate(${p0[0]},${p0[1]})`);
-        if (tin) gg.append("path").attr("class", "local-in").attr("d", arc({ startAngle: 0, endAngle: split }));
-        if (tout) gg.append("path").attr("class", "local-out").attr("d", arc({ startAngle: split, endAngle: 2 * Math.PI }));
-        gg.append("circle").attr("class", "localhit").attr("r", r0 + t + 3)
+      if (p0 && tin + tout > 0)
+        gL.append("circle").attr("class", "localhit").attr("cx", p0[0]).attr("cy", p0[1]).attr("r", 9)
           .on("pointermove", (ev) => !pinned && show(ev, localTip(local))).on("pointerleave", hide)
           .on("click", () => { unpin(); if (onSelect && homeCc) onSelect(homeCc); });
-        local.r = r0 + t;
-      }
       gS.selectAll("*").remove();
       for (const s of sites) { const [x, y] = proj([s.lon, s.lat]);
-        const dx = 10 + (s === home && local.r ? local.r : 4);
+        const dx = 10;
         gS.append("circle").attr("class", "site").attr("cx", x).attr("cy", y).attr("r", 5).attr("vector-effect", "non-scaling-stroke").style("pointer-events", "none");
         gS.append("text").attr("class", "site-t").attr("x", x + dx).attr("y", y + 1).text(s.name);
         // the site's own country in numbers: it is usually most of the traffic and has no arc of its own
@@ -374,8 +368,6 @@ const NMMap = (() => {
         el("span", { class: "item" }, el("span", { class: "arcsw in" }), "Inbound"),
         el("span", { class: "item" }, el("span", { class: "arcsw out" }), "Outbound"),
         el("span", { class: "item" }, el("span", { class: "lgdot site" }), "Site"),
-        tin + tout ? el("span", { class: "item", title: "Traffic with endpoints next to the site or in its own country without a city location: drawn as a ring, not an arc" },
-          el("span", { class: "lgdot local" }), `Near site / same country${local.items.length ? ` (${[...new Set(local.items.map((x) => x.c.cc))].join(", ")})` : ""}`) : null,
         shownP.some((t) => t.c.named) ? el("span", { class: "item", title: "Remote address this finding's evidence names" }, el("span", { class: "lgdot pt named" }), "Named in evidence") : null,
         shownP.length ? el("span", { class: "item", title: CITY }, el("span", { class: "lgdot pt" }), data.points ? "Endpoint (by city)" : `${cname(homeCc)} region (by city)`) : null,
         arcs.some((a) => a.blocked) ? el("span", { class: "item" }, el("span", { class: "arcsw blk" }), "Blocked by firewall (no flows)") : null,
@@ -391,8 +383,8 @@ const NMMap = (() => {
         el("p", { text: "Countries are counted by country-level GeoIP (the database Akvorado uses) and drawn at their centroid. " +
           (pts.length ? `${data.points ? "Endpoints" : `In ${cname(homeCc)}, the busiest endpoints`} are placed by city-level GeoIP (DB-IP Lite) — usually the ISP's registered city, so approximate` +
             (data.home && !data.points && data.home.covered ? `; regions cover ${Math.round(data.home.covered * 100)}% of ${cname(homeCc)} bytes` +
-              (data.home.disputed > 0.05 ? `, and ${Math.round(data.home.disputed * 100)}% stays in the ring because the city database puts those addresses in another country (usually anycast CDNs, which have no single location)` : "") : "") + ". " : "") +
-          (tin + tout ? "The ring around the site is traffic with endpoints next to it, or in its own country with no city location — not a loop and not traffic returning to the site. " : "") +
+              (data.home.disputed > 0.05 ? `, and ${Math.round(data.home.disputed * 100)}% has no arc because the city database puts those addresses in another country (usually anycast CDNs, which have no single location)` : "") : "") + ". " : "") +
+          (tin + tout ? "Traffic with endpoints next to the site, or in its own country with no city location, has no arc — hover the site to see it. " : "") +
           (home ? `${home.name}: ${home.source}.` : "") }),
         el("p", { text: (rest.length ? `${rest.length} more countries (${fmtBytes(restB)}) appear as shading only. ` : "") +
           (restP.length ? `${restP.length} more ${data.points ? "endpoints" : "regions"} (${fmtBytes(d3.sum(restP, (x) => x.v))}) are not drawn. ` : "") +
