@@ -5,12 +5,18 @@ services:
     # switching the Proxmox CPU type to x86-64-v3/host.
     image: clickhouse/clickhouse-server:26.3
   akvorado-inlet:
-    # NetFlow v9 only. Host firewall (DOCKER-USER) limits sources to exporters.
+    # NetFlow/IPFIX/sFlow. Host firewall (DOCKER-USER) limits sources to exporters.
     ports: !override
+      # BEGIN netmon-ports
       - 2055:2055/udp
+      - 4739:4739/udp
+      - 6343:6343/udp
+      # END netmon-ports
   akvorado-outlet:
     ports: !reset []
   traefik:
+    # Pinned patch release (v3.7.17: no fixable HIGH/CRITICAL CVEs at the time of pinning).
+    image: traefik:v3.7.17
     # Console only reachable via Caddy (TLS + auth) on 443.
     ports: !override
       - 127.0.0.1:8080:8080/tcp
@@ -22,3 +28,21 @@ services:
   kafka-ui:
     # Unauthenticated admin tool; not needed in production.
     profiles: [disabled]
+  # Security: upstream images plus Alpine package updates (brotli, libexpat, ...) until upstream rebuilds them.
+  # Refresh when a scan shows fixable CVEs: docker compose build --pull kafka geoip && docker compose up -d kafka geoip
+  kafka:
+    image: netmon/kafka:4.3.2-patched
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM apache/kafka:4.3.2
+        USER root
+        RUN apk upgrade --no-cache
+        USER appuser
+  geoip:
+    image: netmon/ipinfo-geoipupdate:patched
+    build: !override
+      context: .
+      dockerfile_inline: |
+        FROM quay.io/akvorado/ipinfo-geoipupdate:latest
+        RUN apk upgrade --no-cache
