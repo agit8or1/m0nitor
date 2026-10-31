@@ -70,17 +70,46 @@ TABLES = {
         `site` LowCardinality(String), `host` LowCardinality(String), `sender` IPv6, `app` LowCardinality(String),
         `event` LowCardinality(String), `user` String, `src` IPv6, `method` LowCardinality(String), `message` String CODEC(ZSTD(3)))
         ENGINE = MergeTree PARTITION BY toYYYYMM(ts) ORDER BY (site, host, ts) TTL toDateTime(ts) + toIntervalDay(90)""",
+    # normalized events from vendor parsers (schema = parsers.EVENT_SCHEMA); traffic decisions go to fw_events,
+    # IDS to ids_events, logins also to auth_events. Unknown values stay empty: never guessed.
+    "events": """CREATE TABLE IF NOT EXISTS netmon.events (`ts` DateTime64(3, 'UTC'), `received` DateTime('UTC'),
+        `site` LowCardinality(String), `device` LowCardinality(String), `vendor` LowCardinality(String), `schema` UInt8,
+        `category` LowCardinality(String), `action` LowCardinality(String), `outcome` LowCardinality(String), `severity` UInt8,
+        `src` IPv6, `dst` IPv6, `sport` UInt16, `dport` UInt16, `proto` LowCardinality(String), `dir` LowCardinality(String),
+        `rule` String, `zone_in` LowCardinality(String), `zone_out` LowCardinality(String), `iface_in` LowCardinality(String),
+        `iface_out` LowCardinality(String), `user` String, `object` String, `sig_id` UInt32, `signature` String,
+        `subtype` LowCardinality(String), `message` String CODEC(ZSTD(3)), `raw` String CODEC(ZSTD(3)))
+        ENGINE = MergeTree PARTITION BY toYYYYMM(ts) ORDER BY (site, device, category, ts) TTL toDateTime(ts) + toIntervalDay(90)""",
 }
+
+# Additive migrations, applied in order and idempotent (ADD COLUMN IF NOT EXISTS). Version 2: owning device and vendor
+# on the existing event tables; rows written before stay '' (= the site's primary firewall).
+SCHEMA_VERSION = 2
+MIGRATIONS = [f"ALTER TABLE netmon.{t} ADD COLUMN IF NOT EXISTS {c} LowCardinality(String) DEFAULT ''"
+              for t in ("fw_events", "ids_events", "sys_events", "auth_events") for c in ("device", "vendor")]
 
 
 def ensure(ch, dns_days=7):
-    """Create the database and any missing table; returns the names created or verified."""
+    """Create the database and any missing table, then apply the additive migrations."""
     ch.query("CREATE DATABASE IF NOT EXISTS netmon", {})
     done = []
     for name, sql in TABLES.items():
         ch.query(sql.replace("{dns_days}", str(int(dns_days))), {})
         done.append(name)
+    for sql in MIGRATIONS:
+        ch.query(sql, {})
     return done
+
+
+def migrate_http(url, timeout=60):
+    """Apply CREATE ... IF NOT EXISTS and the additive migrations over ClickHouse HTTP (the app's query client is
+    read-only by design, so DDL uses its own request). Existing tables and their data are never changed otherwise."""
+    import httpx
+    with httpx.Client(timeout=timeout) as c:
+        for sql in statements():
+            r = c.post(url, content=sql.encode())
+            if r.status_code != 200:
+                raise RuntimeError(f"{sql[:60]}...: {r.status_code} {r.text[:200]}")
 
 
 def set_dns_retention(ch, days):
@@ -89,7 +118,8 @@ def set_dns_retention(ch, days):
 
 
 def statements(dns_days=7):
-    return ["CREATE DATABASE IF NOT EXISTS netmon"] + [s.replace("{dns_days}", str(int(dns_days))) for s in TABLES.values()]
+    return (["CREATE DATABASE IF NOT EXISTS netmon"] + [s.replace("{dns_days}", str(int(dns_days))) for s in TABLES.values()]
+            + MIGRATIONS)
 
 
 if __name__ == "__main__":   # python -m netmon.schema | clickhouse-client --multiquery  (run as a ClickHouse admin)

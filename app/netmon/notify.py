@@ -22,7 +22,9 @@ from .core import audit, get_setting
 
 SEV = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 CATEGORY = {"new_dest_country": "info", "new_dest_asn": "info", "fw_blocked_scan": "info", "exporter_silence": "health", "disk_usage": "health",
-            "detector_error": "health", "syslog_silence": "health", "source_health": "health", "dns_bypass": "info", "dns_anomaly": "security", "test": "test"}
+            "detector_error": "health", "syslog_silence": "health", "source_health": "health", "dns_bypass": "info", "dns_anomaly": "security", "test": "test",
+            "vpn_tunnel_down": "health", "interface_down": "health", "routing_neighbor_down": "health", "ha_failover": "health",
+            "config_change": "info", "device_auth_failures": "security", "device_silence": "health"}
 
 # type -> (label, fields[(key, label, kind)], secret keys)
 TYPES = {

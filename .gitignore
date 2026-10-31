@@ -15,3 +15,25 @@ akvorado/docker/
 akvorado/.env
 *.bak*
 .ruff_cache/
+
+# local environments and editors
+.venv/
+venv/
+*.pyc
+.mypy_cache/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# logs, captures, local data
+*.log
+*.pcap
+*.pcapng
+*.sqlite
+/out/
+/tmp/
+
+# environment files (the example is tracked)
+.env.*
+!.env.example

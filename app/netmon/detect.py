@@ -547,7 +547,7 @@ class Detector:
                    groupUniqArray(8)(dport) AS dports, groupUniqArray(5)(replaceOne(IPv6NumToString(dst), '::ffff:', '')) AS sample_dsts,
                    groupUniqArray(3)(rulenr) AS rules
             FROM netmon.fw_events WHERE ts >= toDateTime({ws:UInt32}) AND ts < toDateTime({we:UInt32})
-              AND action = 'block' AND dir = 'in' AND iface = {lan:String} AND site = {site:String}
+              AND action = 'block' AND dir = 'in' AND iface = {lan:String} AND site = {site:String} AND device IN ('', {site:String})
             GROUP BY src HAVING events >= {m:UInt32} ORDER BY events DESC LIMIT 50"""
             params = {"ws": ws, "we": we, "lan": lan, "m": rc["min_events"], "site": self.site["id"]}
             for r in self.ch.query(sql, params):
@@ -569,7 +569,7 @@ class Detector:
             SELECT replaceOne(IPv6NumToString(src), '::ffff:', '') AS s, count() AS events, uniq(dport) AS ports, uniq(dst) AS targets,
                    groupUniqArray(10)(dport) AS sample_ports
             FROM netmon.fw_events WHERE ts >= toDateTime({ws:UInt32}) AND ts < toDateTime({we:UInt32})
-              AND action = 'block' AND dir = 'in' AND iface = {wan:String} AND site = {site:String}
+              AND action = 'block' AND dir = 'in' AND iface = {wan:String} AND site = {site:String} AND device IN ('', {site:String})
             GROUP BY src HAVING events >= {m:UInt32} OR ports >= {p:UInt32} ORDER BY events DESC LIMIT 30"""
             params = {"ws": ws, "we": we, "wan": wan, "m": rc["min_events"], "p": rc["min_ports"], "site": self.site["id"]}
             for r in self.ch.query(sql, params):
@@ -582,6 +582,97 @@ class Detector:
                     next_steps=["No action needed unless the same source also reached an exposed service",
                                 "Check Connections for passed traffic from this address"],
                     akvorado_filter=self.akv(f"SrcAddr = {r['s']}")))
+        return out
+
+    def rule_events(self, now):
+        try:
+            return self._rule_events(now)
+        except RuntimeError as ex:   # schema not migrated yet (manual install step pending): no device events to evaluate
+            if "UNKNOWN_TABLE" in str(ex) or "UNKNOWN_IDENTIFIER" in str(ex):
+                return []
+            raise
+
+    def _rule_events(self, now):
+        """State changes and authentication failures reported by the devices themselves (normalized vendor events).
+        Every finding names the device and cites the original log lines; nothing here is inferred from flows."""
+        from .devices import all_devices
+        out, rules, sid = [], self.cfg["rules"], self.site["id"]
+        devs = {d["id"]: d for d in all_devices(self.cfg) if d["site"] == sid}
+        name = lambda d: devs.get(d, {}).get("name") or d  # noqa: E731
+        spec = [("vpn_tunnel_down", "vpn", "down", "medium", "VPN tunnel down",
+                 ["Planned change or peer maintenance", "Peer's Internet connection down", "IKE/certificate expiry or mismatch"],
+                 ["Check the tunnel status on the device", "Compare with the peer's logs", "Check certificate/PSK expiry"]),
+                ("interface_down", "interface", "down", "medium", "Interface down",
+                 ["Cable/optic unplugged or replaced", "Planned maintenance", "Upstream provider outage"],
+                 ["Check the port and link partner", "Look for flapping (several down/up events)"]),
+                ("routing_neighbor_down", "routing", "down", "medium", "Routing neighbor down",
+                 ["Peer maintenance", "Link failure on the path", "Configuration change on either side"],
+                 ["Check the neighbor state on the device", "Correlate with interface events"]),
+                ("ha_failover", "ha", None, "high", "High-availability state change",
+                 ["Planned failover", "Monitored interface or path failed on the active unit", "Unit reboot"],
+                 ["Check which unit is active now and why it changed", "Check the failed unit's interfaces and logs"]),
+                ("config_change", "config", None, "low", "Configuration changed",
+                 ["Planned change by an administrator", "Automation / configuration management"],
+                 ["Confirm the change with whoever made it (user in evidence)", "Use a maintenance window for planned work"])]
+        for rule, cat, outcome, sev, label, alts, steps in spec:
+            rc = rules.get(rule) or {}
+            if not rc.get("enabled"):
+                continue
+            we = int(now - 30)
+            ws = we - int(rc.get("window_minutes", 10)) * 60
+            sql = f"""
+            SELECT device, object, count() AS events, any(user) AS by_user, any(outcome) AS state, groupUniqArray(3)(subtype) AS kinds,
+                   groupUniqArray(3)(substring(message, 1, 200)) AS messages, toUInt32(max(ts)) AS last,
+                   groupUniqArray(3)(substring(raw, 1, 300)) AS original
+            FROM netmon.events WHERE site = {{site:String}} AND category = '{cat}' {"AND outcome = '" + outcome + "'" if outcome else ''}
+              AND ts >= toDateTime({{ws:UInt32}}) AND ts < toDateTime({{we:UInt32}})
+            GROUP BY device, object ORDER BY events DESC LIMIT 50"""
+            params = {"site": sid, "ws": ws, "we": we}
+            for r in self.ch.query(sql, params):
+                what = r["object"] or "(unnamed)"
+                title = f"{label}: {what} on {name(r['device'])}" + (f" ({r['events']}×)" if r["events"] > 1 else "")
+                if rule == "config_change" and r["by_user"]:
+                    title = f"Configuration changed on {name(r['device'])} by {r['by_user']}" + (f" ({r['events']}×)" if r["events"] > 1 else "")
+                out.append(dict(rule=rule, severity=sev, confidence="high", asset=r["device"], subject=f"{cat}:{what}"[:120],
+                                title=title, window=(ws, we), evidence=[{**r, "device_name": name(r["device"])}],
+                                query=(sql.strip(), params),
+                                baseline=f"Reported by the device itself ({devs.get(r['device'], {}).get('vendor', 'device')} log).",
+                                alternatives=alts, next_steps=steps, akvorado_filter=""))
+        rc = rules.get("device_auth_failures") or {}
+        if rc.get("enabled"):
+            we = int(now - 30)
+            ws = we - int(rc.get("window_minutes", 10)) * 60
+            sql = """
+            SELECT device, replaceOne(IPv6NumToString(src), '::ffff:', '') AS s, count() AS events, groupUniqArray(5)(user) AS users,
+                   groupUniqArray(3)(method) AS via, toUInt32(max(ts)) AS last
+            FROM netmon.auth_events WHERE site = {site:String} AND device != '' AND event = 'login_failed'
+              AND ts >= toDateTime({ws:UInt32}) AND ts < toDateTime({we:UInt32})
+            GROUP BY device, src HAVING events >= {m:UInt32} ORDER BY events DESC LIMIT 30"""
+            params = {"site": sid, "ws": ws, "we": we, "m": int(rc.get("min_events", 10))}
+            for r in self.ch.query(sql, params):
+                src = r["s"] if r["s"] not in ("::", "") else "unknown source"
+                out.append(dict(rule="device_auth_failures", severity="medium" if self.cfg.is_internal(src) else "low", confidence="high",
+                                asset=r["device"], subject=src, window=(ws, we),
+                                title=f"{r['events']} failed logins to {name(r['device'])} from {src}",
+                                evidence=[{**r, "peer": r["s"], "device_name": name(r["device"])}], query=(sql.strip(), params),
+                                baseline=f"Device authentication log: ≥ {rc.get('min_events', 10)} failures in {rc.get('window_minutes', 10)} min.",
+                                alternatives=["Password guessing against the management interface",
+                                              "A script or monitoring system with an old password"],
+                                next_steps=["Restrict management access to trusted addresses",
+                                            "Check whether any login from this source succeeded"],
+                                akvorado_filter=self.akv(f"SrcAddr = {r['s']}") if r["s"] not in ("::", "") else ""))
+        rc = rules.get("device_silence") or {}
+        if rc.get("enabled") and (get_setting(self.conn, "health", {}) or {}).get("enabled", True):
+            from .devices import log_activity
+            logs = log_activity(self.ch) or {}
+            for d in devs.values():
+                if d["primary"] or not d.get("syslog_source"):
+                    continue    # site firewalls are covered by the source-health checks
+                last = logs.get(d["id"])
+                if last and now - last > int(rc.get("minutes", 30)) * 60:   # never-connected devices: shown in Settings, not alerted
+                    out.append(self._health("device_silence", d["id"], f"No log lines from {d['name']} since {fmt_ts(last)}",
+                                            ["Remote syslog changed or disabled on the device", "Network path or host ACL change",
+                                             "Device down or rebooting"]))
         return out
 
     def rule_dns(self, now):
@@ -817,6 +908,7 @@ class Detector:
                              ("ids", lambda: self.rule_ids(now)),
                              ("firewall", lambda: self.rule_fw_blocks(now)),
                              ("dns", lambda: self.rule_dns(now)),
+                             ("device events", lambda: self.rule_events(now)),
                              ("health", lambda: self.rule_health(now))]:
                 try:
                     findings += fn()

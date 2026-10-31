@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/agit8or1/m0nitor/security/advisories/new
+    about: Please do not report security issues in public issues.
+  - name: Documentation
+    url: https://github.com/agit8or1/m0nitor/blob/main/docs/README.md
+    about: Install, firewall setup, configuration and troubleshooting.

@@ -1,8 +1,13 @@
 # Security policy
 
+## Supported versions
+m0nitor is pre-release. Security fixes go into the latest version only (see the version in the app's top bar or
+`/netmon/healthz`, and the [changelog](CHANGELOG.md)).
+
 ## Reporting
-Report vulnerabilities to the maintainer directly (GitHub private vulnerability
-reporting on this repository), not in issues. Please include affected version/commit, impact and reproduction steps.
+Report vulnerabilities privately through GitHub: **Security → Report a vulnerability** on this repository
+(<https://github.com/agit8or1/m0nitor/security/advisories/new>), not in public issues. Please include the affected
+version, impact and reproduction steps. Do not include real network data, credentials or captures.
 
 ## Design rules the code follows
 - The monitor is passive and read-mostly: it is not in the traffic path. It changes a firewall only through objects it created itself (one block

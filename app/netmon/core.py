@@ -147,8 +147,8 @@ def parse_exposure(s: str) -> Exposure:
 #   routed : OPNsense ng_netflow — real input/output ifindex per flow; WAN/LAN split by interface.
 #   capture: pfSense softflowd — pcap on one interface, input = output = that ifindex (softflowd
 #            compat/netflow9.c), so direction comes from addresses; capture on WAN only.
-VENDORS = {"opnsense": {"label": "OPNsense", "flow_mode": "routed"},
-           "pfsense": {"label": "pfSense", "flow_mode": "capture"}}
+from .vendors import PROFILES as _PROFILES  # noqa: E402
+VENDORS = {k: {"label": p["name"], "flow_mode": p["flow_mode"]} for k, p in _PROFILES.items()}   # site firewall profiles
 SITE_ID = r"^[a-z0-9][a-z0-9-]{0,23}$"
 IFNAME = r"^[A-Za-z0-9_.-]{1,15}$"
 
@@ -196,9 +196,25 @@ def rebuild_sites(cfg, sites: list) -> None:
                        exporter_active_timeout=f["active_timeout"])
 
 
+# Rules over normalized device events (netmon.events / auth_events). Seeded when config.yaml has no entry, so existing
+# configurations get them without editing the file; tune or disable under Settings -> Alert rules.
+EVENT_RULE_DEFAULTS = {
+    "device_auth_failures": {"enabled": True, "window_minutes": 10, "min_events": 10},
+    "vpn_tunnel_down": {"enabled": True, "window_minutes": 10},
+    "interface_down": {"enabled": True, "window_minutes": 10},
+    "routing_neighbor_down": {"enabled": True, "window_minutes": 10},
+    "ha_failover": {"enabled": True, "window_minutes": 10},
+    "config_change": {"enabled": True, "window_minutes": 10},
+    "device_silence": {"enabled": True, "minutes": 30},
+}
+
+
 def load_config(path: str = CONFIG_PATH) -> Config:
     with open(path) as f:
         raw = yaml.safe_load(f)
+    raw.setdefault("rules", {})
+    for k, v in EVENT_RULE_DEFAULTS.items():
+        raw["rules"].setdefault(k, dict(v))
     if not raw.get("sites"):
         raw["sites"] = [{"id": "site1", "name": raw.get("exporter", "firewall"), "exporter": raw.get("exporter", ""),
                          "wan_if": raw.get("wan_if", ""), "lan_if": raw.get("lan_if", "")}]

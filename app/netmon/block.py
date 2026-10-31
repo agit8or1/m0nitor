@@ -297,8 +297,39 @@ class PfSense(Enforcer):
                 f"{'+' if op == 'add' else '−'} {address}>}}  (pfSense REST API; reloads the filter)")
 
 
+class Unsupported(Enforcer):
+    """Monitoring-only device: no enforcement adapter exists for this vendor. Every write is refused; nothing is ever
+    sent to the device. NetFlow/syslog ingestion is never used as a control channel."""
+
+    def __init__(self, site):
+        super().__init__(site)
+        from .vendors import profile
+        self.vendor = profile(site.get("vendor"))["name"]
+
+    @property
+    def enabled(self) -> bool:
+        return False
+
+    auto_alias = ""
+
+    def describe(self, address, op="add"):
+        return f"not available: no enforcement adapter for {self.vendor} (monitoring only)"
+
+    def __getattr__(self, name):   # list/add/delete/setup/... -> refused
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        def refuse(*a, **k):
+            raise BlockError(f"enforcement is not implemented for {self.vendor}: monitoring only")
+        return refuse
+
+
+ADAPTERS = {"opnsense": OPNsense, "pfsense": PfSense}   # capability-driven: vendors.PROFILES[...]["response"]
+
+
 def enforcer(site) -> Enforcer:
-    return PfSense(site) if site.get("vendor") == "pfsense" else OPNsense(site)
+    from .vendors import profile
+    return ADAPTERS.get(profile(site.get("vendor", "opnsense"))["response"] or "", Unsupported)(site)
 
 
 def preview(cfg, address, site, alias=None):

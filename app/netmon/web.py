@@ -423,14 +423,17 @@ CATEGORY = {"new_dest_country": "info", "new_dest_asn": "info", "fw_blocked_scan
             "fw_blocked_outbound": "security", "syslog_silence": "health", "unexpected_inbound": "security",
             "outbound_volume": "security", "fanout": "security", "beaconing": "security",
             "exporter_silence": "health", "disk_usage": "health", "detector_error": "health", "source_health": "health", "dns_bypass": "info", "dns_anomaly": "security", "test": "test",
-            "auto_block": "response"}
+            "auto_block": "response", "vpn_tunnel_down": "health", "interface_down": "health", "routing_neighbor_down": "health",
+            "ha_failover": "health", "config_change": "info", "device_auth_failures": "security", "device_silence": "health"}
 RULE_LABEL = {"new_dest_country": "New country", "new_dest_asn": "New network (ASN)",
               "unexpected_inbound": "Unexpected inbound service", "outbound_volume": "Outbound volume above baseline",
               "fanout": "Scanning / fan-out", "beaconing": "Periodic connections (beacon-like)",
               "source_health": "Monitoring source health", "dns_bypass": "Uses external DNS resolvers", "dns_anomaly": "DNS anomaly", "exporter_silence": "Telemetry stopped", "disk_usage": "Disk space", "detector_error": "Detector error",
               "test": "Test alert", "ids_alert": "IDS signature (Suricata)", "fw_blocked_outbound": "Outbound blocked by firewall",
               "fw_blocked_scan": "Blocked inbound scanning", "syslog_silence": "Firewall log feed stopped",
-              "auto_block": "Auto-response block"}
+              "auto_block": "Auto-response block", "vpn_tunnel_down": "VPN tunnel down", "interface_down": "Interface down",
+              "routing_neighbor_down": "Routing neighbor down", "ha_failover": "HA failover", "config_change": "Configuration change",
+              "device_auth_failures": "Repeated failed logins to a device", "device_silence": "Device log feed stopped"}
 
 
 @app.get("/netmon/alerts")
@@ -1306,6 +1309,16 @@ def detector_loop():
 HEALTH = []
 
 
+def _schema_migrate():
+    """Additive ClickHouse migrations (new tables/columns) so an upgrade needs no manual step; failures are logged and
+    the documented manual schema step still works."""
+    from . import schema
+    try:
+        schema.migrate_http(cfg["clickhouse_url"])
+    except Exception as ex:
+        print(f"WARNING schema migration: {str(ex)[:300]} (run: python -m netmon.schema | clickhouse-client --multiquery)", flush=True)
+
+
 def health_loop():
     """Source health every 60 s in its own DB connection (Coverage page + health alerts)."""
     from .health import Health
@@ -1317,7 +1330,8 @@ def health_loop():
 
 
 def start():
-    if os.environ.get("NETMON_DETECTOR", "1") == "1":
+    if os.environ.get("NETMON_DETECTOR", "1") == "1":  # noqa: SIM102
+        _schema_migrate()   # before the detector: rules use the new columns
         from .logingest import Ingest
         notifier.start()
         threading.Thread(target=detector_loop, daemon=True).start()
@@ -1339,3 +1353,5 @@ from . import inventory  # noqa: E402,F401  (server names and external address l
 from . import autoresp  # noqa: E402,F401  (auto-response settings, firewall setup, decision log)
 from . import coverage  # noqa: E402,F401  (coverage & source health)
 from . import intel  # noqa: E402,F401  (threat intel: ExploitHound Threat Radar)
+from . import devices as _devices  # noqa: E402
+_devices.register(app)  # Settings -> Devices (multi-vendor onboarding, capability and telemetry status)

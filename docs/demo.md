@@ -22,7 +22,7 @@ a workstation scanning behind the shared NAT (fan-out with LAN host attribution,
 many new countries), a beaconing workstation, a 3 GB upload, a blocked port scan, IDS alerts and SSH password
 guessing on web-1.
 
-Screenshots in `docs/screenshots/` were taken from this demo with `demo/screenshots.py`, running Playwright inside
-the demo app's network namespace.
+Screenshots in `docs/screenshots/` are taken from this demo with `demo/screenshots.py`, running Playwright inside
+the demo app's network namespace (the exact command is at the top of the script). Regenerate them after UI changes.
 
 Reset: `docker compose -f demo/docker-compose.yml down -v`.
