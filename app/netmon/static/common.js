@@ -160,7 +160,7 @@ const NM = (() => {
   }
 
   // ---- line chart (one y-axis, bits/s). null values are gaps. ----
-  function lineChart(node, points, series, { unavailableBefore, height, refs = [] } = {}) {
+  function lineChart(node, points, series, { unavailableBefore, height, refs = [], fmt = fmtBps } = {}) {
     node.replaceChildren();
     const W = node.clientWidth || 800, H = height || node.clientHeight || 260, m = { t: 14, r: 86, b: 26, l: 70 };
     const svg = d3.select(node).append("svg").attr("viewBox", `0 0 ${W} ${H}`).attr("role", "img").attr("aria-label", series.map((s) => s.label).join(" and ") + " over time");
@@ -176,7 +176,7 @@ const NM = (() => {
       if (x1 - m.l > 90) svg.append("text").attr("class", "unavail-t").attr("x", (m.l + x1) / 2).attr("y", (H - m.b + m.t) / 2).attr("text-anchor", "middle").text("before collection started");
     }
     svg.append("g").selectAll("line").data(y.ticks(4)).join("line").attr("class", "gridline").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y).attr("y2", y);
-    svg.append("g").attr("class", "axis").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(4).tickFormat(fmtBps).tickSize(0).tickPadding(8)).call((g) => g.select(".domain").remove());
+    svg.append("g").attr("class", "axis").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(4).tickFormat(fmt).tickSize(0).tickPadding(8)).call((g) => g.select(".domain").remove());
     svg.append("g").attr("class", "axis").attr("transform", `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(Math.max(2, Math.floor(W / 120))).tickSizeOuter(0));
     // contracted capacity: dashed reference line, labelled at the right edge
     for (const r of inScale) svg.append("line").attr("class", `capline ${r.cls || ""}`).attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(r.value)).attr("y2", y(r.value));

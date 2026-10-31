@@ -26,6 +26,8 @@ SETTINGS_TABS = [("Health", "/netmon/settings", "Status", False), ("Coverage", "
                  ("Notifications", "/netmon/settings/notifications", "Detection & response", False),
                  ("Auto-response", "/netmon/settings/response", "Detection & response", False),
                  ("Maintenance", "/netmon/settings/maintenance", "Detection & response", False),
+                 ("Capacity planner", "/netmon/settings/capacity", "System", False),
+                 ("Resources & capacity", "/netmon/settings/resources", "System", False),
                  ("My account", "/netmon/account", "Access", False), ("Users & 2FA", "/netmon/users", "Access", True),
                  ("Audit log", "/netmon/audit", "Access", True)]
 SECURITY_TABS = [("Findings", "/netmon/security"), ("Firewall events", "/netmon/firewall"), ("IDS alerts", "/netmon/ids"),

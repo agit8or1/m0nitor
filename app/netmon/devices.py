@@ -492,6 +492,9 @@ GENERIC = flows, SNMP and generic syslog only. See <a href="https://github.com/a
 <p class="small">{e(p['notes'])}</p>{status_table(st)}
 {f"<ul class='small warnlist'>{warn}</ul>" if warn else ''}
 <p class="muted small"><a href="/netmon/settings/devices/{e(d['id'])}">Refresh</a> to test again: every value above is read live from the collector and the database.</p></section>
+<section class="card"><div class="card-h"><h2>Hardware &amp; capacity</h2><a href="/netmon/settings/devices/{e(d['id'])}/hardware">Open →</a></div>
+<p class="small">CPU, memory, interfaces and storage discovered over SNMP (HOST-RESOURCES-MIB, IF-MIB, vendor MIBs), manual values, and how much
+more telemetry this device can export.</p></section>
 <section class="grid2 even"><div class="card"><div class="card-h"><h2>Flows</h2></div>{fl}</div>
 <div class="card"><div class="card-h"><h2>Syslog</h2></div>{logs}{snmp_btn}</div></section>
 <section class="card"><div class="card-h"><h2>Device-side setup</h2><span class="muted small">example; check your firmware's documentation</span></div>
