@@ -43,8 +43,8 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
 - Akvorado: restore the previous `.env`/compose files from the backup and `docker compose up -d`; flow data is kept.
 
 ## Backup
-`host/netmon-backup` + `netmon-backup.timer` (daily 03:15 UTC): consistent SQLite snapshot + configs + secrets + the
-master key (`keys/`, needed to decrypt the stored credentials), as an
+`host/netmon-backup` + `netmon-backup.timer` (daily 03:15 UTC): consistent SQLite snapshot + configs + `secrets/` +
+`data/secrets/` (credentials entered in the UI) + the master key (`keys/`, needed to decrypt the stored credentials), as an
 AES-256 (`openssl enc -pbkdf2`) archive in `/var/backups/netmon`, 30 days kept. Create the key first:
 `install -m 600 /dev/null /root/netmon-backup.key && openssl rand -base64 48 > /root/netmon-backup.key`.
 ClickHouse flow data is **not** included (it rebuilds from new flows). Copy the key and archives somewhere other than

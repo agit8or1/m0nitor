@@ -4,8 +4,8 @@ set -eu
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 docker exec app-netmon-app-1 python -c "import sqlite3;s=sqlite3.connect('/data/netmon.db');d=sqlite3.connect('/data/backup-snapshot.db');s.backup(d);d.close()"
 mv /opt/netmon/data/backup-snapshot.db "$T/netmon.db"
-tar -C /opt/netmon -cf "$T/files.tar" --exclude=data --exclude='akvorado/docker/*.dist' README.md docs app caddy/Caddyfile caddy/docker-compose.yml akvorado/.env akvorado/config akvorado/docker/docker-compose-local.yml secrets \
-  $([ -d /opt/netmon/keys ] && echo keys)   # master key for secrets at rest: without it a restore cannot decrypt credentials
+tar -C /opt/netmon -cf "$T/files.tar" --exclude='akvorado/docker/*.dist' README.md docs app caddy/Caddyfile caddy/docker-compose.yml akvorado/.env akvorado/config akvorado/docker/docker-compose-local.yml secrets \
+  data/secrets $([ -d /opt/netmon/keys ] && echo keys)   # UI-entered credential files (sealed) and the master key for secrets at rest: without it a restore cannot decrypt credentials
 tar -C "$T" -czf - netmon.db files.tar | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass file:/root/netmon-backup.key \
   -out /var/backups/netmon/netmon-$(date -u +%Y%m%dT%H%M%SZ).tar.gz.enc
 find /var/backups/netmon -name 'netmon-*.enc' -mtime +30 -delete
