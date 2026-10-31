@@ -1,7 +1,7 @@
 <h1 align="center">m0nitor</h1>
 
 <p align="center">
-  <b>Self-hosted traffic and security monitoring for OPNsense and pfSense firewalls.</b><br>
+  <b>Self-hosted traffic and security monitoring for firewalls, routers and switches — verified on OPNsense, with parsers for 20+ vendors.</b><br>
   See where your traffic goes, which servers talk to whom, and what deserves a closer look — with the evidence behind every finding.
 </p>
 
@@ -16,14 +16,19 @@
   <img src="docs/screenshots/overview-light.png" alt="m0nitor overview: bandwidth cards, world traffic map with security finding markers, and the security activity panel" width="900">
 </p>
 
-The firewall only **sends** telemetry — NetFlow v9, remote syslog and optional SNMP. m0nitor never sits in the
-forwarding path: if it stops, your traffic is unaffected.
+Devices only **send** telemetry — NetFlow v5/v9, IPFIX, sFlow, remote syslog and optional SNMP. m0nitor never sits in
+the forwarding path: if it stops, your traffic is unaffected.
 
 > **Pre-release.** m0nitor runs in production on the maintainer's network, but there is no installer yet and
 > interfaces may change between versions. See the [roadmap](docs/ROADMAP.md) and [changelog](CHANGELOG.md).
 
 ## Features
 
+- **Any device, honestly labelled** — device profiles for OPNsense, pfSense, FortiGate, PAN-OS, Cisco ASA/FTD/IOS,
+  Meraki, Juniper, MikroTik, UniFi, EdgeOS, VyOS, Linux, OpenWrt, SonicWall, Sophos, WatchGuard, Check Point, Huawei
+  and Generic. Each shows what the device documents, what is configured and what actually arrives; vendor parsers
+  normalize firewall decisions, IDS, VPN, login, configuration, interface, routing and HA events.
+  → [Devices](docs/devices.md) · [Compatibility](docs/vendors.md)
 - **Traffic** — per-server bandwidth, connections with direction, protocol and port filters, countries and
   organizations, wallboards. Flow storage and the advanced flow explorer are [Akvorado](https://github.com/akvorado/akvorado).
 - **World map** — inbound and outbound arcs, city-level placement, zoom up to 24×, and tooltips that list the
@@ -59,6 +64,7 @@ All screenshots come from the isolated [demo](docs/demo.md): synthetic data and 
 | ![Connections table with direction, country, organization and service](docs/screenshots/connections.png) **Connections** | ![Server page with addresses and bandwidth history](docs/screenshots/server-detail.png) **Server bandwidth** |
 | ![Countries map shaded by the configured GeoIP policy](docs/screenshots/countries-light.png) **Countries and GeoIP policy** | ![Coverage page with per-source health](docs/screenshots/coverage.png) **Coverage and source health** |
 | ![Servers list](docs/screenshots/servers.png) **Servers** | ![Settings health page with grouped settings menu](docs/screenshots/settings.png) **Settings** |
+| ![Devices list: site firewall and additional devices with profile status and live telemetry per protocol](docs/screenshots/devices.png) **Devices — multi-vendor onboarding** | ![Device page: supported, configured and receiving per protocol with evidence](docs/screenshots/device-detail.png) **Device detail — evidence per protocol** |
 
 <p align="center"><img src="docs/screenshots/mobile-overview.png" alt="Overview on a phone" width="260"><br><b>Mobile</b></p>
 
@@ -76,20 +82,24 @@ docker compose -f demo/docker-compose.yml logs seed | grep "admin password"
 **Install for real** — follow [docs/install.md](docs/install.md) (Akvorado, the app, the TLS front end and host
 helpers), then [configure your firewall](docs/opnsense-setup.md) and check the Coverage page.
 
-## Supported firewalls
+## Supported devices
 
-| Firewall | Traffic | Logs and IDS | Live GeoIP policy, inventory sync | Blocking |
-|---|---|---|---|---|
-| **OPNsense** (26.x, tested on 26.7) | NetFlow v9, LAN + WAN (per-host after NAT) | filterlog, Suricata EVE, gateway/VPN/audit via syslog | via API (read-only user) | one alias, approval-gated or auto-response |
-| **pfSense** | softflowd, WAN only | syslog (UDP) | — | pfSense REST API package |
+| Status | Devices | What works |
+|---|---|---|
+| **VERIFIED** | OPNsense (26.x) | everything on this page: NetFlow (per-host after NAT), filterlog, Suricata EVE, Unbound, audit/VPN/gateway logs, live GeoIP policy and inventory via API, blocking |
+| **PARTIAL** | pfSense, FortiGate, PAN-OS, Cisco ASA / FTD / IOS-XE, Meraki MX, Juniper SRX, MikroTik, UniFi, EdgeOS, VyOS, Linux nftables/iptables, OpenWrt, DD-WRT, SonicWall, Sophos, WatchGuard, Check Point, Huawei | flows, SNMP and a vendor log parser tested with synthetic fixtures from the vendor's documented format — **not yet validated on hardware**; blocking only on pfSense |
+| **GENERIC** | HPE Aruba, TP-Link Omada, any other router or switch | NetFlow/IPFIX/sFlow, SNMP, syslog stored and keyword-categorized; no firewall decisions |
+
+Per-protocol details, firmware notes and test coverage: [docs/vendors.md](docs/vendors.md). Reports from real devices
+(with a sanitized log sample) move a profile to VERIFIED.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  FW["Firewall(s)<br>OPNsense / pfSense"] -- "NetFlow v9 (UDP 2055)" --> AK["Akvorado<br>inlet → Kafka → outlet"]
+  FW["Firewalls, routers, switches<br>any vendor"] -- "NetFlow v5/v9 · IPFIX · sFlow" --> AK["Akvorado<br>inlet → Kafka → outlet"]
   AK --> CH[("ClickHouse")]
-  FW -- "syslog (5514)" --> RS["rsyslog"] --> APP["m0nitor app<br>FastAPI · detector · log ingest"]
+  FW -- "syslog (5514)" --> RS["rsyslog"] --> APP["m0nitor app<br>FastAPI · vendor parsers · detector"]
   APP -- "SNMP / HTTPS API (read; own alias only)" --> FW
   APP -- "read-only queries" --> CH
   APP --> DB[("SQLite<br>settings, findings")]
@@ -105,7 +115,7 @@ ClickHouse (flows), the m0nitor app (Python 3.12, FastAPI), rsyslog and Caddy. D
 | | |
 |---|---|
 | [Demo](docs/demo.md) · [Install, upgrade, backup, rollback](docs/install.md) · [Configuration](docs/configuration.md) | getting started |
-| [Firewall setup](docs/opnsense-setup.md) · [Blocking](docs/BLOCKING.md) · [GeoIP](docs/geoip.md) | firewall side |
+| [Devices](docs/devices.md) · [Compatibility matrix](docs/vendors.md) · [OPNsense / pfSense setup](docs/opnsense-setup.md) · [Blocking](docs/BLOCKING.md) · [GeoIP](docs/geoip.md) | device side |
 | [Maps](docs/maps.md) · [Findings and alerting](docs/alerting.md) · [NAT attribution](docs/nat-attribution.md) · [Threat intel](docs/threat-intel.md) | using m0nitor |
 | [Architecture](docs/architecture.md) · [API and storage](docs/api.md) · [Security and privacy](docs/privacy-hardening.md) | internals |
 | [Troubleshooting](docs/troubleshooting.md) · [Roadmap](docs/ROADMAP.md) · [All docs](docs/README.md) | more |

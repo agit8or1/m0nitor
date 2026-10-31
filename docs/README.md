@@ -5,6 +5,8 @@
 | **Try it** — isolated demo with synthetic data | [demo.md](demo.md) |
 | **Install**, upgrade, rollback, backup, restore, uninstall | [install.md](install.md) |
 | **Configuration** — config file, what lives in the UI, secrets | [configuration.md](configuration.md) |
+| **Devices** — add routers, switches and other vendors' firewalls; what is actually arriving | [devices.md](devices.md) |
+| **Device compatibility** — VERIFIED / PARTIAL / GENERIC per vendor, protocols, test coverage | [vendors.md](vendors.md) |
 | **Firewall setup** — OPNsense and pfSense: NetFlow, syslog, SNMP, Suricata, API user, Unbound | [opnsense-setup.md](opnsense-setup.md) |
 | **Blocking** — one-time alias and rules per firewall | [BLOCKING.md](BLOCKING.md) |
 | **Maps and traffic views** — arcs, tooltips, WAN aliases, reverse DNS | [maps.md](maps.md) |

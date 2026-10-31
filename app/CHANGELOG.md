@@ -3,6 +3,54 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.16 — 2026-10-31
+
+### Fixed
+- Devices page: a site firewall showed "no data" for syslog when its log rows were written before v1.14 (rows without
+  a device name). Those rows are now attributed to the site firewall.
+- Devices page: when the collector's own decoder counters cannot be read, flows that are arriving were shown as
+  "no data". They now show as active if the device has a single flow protocol set up (with a note that the
+  protocol was not confirmed), or as unknown if several are set up.
+
+## v1.15 — 2026-10-31
+
+### Fixed
+- The device-event rules (VPN tunnel down, interface down, routing neighbor down, HA failover, configuration
+  change) failed with a ClickHouse error (a result alias shadowed the `outcome` column used in the filter), which
+  raised a "Detector errors" finding. Found by running the demo against a real ClickHouse.
+
+## v1.14 — 2026-10-31
+
+### Added — multi-vendor devices (foundation)
+- Device profiles for 24 firewall/router/switch families plus Generic, each with documented flow/syslog/SNMP
+  capabilities, an honest status (VERIFIED / PARTIAL / GENERIC) and device-side setup examples. Compatibility
+  matrix: docs/vendors.md.
+- Vendor syslog parsers with a normalized event model (traffic decision, IDS, auth, VPN, config, interface,
+  routing, HA, threat): FortiGate, PAN-OS, Cisco ASA/FTD/IOS, Meraki MX, Junos/SRX, MikroTik, netfilter family
+  (Linux, VyOS, EdgeOS, UniFi, OpenWrt, DD-WRT), SonicWall, Sophos, Check Point, WatchGuard, Huawei, Generic.
+  Only explicit allow/deny decisions feed firewall views and blocked counts; an unknown action stays unknown.
+  Unrecognized lines are kept as system events and counted per device (parser coverage).
+- Settings → Devices: add routers, switches and secondary firewalls to a site; per-protocol supported /
+  configured / receiving status from live evidence (collector counters, NetFlow/IPFIX versions, templates per
+  observation domain, sampling rates, field coverage, last syslog line, sample events); SNMP test; insecure
+  transport warnings. Additional devices keep their own flows and never add to a site's WAN totals.
+- Site firewalls can use any profile (Firewalls & sites); blocking stays limited to vendors with an
+  enforcement adapter (OPNsense, pfSense) and is refused for others.
+- SNMPv3 authPriv (SHA/AES) for counters, credentials stored in the secrets directory.
+- Collector: IPFIX on 4739 and sFlow on 6343 in addition to NetFlow/IPFIX on 2055, open to registered
+  exporters only.
+- Flow diagnostics (`python -m netmon.flowdiag`): NetFlow v5/v9, IPFIX and sFlow v5 decoding with template,
+  sequence-gap, clock-drift and sampling-change checks.
+- Alert rules from device events: VPN tunnel down, interface down, routing neighbor down, HA failover,
+  configuration change, repeated failed device logins, device log feed stopped.
+- Per-sender syslog rate limit for non-OPNsense devices (drops are counted).
+
+### Changed
+- ClickHouse schema v2 (additive): `device`/`vendor` columns on the event tables and a new `netmon.events`
+  table, applied automatically at startup. Existing rows and the OPNsense path are unchanged (verified by
+  replaying real OPNsense log lines through the old and new parser: identical output).
+- Firewall-log rules only use the site firewall's own log rows.
+
 ## v1.13 — 2026-10-31
 
 ### Security

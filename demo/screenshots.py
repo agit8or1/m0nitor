@@ -71,6 +71,8 @@ with sync_playwright() as p:
             shot(pg, "/netmon/servers/10.40.0.250?range=6h", "server-detail", 3500, sel=".srvaddrs")
             shot(pg, "/netmon/coverage", "coverage", 2000)
             shot(pg, "/netmon/settings", "settings", 2000)
+            shot(pg, "/netmon/settings/devices", "devices", 2500)
+            shot(pg, "/netmon/settings/devices/fgt-branch", "device-detail", 2500)
     m = login(b.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, device_scale_factor=2))
     shot(m, "/", "mobile-overview", 4000)
     print("mobile scrollWidth", m.evaluate("document.documentElement.scrollWidth"))

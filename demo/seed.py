@@ -12,6 +12,8 @@ LAN->WAN records carry the post-NAT source (shared NAT 203.0.113.179, 1:1 NAT fo
 Scenarios (so the real detector has something to find): a workstation scanning (fan-out behind the shared NAT),
 a workstation beaconing, a nightly backup plus one large upload, a blocked port scan, IDS alerts, SSH password
 guessing on web-1, an NXDOMAIN/random-label burst and firewall configuration changes.
+Additional devices (Settings -> Devices): a FortiGate and a PAN-OS firewall whose synthetic log lines go through the
+app's real parsers, and a generic switch sending sFlow-style samples and an interface flap.
 """
 import ipaddress
 import json
@@ -103,7 +105,7 @@ FLOWS = """CREATE TABLE IF NOT EXISTS default.flows (
   InIfName LowCardinality(String), OutIfName LowCardinality(String), InIfDescription LowCardinality(String),
   OutIfDescription LowCardinality(String), InIfSpeed UInt32, OutIfSpeed UInt32,
   InIfBoundary Enum8('undefined' = 0, 'external' = 1, 'internal' = 2), OutIfBoundary Enum8('undefined' = 0, 'external' = 1, 'internal' = 2),
-  EType UInt32, Proto UInt32, SrcPort UInt16, DstPort UInt16, Bytes UInt64, Packets UInt64, ForwardingStatus UInt32, TCPFlags UInt16)
+  EType UInt32, FlowDirection Enum8('undefined' = 0, 'ingress' = 1, 'egress' = 2), Proto UInt32, SrcPort UInt16, DstPort UInt16, Bytes UInt64, Packets UInt64, ForwardingStatus UInt32, TCPFlags UInt16)
 ENGINE = MergeTree PARTITION BY toDate(TimeReceived) ORDER BY (toStartOfFiveMinutes(TimeReceived), ExporterName, InIfName, OutIfName)
 TTL TimeReceived + INTERVAL 30 DAY"""
 # Akvorado keeps pre-aggregated tables; in the demo they are views with the same names and time buckets.
@@ -324,6 +326,109 @@ def sys_events(t0, rng):
     return rows
 
 
+# ---------------------------------------------------------------- additional devices (multi-vendor)
+# Synthetic log lines in each vendor's documented format, run through the app's real parsers (netmon.logingest):
+# what the demo shows for these devices is exactly what the parsers make of such lines.
+DEVICES = [
+    {"id": "fgt-branch", "site": SITE, "name": "Branch FortiGate", "vendor": "fortigate", "model": "FortiGate 60F",
+     "firmware": "7.4", "exporter_ip": None, "syslog_source": "10.40.0.2", "syslog_transport": "tcp", "flows": [],
+     "wan_if": "wan1", "wan_zones": [], "snmp": {}, "device_tz_utc": True},
+    {"id": "pa-dmz", "site": SITE, "name": "DMZ PA-440", "vendor": "panos", "model": "PA-440", "firmware": "11.1",
+     "exporter_ip": None, "syslog_source": "10.40.0.3", "syslog_transport": "tcp", "flows": [], "wan_if": "ethernet1/1",
+     "wan_zones": ["untrust"], "snmp": {}},
+    {"id": "core-sw", "site": SITE, "name": "Core switch", "vendor": "aruba", "model": "CX 6100", "firmware": "",
+     "exporter_ip": "10.40.0.4", "syslog_source": "10.40.0.4", "syslog_transport": "udp", "flows": ["sflow"], "wan_if": "",
+     "wan_zones": [], "snmp": {}},
+]
+BY_SENDER = {d["syslog_source"]: d for d in DEVICES}
+
+
+def vendor_lines(t, rng):
+    """(receipt epoch, sender, raw syslog) for one minute."""
+    out = []
+    iso = lambda x: time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(x))  # noqa: E731
+    for _ in range(rng.randint(2, 6)):                                     # FortiGate: denied inbound background noise
+        x = t + rng.uniform(0, 59)
+        src = rng.choice(SCANNERS)[0]
+        d, tm = iso(x).split(" ")
+        out.append((int(x) + 1, "10.40.0.2", f'<189>date={d} time={tm} devname="FGT60F-DEMO" logid="0000000013" tz="+0000" '
+                    f'type="traffic" subtype="forward" level="notice" srcip={src} srcport={eph(rng)} srcintf="wan1" srcintfrole="wan" '
+                    f'dstip=203.0.113.186 dstport={rng.choice([22, 23, 445, 3389, 8443])} dstintf="internal" dstintfrole="lan" '
+                    f'proto=6 action="deny" policyid=0 sentbyte=0 rcvdbyte=0'))
+    if rng.random() < 0.05:                                                 # occasional IPS alert
+        x = t + rng.uniform(0, 59)
+        d, tm = iso(x).split(" ")
+        out.append((int(x) + 1, "10.40.0.2", f'<185>date={d} time={tm} tz="+0000" logid="0419016384" type="utm" subtype="ips" '
+                    f'level="alert" severity="high" srcip={rng.choice(SCANNERS)[0]} dstip=203.0.113.186 srcport={eph(rng)} '
+                    f'dstport=443 proto=6 action="dropped" attack="Demo.Web.Exploit.Attempt" attackid=10001 srcintf="wan1" srcintfrole="wan"'))
+    if time.time() - 2400 <= t < time.time() - 1800:                        # admin password guessing on the branch firewall
+        for _ in range(3):
+            x = t + rng.uniform(0, 59)
+            d, tm = iso(x).split(" ")
+            out.append((int(x) + 1, "10.40.0.2", f'<190>date={d} time={tm} tz="+0000" logid="0100032002" type="event" subtype="system" '
+                        f'level="alert" logdesc="Admin login failed" user="admin" ui="https({BRUTE[0]})" action="login" status="failed"'))
+    if int(t) % 21600 == 0:                                                 # every 6 h a branch VPN flap
+        d, tm = iso(t).split(" ")
+        out.append((int(t) + 1, "10.40.0.2", f'<189>date={d} time={tm} tz="+0000" logid="0101037138" type="event" subtype="vpn" '
+                    f'level="notice" action="tunnel-down" remip=198.51.100.200 vpntunnel="hq-branch" logdesc="IPsec tunnel down"'))
+        d, tm = iso(t + 240).split(" ")
+        out.append((int(t) + 241, "10.40.0.2", f'<189>date={d} time={tm} tz="+0000" logid="0101037139" type="event" subtype="vpn" '
+                    f'level="notice" action="tunnel-up" remip=198.51.100.200 vpntunnel="hq-branch" logdesc="IPsec tunnel up"'))
+    for _ in range(rng.randint(1, 4)):                                     # PAN-OS: denied and allowed sessions (end lines)
+        x = t + rng.uniform(0, 59)
+        allow = rng.random() < 0.4
+        src = rng.choice(CLIENTS if allow else SCANNERS)[0]
+        f = ["1", time.strftime("%Y/%m/%d %H:%M:%S", time.gmtime(x)), "007200000000", "TRAFFIC", "end", "2561",
+             time.strftime("%Y/%m/%d %H:%M:%S", time.gmtime(x)), src, "10.40.0.20", "", "", "allow-web" if allow else "interzone-default",
+             "", "", "web-browsing" if allow else "incomplete", "vsys1", "untrust", "dmz", "ethernet1/1", "ethernet1/2", "fwd", "",
+             str(rng.randint(1, 99999)), "1", str(eph(rng)), "443" if allow else str(rng.choice([22, 3389, 5900])), "0", "0", "0x0",
+             "tcp", "allow" if allow else "deny", str(rng.randint(2000, 90000) if allow else 0), "0", "0", "4"]
+        out.append((int(x) + 1, "10.40.0.3", "<14>" + time.strftime("%b %d %H:%M:%S", time.gmtime(x)) + " PA-440-DEMO " + ",".join(f)))
+    if int(t) % 43200 == 3600:                                              # twice a day a configuration commit
+        f = ["1", time.strftime("%Y/%m/%d %H:%M:%S", time.gmtime(t)), "007200000000", "CONFIG", "0", "2561",
+             time.strftime("%Y/%m/%d %H:%M:%S", time.gmtime(t)), "10.40.0.210", "vsys1", "edit", "demo-admin", "Web", "Succeeded",
+             "vsys vsys1 rulebase security rules allow-web"]
+        out.append((int(t) + 1, "10.40.0.3", "<14>" + time.strftime("%b %d %H:%M:%S", time.gmtime(t)) + " PA-440-DEMO " + ",".join(f)))
+    if int(t) % 14400 == 600:                                               # switch: an access port flaps
+        for i, st in ((0, "down"), (90, "up")):
+            out.append((int(t) + i, "10.40.0.4", "<187>" + time.strftime("%b %d %H:%M:%S", time.gmtime(t + i)) +
+                        f" core-sw lldpd: Port 1/1/12 changed state to {st}"))
+    return out
+
+
+def vendor_rows(t0, t1, rng):
+    sys.path.insert(0, "/app")
+    from netmon.logingest import parse_line
+    tables = {}
+    t = t0 - t0 % 60
+    while t < t1:
+        for recv, sender, raw in vendor_lines(t, rng):
+            kind, row = parse_line(f"{recv} {sender} {raw}", lambda ip: SITE, BY_SENDER.get)
+            for tb, r in (row if kind == "multi" else [(kind, row)] if kind not in (None, "skip") else []):
+                r = dict(r)
+                r["ts"] = ts64(r["ts"])
+                tables.setdefault(tb, []).append(r)
+        t += 60
+    for tb, rows in tables.items():
+        insert(f"netmon.{tb}", rows)
+
+
+def switch_flows(t0, t1, rng):
+    """sFlow-style samples from the core switch: LAN to LAN (never part of the site's WAN totals)."""
+    rows, t = [], t0 - t0 % 60
+    while t < t1:
+        for _ in range(rng.randint(3, 8)):
+            a, b = rng.choice(WORKSTATIONS), rng.choice([BACKUP, CRM, WEB, MAIL])
+            rows.append({"TimeReceived": int(t + rng.uniform(0, 59)), "SamplingRate": 512, "ExporterAddress": v6("10.40.0.4"),
+                         "ExporterName": "core-sw", "SrcAddr": v6(a), "DstAddr": v6(b), "SrcAS": 0, "DstAS": 0, "SrcCountry": "",
+                         "DstCountry": "", "InIfName": "1/1/12", "OutIfName": "1/1/49", "InIfDescription": "", "OutIfDescription": "",
+                         "InIfSpeed": 1000, "OutIfSpeed": 10000, "InIfBoundary": "internal", "OutIfBoundary": "internal",
+                         "EType": 2048, "Proto": 6, "SrcPort": eph(rng), "DstPort": rng.choice([443, 445, 8007]),
+                         "Bytes": rng.randint(200, 1500), "Packets": 1, "ForwardingStatus": 64, "TCPFlags": 16})
+        t += 60
+    insert("default.flows", rows)
+
+
 # ---------------------------------------------------------------- driver
 def generate(t0, t1, rng, live_from):
     flows, fws, idss, dnss, auths = [], [], [], [], []
@@ -341,6 +446,8 @@ def generate(t0, t1, rng, live_from):
     insert("netmon.dns_events", dnss)
     insert("netmon.auth_events", [a for a in auths if "app" in a and a.get("event")])
     insert("netmon.fw_events", [a for a in auths if "rid" in a])
+    vendor_rows(t0, t1, rng)
+    switch_flows(t0, t1, rng)
     return len(flows)
 
 
@@ -366,6 +473,7 @@ def seed_db():
     put_setting(conn, "nat11:db", {SITE: [{"external": CRM_PUB, "internal": CRM, "description": "crm-1"},
                                           {"external": BACKUP_PUB, "internal": BACKUP, "description": "backup-1"}]}, "demo-seed")
     put_setting(conn, "dns", {"enabled": True, "retention_days": 7}, "demo-seed")
+    put_setting(conn, "devices:db", DEVICES, "demo-seed")
 
 
 def main():

@@ -19,6 +19,7 @@ from .web import (ROLES, app, cfg, check_csrf, conn, csrf_field, current, dash, 
 # (name, href, group, admin-only): grouped in this order; admin-only entries are hidden from other roles
 SETTINGS_TABS = [("Health", "/netmon/settings", "Status", False), ("Coverage", "/netmon/coverage", "Status", False),
                  ("Firewalls & sites", "/netmon/settings/sites", "Data", False),
+                 ("Devices", "/netmon/settings/devices", "Data", False),
                  ("Data sources", "/netmon/settings/integrations", "Data", False),
                  ("Inventory", "/netmon/settings/inventory", "Data", False),
                  ("Alert rules", "/netmon/settings/rules", "Detection & response", False),
@@ -512,6 +513,13 @@ RULE_DOCS = {
     "exporter_silence": "No NetFlow received from the firewall.",
     "syslog_silence": "No firewall/IDS log lines received.",
     "disk_usage": "Monitor VM disk usage threshold.",
+    "device_auth_failures": "Repeated failed logins reported by a device's own log (firewall, router, switch).",
+    "vpn_tunnel_down": "A device reports a VPN tunnel or session down.",
+    "interface_down": "A device reports an interface/link down.",
+    "routing_neighbor_down": "A device reports a BGP/OSPF neighbor down.",
+    "ha_failover": "A device reports a high-availability role change (failover).",
+    "config_change": "A device reports a configuration change (who, when, what).",
+    "device_silence": "An additional device that was sending logs stopped.",
 }
 DETECTOR_KEYS = [("interval_seconds", "Run detector every (s)", 60, 3600), ("window_minutes", "Evaluation window (min)", 10, 1440),
                  ("baseline_days", "Baseline length (days)", 3, 60), ("min_learning_days", "Novelty rules start after (days)", 0, 30),
@@ -797,6 +805,7 @@ import os
 
 from .core import DATA_DIR, IFNAME, SITE_ID, VENDORS, apply_sites
 from . import block as blk
+from . import devices, vendors
 
 HOST_JSON = os.path.join(DATA_DIR, "host-sites.json")
 HOST_STATUS = os.path.join(DATA_DIR, "host-sites.status.json")
@@ -815,6 +824,7 @@ def export_host_sites():
     doc = {"version": 1, "sites": [{"id": x["id"], "exporter": x["exporter"], "flow_mode": x["flow_mode"], "wan_if": x["wan_if"],
                                     "exporter_ip": x.get("exporter_ip") or None, "syslog_source": x.get("syslog_source") or None,
                                     "ifindexes": {str(k): v for k, v in (x.get("ifindexes") or {}).items()}} for x in cfg.sites],
+           "devices": devices.host_entries(cfg),
            "monitor": {"fqdn": monitor_settings()["fqdn"] or None, "address": _ip_or_none(monitor_address())}}
     text = json.dumps(doc, indent=1, sort_keys=True)
     try:
@@ -847,6 +857,7 @@ def host_status():
 
 def sync_sites():
     apply_sites(cfg, conn)
+    devices.apply_devices(cfg, conn)
     export_host_sites()
 
 
@@ -939,6 +950,12 @@ def ago_txt(t):
 def site_setup(x):
     """Vendor-specific setup steps with this site's values filled in."""
     mon = e(monitor_address())
+    if x["vendor"] not in ("opnsense", "pfsense"):
+        p = vendors.profile(x["vendor"])
+        return (f"<p class='small'>{e(p['notes'])}</p><pre class='setup'>{e(vendors.setup_text(x['vendor'], monitor_address()))}</pre>"
+                f"<p class='muted small'>Profile status {p['status']}. Live protocol status and parser coverage: "
+                f"<a href='/netmon/settings/devices/{e(x['id'])}'>Settings → Devices</a>. In routed mode the WAN/LAN ifIndex values "
+                f"decide traffic direction: read them from the device (SNMP ifIndex / ifName).</p>")
     if x["vendor"] == "pfsense":
         return f"""<ol class="steps">
 <li><b>NetFlow</b> — System → Package Manager → install <code>softflowd</code>. Services → softflowd: Enable ✓ · Interface <b>WAN only</b>
@@ -1075,7 +1092,7 @@ Look up sends only the address you type to OpenStreetMap Nominatim, and only whe
 <details><summary>Setup steps on the {e(VENDORS.get(s['vendor'], {}).get('label', ''))} firewall</summary>{site_setup(s)}</details></section>"""
     hostbox = (f"<div class='banner {'' if hs == 'ok' else 'bad' if hs == 'failed' else 'warn'}'><b>Host access lists:</b> "
                f"{'applied' if hs == 'ok' else 'FAILED' if hs == 'failed' else 'pending'} — {e(hdetail)}</div>")
-    add = (f"""<section class="card" id="add"><div class="card-h"><h2>Add a firewall</h2><span class="muted small">OPNsense or pfSense · each firewall is its own site</span></div>
+    add = (f"""<section class="card" id="add"><div class="card-h"><h2>Add a firewall</h2><span class="muted small">any profile · each firewall is its own site · routers and switches: Settings → Devices</span></div>
 {conn_form(req)}<p class="muted small">Saving lets this firewall's NetFlow (UDP 2055) and syslog (5514 TCP+UDP) source through the monitor's host firewall,
 registers it with Akvorado (collector restarts for a few seconds) and starts per-site detection, dashboards, logs and blocking.
 Asset names and expected exposures are global: if two sites use the same private range, give their hosts distinct names.</p></section>""" if admin else "")
@@ -1189,7 +1206,7 @@ def build_site(form, prev=None):
     prev = prev or {}
     vendor = prev.get("vendor") or form.get("vendor", "")
     if vendor not in VENDORS:
-        raise ValueError("choose OPNsense or pfSense")
+        raise ValueError("choose a firewall profile")
     sid = prev.get("id") or form.get("sid", "").strip()
     if not re.match(SITE_ID, sid):
         raise ValueError("site id: lowercase letters, digits and '-', up to 24 characters")
@@ -1209,14 +1226,15 @@ def build_site(form, prev=None):
         raise ValueError("WAN interface name is required (e.g. igb0)")
     if lan and not re.match(IFNAME, lan):
         raise ValueError("LAN interface name: letters, digits, . _ - only")
+    vlabel = VENDORS[vendor]["label"]
     if mode == "routed":
         if not lan:
-            raise ValueError("OPNsense needs the LAN interface name (flows are split by interface)")
+            raise ValueError(f"{vlabel}: enter the LAN interface name (flows are split by interface)")
     else:
         lan = ""
     wi, li = _num(form.get("wan_idx"), 1, 65535, "WAN ifindex"), _num(form.get("lan_idx"), 1, 65535, "LAN ifindex")
     if mode == "routed" and not (wi and li):
-        raise ValueError("OPNsense needs WAN and LAN ifindex (netstat -inW, Link#N)")
+        raise ValueError(f"{vlabel}: enter the WAN and LAN ifIndex (SNMP ifIndex; OPNsense: netstat -inW, Link#N)")
     ifx = {}
     if wi:
         ifx[int(wi)] = {"name": wan, "description": "WAN", "speed": 0}
@@ -1237,6 +1255,8 @@ def build_site(form, prev=None):
     # blocking
     b = dict(prev.get("block") or {})
     url = form.get("block_url", "").strip()
+    if url and not vendors.profile(vendor)["response"]:
+        raise ValueError(f"blocking is not implemented for {vlabel}: leave the API fields empty (monitoring works without write access)")
     if url:
         if not re.match(r"^https://[A-Za-z0-9.\-\[\]:]+(:\d+)?/?$", url):
             raise ValueError("API base URL must be https://host[:port]")

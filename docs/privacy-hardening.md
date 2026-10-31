@@ -5,8 +5,8 @@
 |---|---|---|
 | 443/tcp (Caddy) | host | management networks only (ufw) |
 | 22/tcp | host | management networks only |
-| 2055/udp (NetFlow) | Akvorado inlet | configured firewalls only (DOCKER-USER, rendered) |
-| 5514/tcp+udp (syslog) | rsyslog | configured firewalls only (ufw `netmon-syslog`, rsyslog AllowedSender, rendered) |
+| 2055/udp (NetFlow v5/v9, IPFIX), 4739/udp (IPFIX), 6343/udp (sFlow) | Akvorado inlet | registered devices only (DOCKER-USER, rendered) |
+| 5514/tcp+udp (syslog) | rsyslog | registered devices only (ufw `netmon-syslog`, rsyslog AllowedSender, rendered) |
 | 8090/tcp (app), 8080/8081 (Traefik) | 127.0.0.1 | local Caddy only |
 ClickHouse, Kafka and Valkey are not published.
 

@@ -9,6 +9,8 @@ Only regions this script owns are changed:
   ufw rules with comment "netmon-syslog"     (syslog 5514/tcp+udp per firewall)
   /etc/rsyslog.d/30-netmon-opnsense.conf     whole file (template below)
   akvorado/config/outlet.yaml                between the netmon-exporters / netmon-classifiers markers
+  akvorado/config/inlet.yaml                 between "# BEGIN netmon-inputs" / "# END netmon-inputs" (NetFlow/IPFIX/sFlow)
+  akvorado/docker/docker-compose-local.yml   inlet ports between "# BEGIN netmon-ports" / "# END netmon-ports"
   caddy/Caddyfile                            the site line between "# BEGIN netmon-hosts" / "# END netmon-hosts":
                                              this monitor's IP + the FQDN set under Settings (only when an FQDN is set)
 """
@@ -26,6 +28,10 @@ STATUS = "/opt/netmon/data/host-sites.status.json"
 AFTER = "/etc/ufw/after.rules"
 RSYSLOG = "/etc/rsyslog.d/30-netmon-opnsense.conf"
 OUTLET = "/opt/netmon/akvorado/config/outlet.yaml"
+INLET = "/opt/netmon/akvorado/config/inlet.yaml"
+AKV_LOCAL = "/opt/netmon/akvorado/docker/docker-compose-local.yml"
+MAX_DEVICES = 128
+FLOW_PORTS = {"netflow": 2055, "ipfix": 4739, "sflow": 6343}   # 2055 also accepts IPFIX; 4739 is the IANA IPFIX port
 AKV_DIR = "/opt/netmon/akvorado"
 CADDY_DIR = "/opt/netmon/caddy"
 CADDYFILE = CADDY_DIR + "/Caddyfile"
@@ -96,6 +102,28 @@ def validate(doc):
     return out
 
 
+def validate_devices(doc, sites):
+    """Additional devices (routers, switches, secondary firewalls) attached to a site: senders only."""
+    devs = doc.get("devices") or []
+    if not isinstance(devs, list) or len(devs) > MAX_DEVICES:
+        raise Invalid("devices must be a list of at most 128")
+    site_ids = {s["id"] for s in sites}
+    seen = {s["exporter"] for s in sites} | site_ids
+    out = []
+    for d in devs:
+        did = str(d.get("id", ""))
+        if not RE_ID.match(did) or did in seen:
+            raise Invalid(f"bad or duplicate device id {did!r}")
+        seen.add(did)
+        if d.get("site") not in site_ids:
+            raise Invalid(f"{did}: unknown site")
+        out.append({"id": did, "site": d["site"],
+                    "exporter_ip": host_ip(d.get("exporter_ip"), f"{did} exporter_ip") if d.get("exporter_ip") else None,
+                    "syslog_source": host_ip(d.get("syslog_source"), f"{did} syslog_source") if d.get("syslog_source") else None,
+                    "sflow": bool(d.get("sflow"))})
+    return out
+
+
 def validate_monitor(doc):
     m = doc.get("monitor") or {}
     fqdn = m.get("fqdn") or None
@@ -156,7 +184,7 @@ def replace_region(text, begin, end, body):
     return text[:i] + begin + "\n" + "".join(indent + l + "\n" for l in body) + indent + text[j:]
 
 
-def render_outlet(text, sites):
+def render_outlet(text, sites, devices=()):
     ex = []
     for s in sites:
         if not s["exporter_ip"]:
@@ -175,18 +203,27 @@ def render_outlet(text, sites):
                 v = s["ifindexes"][idx]
                 desc = "WAN" if v["name"] == s["wan_if"] else v["description"]
                 ex.append(f'    {idx}: {{name: {v["name"]}, description: "{desc}", speed: {v["speed"]}}}')
+    for d in devices:   # additional devices: own exporter name, never part of a site's WAN accounting
+        if not d["exporter_ip"]:
+            continue
+        net = "/128" if ":" in d["exporter_ip"] else "/32"
+        ex += [f"{d['exporter_ip']}{net}:", f"  name: {d['id']}", "  default:", "    name: unknown",
+               "    description: unmapped ifindex", "    speed: 0"]
     text = replace_region(text, "# BEGIN netmon-exporters", "# END netmon-exporters", ex)
+    extra = [f'- Exporter.Name == "{d["id"]}" && ClassifySite("{d["site"]}") && ClassifyRole("device")' for d in devices if d["exporter_ip"]]
     if len(sites) == 1:
-        cl = [f'- ClassifySite("{sites[0]["id"]}")', '- ClassifyRole("firewall")']
+        cl = extra + [f'- ClassifySite("{sites[0]["id"]}")', '- ClassifyRole("firewall")']
     else:
-        cl = [f'- Exporter.Name == "{s["exporter"]}" && ClassifySite("{s["id"]}")' for s in sites] + ['- ClassifyRole("firewall")']
+        cl = extra + [f'- Exporter.Name == "{s["exporter"]}" && ClassifySite("{s["id"]}")' for s in sites] + ['- ClassifyRole("firewall")']
     return replace_region(text, "# BEGIN netmon-classifiers", "# END netmon-classifiers", cl)
 
 
-def render_after(text, sites):
-    ips = sorted({s["exporter_ip"] for s in sites if s["exporter_ip"] and ":" not in s["exporter_ip"]})
-    body = [f"-A DOCKER-USER -i eth0 -p udp --dport 2055 -s {ip} -j RETURN" for ip in ips]
-    body.append("-A DOCKER-USER -i eth0 -p udp --dport 2055 -j DROP")
+def render_after(text, sites, devices=()):
+    ips = sorted({s["exporter_ip"] for s in (*sites, *devices) if s["exporter_ip"] and ":" not in s["exporter_ip"]})
+    body = []
+    for port in sorted(set(FLOW_PORTS.values())):
+        body += [f"-A DOCKER-USER -i eth0 -p udp --dport {port} -s {ip} -j RETURN" for ip in ips]
+        body.append(f"-A DOCKER-USER -i eth0 -p udp --dport {port} -j DROP")
     if "# BEGIN netmon-senders" not in text:  # first run: wrap the existing hand-written rules
         old = [l for l in text.splitlines() if "--dport 2055" in l and l.startswith("-A DOCKER-USER")]
         if not old:
@@ -194,6 +231,36 @@ def render_after(text, sites):
         first, last = text.index(old[0]), text.index(old[-1]) + len(old[-1])
         text = text[:first] + "# BEGIN netmon-senders\n# END netmon-senders" + text[last:]
     return replace_region(text, "# BEGIN netmon-senders", "# END netmon-senders", body)
+
+
+INLET_INPUTS = [
+    "# NetFlow v5/v9 and IPFIX (Akvorado's netflow decoder handles all three)",
+    "- type: udp", "  decoder: netflow", "  listen: :2055", "  workers: 4", "  receive-buffer: 212992",
+    "# IPFIX on its IANA port", "- type: udp", "  decoder: netflow", "  listen: :4739", "  workers: 1", "  receive-buffer: 212992",
+    "# sFlow v5", "- type: udp", "  decoder: sflow", "  listen: :6343", "  workers: 1", "  receive-buffer: 212992",
+]
+
+
+def render_inlet(text):
+    if "# BEGIN netmon-inputs" not in text:   # first run: replace the hand-written NetFlow-only input list
+        i = text.find("  inputs:")
+        if i < 0:
+            raise Invalid("flow inputs not found in inlet.yaml")
+        rest = text[i + len("  inputs:"):]
+        m = re.search(r"(?m)^(?!    |\s*$)", rest)   # end of the indented block
+        end = i + len("  inputs:") + (m.start() if m else len(rest))
+        text = text[:i] + "  inputs:\n    # BEGIN netmon-inputs\n    # END netmon-inputs\n" + text[end:]
+    return replace_region(text, "# BEGIN netmon-inputs", "# END netmon-inputs", INLET_INPUTS)
+
+
+def render_compose_ports(text):
+    if "# BEGIN netmon-ports" not in text:
+        old = "    ports: !override\n      - 2055:2055/udp\n"
+        if old not in text:
+            raise Invalid("inlet ports not found in docker-compose-local.yml")
+        text = text.replace(old, "    ports: !override\n      # BEGIN netmon-ports\n      # END netmon-ports\n", 1)
+    text = text.replace("# NetFlow v9 only. Host firewall (DOCKER-USER)", "# NetFlow/IPFIX/sFlow. Host firewall (DOCKER-USER)")
+    return replace_region(text, "# BEGIN netmon-ports", "# END netmon-ports", [f"- {p}:{p}/udp" for p in sorted(set(FLOW_PORTS.values()))])
 
 
 RSYSLOG_TMPL = """# netmon: receive firewall remote syslog (filterlog, suricata, gateways, VPN, audit) on 5514.
@@ -213,8 +280,8 @@ input(type="imudp" port="5514" ruleset="netmonOPNsense")
 """
 
 
-def render_rsyslog(sites):
-    ips = sorted({s["syslog_source"] for s in sites if s["syslog_source"]})
+def render_rsyslog(sites, devices=()):
+    ips = sorted({s["syslog_source"] for s in (*sites, *devices) if s["syslog_source"]})
     allowed = "\n".join([f"$AllowedSender TCP, {', '.join(ips)}", f"$AllowedSender UDP, {', '.join(ips)}"]) if ips else ""
     return RSYSLOG_TMPL.format(allowed=allowed)
 
@@ -226,9 +293,9 @@ def run(cmd, check=True, cwd=None):
     return r.stdout
 
 
-def ufw_syslog(sites):
+def ufw_syslog(sites, devices=()):
     """Make ufw's netmon-syslog rules exactly one tcp+udp allow per syslog source."""
-    want = {(ip, p) for ip in {s["syslog_source"] for s in sites if s["syslog_source"]} for p in ("tcp", "udp")}
+    want = {(ip, p) for ip in {s["syslog_source"] for s in (*sites, *devices) if s["syslog_source"]} for p in ("tcp", "udp")}
     have, legacy = {}, []
     for line in run(["ufw", "status", "numbered"]).splitlines():
         m = re.match(r"^\[\s*(\d+)\]\s+5514/(tcp|udp)\s+ALLOW IN\s+(\S+)\s+#\s*(.*)$", line.strip())
@@ -275,23 +342,33 @@ def main():
     try:
         doc = json.loads(raw)
         sites, mon = validate(doc), validate_monitor(doc)
+        devices = validate_devices(doc, sites)
     except (Invalid, ValueError) as e:
         status(ok=False, hash=digest, error=f"rejected: {e}", actions=[])
         return 1
     actions = []
     try:
-        outlet = render_outlet(open(OUTLET).read(), sites)
-        after = render_after(open(AFTER).read(), sites)
-        rsys = render_rsyslog(sites)
+        outlet = render_outlet(open(OUTLET).read(), sites, devices)
+        after = render_after(open(AFTER).read(), sites, devices)
+        rsys = render_rsyslog(sites, devices)
+        # firewall first: the new flow ports must be filtered before the inlet publishes them
+        fw_changed = write_if_changed(AFTER, after, 0o640)
+        fw_changed = ufw_syslog(sites, devices) or fw_changed
+        if fw_changed:
+            run(["ufw", "reload"])
+            actions.append("ufw sender rules updated")
+        inlet_changed = write_if_changed(INLET, render_inlet(open(INLET).read()))
+        ports_changed = write_if_changed(AKV_LOCAL, render_compose_ports(open(AKV_LOCAL).read()))
+        if ports_changed:
+            run(["docker", "compose", "up", "-d", "akvorado-inlet"], cwd=AKV_DIR)
+            actions.append("Akvorado inlet ports updated (NetFlow/IPFIX 2055, IPFIX 4739, sFlow 6343)")
+        elif inlet_changed:
+            run(["docker", "compose", "restart", "akvorado-inlet"], cwd=AKV_DIR)
+            actions.append("Akvorado inlet inputs updated")
         if write_if_changed(OUTLET, outlet):
             run(["docker", "compose", "restart", "akvorado-orchestrator"], cwd=AKV_DIR)
             run(["docker", "compose", "restart", "akvorado-outlet", "akvorado-inlet"], cwd=AKV_DIR)
             actions.append("Akvorado exporters updated (orchestrator, inlet, outlet restarted)")
-        fw_changed = write_if_changed(AFTER, after, 0o640)
-        fw_changed = ufw_syslog(sites) or fw_changed
-        if fw_changed:
-            run(["ufw", "reload"])
-            actions.append("ufw sender rules updated")
         old = open(RSYSLOG).read() if os.path.exists(RSYSLOG) else None
         if old != rsys:
             write_if_changed(RSYSLOG, rsys)
@@ -309,8 +386,8 @@ def main():
         status(ok=False, hash=digest, error=str(e)[:500], actions=actions)
         return 1
     status(ok=True, hash=digest, error=None, actions=actions or ["no change needed"],
-           senders={"netflow": sorted({s["exporter_ip"] for s in sites if s["exporter_ip"]}),
-                    "syslog": sorted({s["syslog_source"] for s in sites if s["syslog_source"]})},
+           senders={"netflow": sorted({s["exporter_ip"] for s in (*sites, *devices) if s["exporter_ip"]}),
+                    "syslog": sorted({s["syslog_source"] for s in (*sites, *devices) if s["syslog_source"]})},
            monitor=mon)
     return 0
 

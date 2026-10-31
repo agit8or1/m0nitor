@@ -5,7 +5,7 @@ m0nitor has three places for settings. Most day-to-day settings live in the UI.
 | Where | What | Notes |
 |---|---|---|
 | `app/config.yaml` | Seeds a fresh install: first site, networks, detection thresholds, service ports, users | Copy from [`config.example.yaml`](../config.example.yaml). After the first start the database is authoritative for sites, names and labels. |
-| UI → **Settings** (SQLite `data/netmon.db`) | Firewalls & sites, inventory names and labels, alert rules, notifications, auto-response, maintenance windows, users and 2FA, AI settings | Changes are audited (Settings → Audit log). |
+| UI → **Settings** (SQLite `data/netmon.db`) | Firewalls & sites, additional devices (`devices:db`), inventory names and labels, alert rules, notifications, auto-response, maintenance windows, users and 2FA, AI settings | Changes are audited (Settings → Audit log). |
 | `secrets/` (mode 700, files mode 600, owner uid 10001) | API keys, SNMP community, notification credentials, AI key | Never stored in config.yaml, the database's settings JSON, logs or the UI. |
 
 ## config.yaml essentials
@@ -24,6 +24,8 @@ m0nitor has three places for settings. Most day-to-day settings live in the UI.
 | `opnsense` | Firewall API address, TLS server name, block alias and key file (blocking is off without a key) |
 | `geoip_policy` | Fallback snapshot of the firewall's GeoIP alias, used only when the live read fails — see [geoip.md](geoip.md) |
 | `ai` | Optional AI analysis: model, key file, token and daily request caps, pseudonymization |
+| `syslog_max_lines_per_second` | Per-sender cap for non-OPNsense devices (default 5000 per received second; drops are counted) |
+| `rules` (device events) | `device_auth_failures`, `vpn_tunnel_down`, `interface_down`, `routing_neighbor_down`, `ha_failover`, `config_change`, `device_silence`: seeded with defaults when absent, so existing files need no change |
 
 Every key in `config.example.yaml` carries an inline comment. Example values use documentation address ranges
 (RFC 5737) and private ranges only.

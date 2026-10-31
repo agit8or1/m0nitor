@@ -4,6 +4,7 @@ Rates are derived from consecutive samples. A counter decrease (reset/wrap,
 reboot) or a sample gap longer than 3x the poll interval produces a gap,
 never a zero.
 """
+import json
 import os
 import subprocess
 import threading
@@ -34,9 +35,21 @@ def init(conn):
     conn.commit()
 
 
-def snmp_get(host, community, oids, timeout=3):
-    """Return values (str) via net-snmp snmpget (community is visible to processes in this container only)."""
-    r = subprocess.run(["snmpget", "-v2c", "-c", community, "-t", str(timeout), "-r", "1", "-Oqv", "-On", host, *oids],
+def auth_args(cred):
+    """net-snmp arguments for a v2c community (str) or an SNMP config dict (v2c community_file, or v3 authPriv).
+    Secrets are read from the secrets directory at call time; they appear only in this container's process list."""
+    if isinstance(cred, str):
+        return ["-v2c", "-c", cred]
+    if cred.get("version", "v2c") == "v3":
+        sec = json.load(open(cred["v3_file"]))
+        return ["-v3", "-l", "authPriv", "-u", cred["user"], "-a", cred.get("auth_proto", "SHA"), "-A", sec["auth"],
+                "-x", cred.get("priv_proto", "AES"), "-X", sec["priv"]]
+    return ["-v2c", "-c", open(cred["community_file"]).read().strip()]
+
+
+def snmp_get(host, cred, oids, timeout=3):
+    """Return values (str) via net-snmp snmpget. `cred`: community string or SNMP config dict (v2c or v3 authPriv)."""
+    r = subprocess.run(["snmpget", *auth_args(cred), "-t", str(timeout), "-r", "1", "-Oqv", "-On", host, *oids],
                        capture_output=True, text=True, timeout=timeout * 3)
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip()[:200])
@@ -96,9 +109,10 @@ class Poller:
         self.cfg = cfg
 
     def targets(self):
-        for s in self.cfg.get("sites", []):
+        """Site firewalls and additional devices with SNMP configured (counter rows are keyed by site/device id)."""
+        for s in [*self.cfg.get("sites", []), *(self.cfg.raw.get("devices") or [] if hasattr(self.cfg, "raw") else [])]:
             sn = s.get("snmp")
-            if sn and os.path.exists(sn["community_file"]):
+            if sn and os.path.exists(sn.get("v3_file") or sn.get("community_file") or "/nonexistent"):
                 yield s, sn
 
     def run(self):
@@ -107,7 +121,7 @@ class Poller:
         last_prune = 0
         while True:
             for site, sn in self.targets():
-                comm = open(sn["community_file"]).read().strip()
+                comm = open(sn["community_file"]).read().strip() if sn.get("version", "v2c") == "v2c" else sn
                 for name, idx in sn["interfaces"].items():
                     try:
                         vin, vout, speed = snmp_get(sn["host"], comm, [OID_IN + str(idx), OID_OUT + str(idx), OID_SPEED + str(idx)])

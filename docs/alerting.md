@@ -4,7 +4,8 @@
 
 The detector runs every 5 minutes (configurable). Each finding records its evidence, the exact query, the baseline
 it was compared to, other possible explanations and next steps, and — where the telemetry allows — a verified
-direction. Novelty rules stay silent until the learning period (`min_learning_days`) has passed.
+direction. Novelty rules stay silent until the learning period (`min_learning_days`) has passed. Findings from device
+events name the device and include the original log lines.
 
 | Rule | Raises a finding when |
 |---|---|
@@ -16,7 +17,10 @@ direction. Novelty rules stay silent until the learning period (`min_learning_da
 | IDS signature | Suricata alerts (grouped per signature, source and target) |
 | Blocked inbound scanning / Outbound blocked | logged firewall blocks form a scan pattern, or outbound traffic is repeatedly blocked |
 | DNS anomaly / external resolvers | NXDOMAIN or random-label bursts, hosts bypassing the local resolver |
-| Telemetry stopped / Firewall log feed stopped / Source health / Disk space / Detector error | monitoring itself needs attention |
+| VPN tunnel down / Interface down / Routing neighbor down / HA failover | a device reports the state change in its own log |
+| Configuration change | a device reports a configuration change (who and what, from its log) |
+| Repeated failed logins to a device | ≥ N failed logins to a firewall/router/switch from one source in a window |
+| Telemetry stopped / Firewall log feed stopped / Device log feed stopped / Source health / Disk space / Detector error | monitoring itself needs attention |
 
 Thresholds and on/off switches: Settings → Alert rules (seeded from `rules:` in config.yaml).
 
