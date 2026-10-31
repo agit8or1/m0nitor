@@ -36,12 +36,17 @@ def test_flow_predicates_per_vendor(cfg, conn):
     put_setting(conn, "sites:added", [PF], "t")
     apply_sites(cfg, conn)
     m, p = flow_predicates(cfg, cfg.sites)
-    assert p["fd_wan"] == [("fw-a", "ix0")] and p["fd_lan"] == [("fw-a", "bridge0")]
+    assert (p["fd_re0"], p["fd_rw0"], p["fd_rl0"]) == ("fw-a", "ix0", "bridge0")
+    assert "ExporterName = {fd_re0:String} AND InIfName = {fd_rw0:String}" in m["INB"]
+    assert "OutIfName = {fd_rl0:String}" in m["TOLAN"] and p["fd_rexp"] == ["fw-a"]
+    assert not any("has(" in v for v in m.values())   # per-row tuple has() was ~30x slower on ClickHouse
     # pfSense softflowd: same ifindex both ways -> direction by address on the WAN capture
     assert p["fd_c0"] == "pfsense-br1" and p["fd_ci0"] == "igb0" and "10.20.0.0/24" in p["fd_cn0"]
     assert "isIPAddressInRange" in m["INB"] and "OutIfName" in m["OUTB"]
     m1, p1 = flow_predicates(cfg, [cfg.site("br1")])
-    assert p1["fd_wan"] == [] and "fd_c0" in p1
+    assert "fd_re0" not in p1 and "fd_c0" in p1 and m1["TOLAN"].startswith("((ExporterName = {fd_c0")
+    m0, _ = flow_predicates(cfg, [])
+    assert m0["INB"] == m0["OUTB"] == m0["TOLAN"] == "(0)"            # no site in scope: matches nothing
 
 
 def test_pfsense_bsd_syslog_without_hostname():

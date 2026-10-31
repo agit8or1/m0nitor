@@ -3,6 +3,63 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.23 — 2026-10-31
+
+### Faster
+- Server filter, remote-address filter, 1:1 and shared NAT upload attribution, finding traffic and the home-country
+  map placement compare and group the raw address columns instead of formatting every row's address as text first
+  (the NAT upload query: 0.67 s to 0.12 s). Same results: checked against the previous queries on 24 hours of real
+  traffic.
+- Log ingestion inserts at most once per second per table when it has caught up, instead of one small insert per
+  few lines (DNS events: about 3 inserts per second before), which reduces ClickHouse merge work. A backlog is still
+  read without pausing.
+
+## v1.22 — 2026-10-31
+
+### Faster
+- Overview, Servers, Connections and Countries: when a rolling window moves to its next step, the traffic part of
+  the page is served from the previous step (with that step's own time window, so numbers and labels match) while
+  the new step is computed once in the background. It is never more than two steps old (4 min for 24 h, 10 min for
+  7 days). Open alerts, collection state, sources and the GeoIP policy are always current. Custom and historical
+  windows are computed exactly, as before.
+
+## v1.21 — 2026-10-31
+
+### Faster
+- Countries: when a rolling window (for example "last 24 hours") moves to its next step, the map shows the previous
+  step's firewall-block counts (at most one step old: 2 min for 24 h, 5 min for 7 days) while the new ones are
+  computed in the background, instead of making the viewer wait. Historical and custom windows are always exact.
+
+## v1.20 — 2026-10-31
+
+### Faster
+- List pages (Overview recent connections, Connections, Servers, country block drill-down) no longer wait up to
+  2–3 s for reverse DNS names. They wait at most 0.4 s; a name not answered yet appears on the next refresh.
+  Reverse DNS lookups run on 16 workers instead of 4, because PTR lookups for Internet addresses are often slow.
+
+## v1.19 — 2026-10-31
+
+### Faster
+- Long time ranges: the window end is rounded per range (10 s for 15 min up to 5 min for 7 days), and query results
+  bound to the window are reused for as long as the window is current. Previously every viewer and every refresh
+  re-scanned days of raw flows.
+- The default "all sites" view for 24 h and 7 days is computed in the background once per window step, so Overview,
+  Servers, Connections and Countries open from cache instead of waiting for the scans.
+- Countries: logged firewall blocks per country are cached for the window's life and parsed faster.
+
+## v1.18 — 2026-10-31
+
+### Faster
+- Traffic pages and detectors: the WAN/LAN interface filters used by every flow query were evaluated as a tuple lookup
+  per row; they are now plain equalities per site, which ClickHouse evaluates on the column dictionaries. The same
+  filter is about 20x faster. Results are identical: same flow counts and byte totals over 24 hours of real traffic.
+  Exporter filters use `IN` instead of `has()` for the same reason.
+
+### Fixed
+- Page footer: credits now follow the GeoIP data actually loaded (IPinfo, MaxMind GeoLite2 or synthetic demo data for
+  countries) and credit DB-IP when its city database places map markers. DB-IP's CC BY 4.0 license requires that
+  attribution, which was missing.
+
 ## v1.17 — 2026-10-31
 
 ### Fixed

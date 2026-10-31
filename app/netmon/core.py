@@ -275,9 +275,16 @@ def flow_predicates(cfg, sites) -> tuple[dict, dict]:
     p = {"fd_wan": [(x["exporter"], x["wan_if"]) for x in routed],
          "fd_lan": [(x["exporter"], x["lan_if"]) for x in routed if x.get("lan_if")],
          "fd_rexp": [x["exporter"] for x in routed]}
-    inb = ["has({fd_wan:Array(Tuple(String, String))}, (ExporterName, InIfName))"]
-    outb = ["has({fd_wan:Array(Tuple(String, String))}, (ExporterName, OutIfName))"]
-    tolan = ["has({fd_lan:Array(Tuple(String, String))}, (ExporterName, OutIfName))"]
+    # Plain equalities per site: ClickHouse evaluates them on the LowCardinality dictionaries. The equivalent
+    # has([(exporter, if), ...], (ExporterName, InIfName)) builds a tuple per row and was ~30x slower.
+    inb, outb, tolan = [], [], []
+    for i, x in enumerate(routed):
+        p[f"fd_re{i}"], p[f"fd_rw{i}"] = x["exporter"], x["wan_if"]
+        inb.append(f"(ExporterName = {{fd_re{i}:String}} AND InIfName = {{fd_rw{i}:String}})")
+        outb.append(f"(ExporterName = {{fd_re{i}:String}} AND OutIfName = {{fd_rw{i}:String}})")
+        if x.get("lan_if"):
+            p[f"fd_rl{i}"] = x["lan_if"]
+            tolan.append(f"(ExporterName = {{fd_re{i}:String}} AND OutIfName = {{fd_rl{i}:String}})")
     for i, x in enumerate(cap):
         p[f"fd_c{i}"], p[f"fd_ci{i}"], p[f"fd_cn{i}"] = x["exporter"], x["wan_if"], cfg.site_ours(x)
         ours = lambda c: f"arrayExists(n -> isIPAddressInRange({_IPSTR.format(c=c)}, n), {{fd_cn{i}:Array(String)}})"  # noqa: E731
@@ -285,9 +292,9 @@ def flow_predicates(cfg, sites) -> tuple[dict, dict]:
         inb.append(f"({base} AND {ours('DstAddr')} AND NOT {ours('SrcAddr')})")
         outb.append(f"({base} AND {ours('SrcAddr')} AND NOT {ours('DstAddr')})")
         tolan.append(inb[-1])  # the local side is visible only as the address on the WAN
-    m = {"INB": "(" + " OR ".join(inb) + ")", "OUTB": "(" + " OR ".join(outb) + ")",
-         "TOLAN": "(" + " OR ".join(tolan) + ")",
-         "FWORIG": "(InIfName = '' AND has({fd_rexp:Array(String)}, ExporterName))"}
+    any_of = lambda xs: "(" + (" OR ".join(xs) or "0") + ")"  # noqa: E731  (no matching site: matches nothing)
+    m = {"INB": any_of(inb), "OUTB": any_of(outb), "TOLAN": any_of(tolan),
+         "FWORIG": "(InIfName = '' AND ExporterName IN {fd_rexp:Array(String)})"}
     return m, p
 
 
