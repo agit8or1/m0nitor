@@ -1,0 +1,14 @@
+[Unit]
+Description=m0nitor: read-only host facts for capacity planning
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netmon-hostinfo
+Nice=10
+IOSchedulingClass=idle
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/netmon/data
+PrivateTmp=yes
+NoNewPrivileges=yes

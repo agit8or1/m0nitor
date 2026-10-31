@@ -34,6 +34,8 @@ CREATE INDEX IF NOT EXISTS counters_i ON counters(site, iface, ts);
 def init(conn):
     conn.executescript(SCHEMA)
     conn.commit()
+    from .capacity import init as capacity_init   # fw_resources (firewall CPU/memory history) lives with capacity planning
+    capacity_init(conn)
 
 
 def auth_args(cred):
@@ -143,6 +145,13 @@ class Poller:
                             ev = snmp_get(sn["host"], comm, [OID_ERR[k] + str(idx) for k in OID_ERR])
                             ifs[name] = {k: int(v) for k, v in zip(OID_ERR, ev)}
                         set_state(conn, f"snmp:{site['id']}:system", {"ok": True, "ts": time.time(), **sysv, "interfaces": ifs})
+                        try:   # history for capacity planning (netmon.fwres): CPU %, memory %, load
+                            mem = 100 * (1 - sysv["mem_avail_kb"] / sysv["mem_total_kb"]) if sysv.get("mem_total_kb") else None
+                            conn.execute("INSERT INTO fw_resources(device, ts, cpu, mem, load1, extra) VALUES (?,?,?,?,?,NULL)",
+                                         (site["id"], time.time(), 100 - sysv["cpu_idle_pct"], mem, sysv.get("load1")))
+                            conn.commit()
+                        except Exception:
+                            pass
                     except Exception as ex:
                         set_state(conn, f"snmp:{site['id']}:system", {"ok": False, "ts": time.time(), "error": str(ex)[:200]})
             if time.time() - last_prune > 3600:

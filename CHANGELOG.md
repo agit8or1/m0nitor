@@ -3,6 +3,53 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.29 — 2026-10-31
+
+### Added
+- **Hardware grade 0–100** (100 best) at the top of Settings → System → Capacity planner and in the printable
+  report. Each resource gets a headroom score, 100 × (1 − 1/k), where k is how many times today's workload fits
+  before it reaches its target (CPU 70 %, memory 85 %, disk I/O and disk space from the capacity calculation):
+  1× → 0, 2× → 50, 4× → 75, 10× → 90. The grade is the weakest resource's score, so it names what runs out first.
+  Documented caps: rotational data disk ≤ 60, CPU steal above 5 % at P95 −10, disk limit within 30 days ≤ 30. Bands:
+  ≥ 75 ample headroom, ≥ 50 comfortable, ≥ 25 tight, below that undersized. Labelled ESTIMATED with the measurement
+  confidence; UNKNOWN when fewer than two resources can be measured.
+
+## v1.28 — 2026-10-31
+
+### Added
+- **Capacity planner** (Settings → System → Capacity planner). *Use my current setup* fills in from this
+  installation's measurements over 1 h, 24 h, 7 d, 30 d or a custom range: flow records/s, events/s per table, WAN
+  throughput (SNMP and flow-estimated, both labelled), host CPU, memory, disk busy and latency, ClickHouse memory,
+  storage per table with retention, and inventory counts. Each figure shows average, P95 and peak 1-minute rate,
+  samples, missing periods, freshness and confidence. Every value is labelled MEASURED, ESTIMATED, SUGGESTED,
+  BENCHMARKED, MANUAL or UNKNOWN; unknown values are never shown as zero.
+- **What this server can handle:** how many times today's workload fits before disk space, disk I/O or CPU reaches
+  its target, and which runs out first. CPU capacity is given only when a robust regression of CPU against flow and
+  event rates passes documented validity checks, or from a matching benchmark; otherwise it is UNKNOWN with the reason.
+- **Storage and retention calculator:** per-table steady state at TTL, days until the disk limit, changes to retention
+  and workload scale. ClickHouse's own diagnostic logs are reported separately (often the largest daily share on small
+  installations).
+- **Plan a new installation:** a questionnaire (devices, link speed, activity, logging detail, network type,
+  features, retention) gives SUGGESTED ranges with every assumption listed; no flows/s needed. Local measurements
+  narrow the ranges when available. *Advanced* takes explicit rates. Plans can be saved; there is a printable report.
+- **Resources & capacity** dashboard (Settings → System): live host, ClickHouse, ingest, Kafka lag, query latency and
+  firewall CPU/memory charts.
+- **Firewall hardware & capacity** (device page → Hardware & capacity): SNMP discovery through SNMPv2-MIB,
+  HOST-RESOURCES-MIB, UCD-SNMP-MIB, IF-MIB and ENTITY-MIB (Fortinet and Palo Alto MIB values marked unverified), each
+  step reporting answered / not supported / timeout / authentication / permission. Manual values are never overwritten
+  by discovery. Also: measured export rates and bandwidth, a calculator for feature changes (CPU impact only when
+  measured) and Lightweight / Balanced / Detailed profiles. Firewall CPU and memory are sampled every minute (UCD-SNMP) or
+  every 5 minutes (other agents).
+- **Calibration history** and forecasts: daily prediction vs measurement, kept locally; trends from at least 3 days.
+- **Benchmark harness** (`bench/`, in the repository): synthetic NetFlow v5/v9/IPFIX and syslog generator, an
+  isolated component benchmark (throwaway ClickHouse, no network) and an opt-in end-to-end pipeline benchmark for
+  non-production stacks. Results with hardware, versions and conditions; the first component result is published in
+  `docs/performance-benchmarks.md`.
+- Optional root helper `host/netmon-hostinfo` (+ timer): read-only host facts the container cannot see (disk models,
+  NICs, Kafka volume).
+- Docs: hardware sizing, capacity planning, firewall resource requirements, performance benchmarks; README sizing
+  chart.
+
 ## v1.27 — 2026-10-31
 
 ### Fixed

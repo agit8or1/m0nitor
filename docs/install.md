@@ -6,6 +6,8 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
 ## Install
 1. **Host:** a VM with ≥ 4 vCPU, 8 GB RAM, SSD. ClickHouse ≥ 26.6 needs x86-64-v3 (AVX2); on older CPU types pin
    ClickHouse 26.3 (`akvorado/docker-compose-local.yml` does this — remove the override when the CPU allows).
+   Size disk and CPU for your site with [hardware-sizing.md](hardware-sizing.md); after install, Settings → System →
+   Capacity planner sizes it from measurements.
 2. **Akvorado:** download the upstream quickstart bundle for `AKVORADO_VERSION` into `/opt/netmon/akvorado`
    (Akvorado's documentation, "Quick start"), then copy this repository's `akvorado/config/*` over its `config/` and
    `akvorado/docker-compose-local.yml` to `akvorado/docker/`. Add `docker/docker-compose-local.yml` as the last
@@ -21,6 +23,9 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
 6. **Host helpers (root):** install `host/netmon-apply-sites` to `/usr/local/sbin/`, the `.path`/`.service` units to
    `/etc/systemd/system/`, `systemctl enable --now netmon-apply-sites.path`. Add firewalls in Settings → Firewalls;
    the helper renders the NetFlow/syslog ACLs, rsyslog config and Akvorado exporter metadata.
+   Optional, for the capacity planner: `host/netmon-hostinfo` to `/usr/local/sbin/`, its `.service`/`.timer` to
+   `/etc/systemd/system/`, `systemctl enable --now netmon-hostinfo.timer` (writes `data/hostinfo.json`: host NICs, CPU topology, disk models,
+   container limits, Kafka volume size; read-only, every 5 minutes).
 7. **ufw:** allow 22 and 443 from management networks only; the helper adds the per-device flow (2055, 4739, 6343) and syslog (5514) rules.
 8. **Firewall side:** [opnsense-setup.md](opnsense-setup.md). Then check the Coverage page.
 

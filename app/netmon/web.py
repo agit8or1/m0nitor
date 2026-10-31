@@ -1371,6 +1371,9 @@ def start():
         threading.Thread(target=detector_loop, daemon=True).start()
         threading.Thread(target=responder_loop, daemon=True).start()
         Poller(cfg).start()
+        from . import capacity as _cap, fwres as _fwres
+        _cap.Sampler(cfg, db_connect, ch).start()          # export wire size, syslog line size, daily calibration record
+        _fwres.Refresher(cfg, db_connect).start()          # device inventory every 6 h, CPU samples for non-UCD agents
         Ingest(cfg, cfg["clickhouse_url"]).start()
         from .dnsresolve import NameResolver
         NameResolver(cfg, ch, cfg["clickhouse_url"]).start()   # FQDNs for remote addresses from the DNS query log
@@ -1389,5 +1392,6 @@ from . import inventory  # noqa: E402,F401  (server names and external address l
 from . import autoresp  # noqa: E402,F401  (auto-response settings, firewall setup, decision log)
 from . import coverage  # noqa: E402,F401  (coverage & source health)
 from . import intel  # noqa: E402,F401  (threat intel: ExploitHound Threat Radar)
+from . import capacity_views  # noqa: E402,F401  (capacity planner, resources & capacity, device hardware)
 from . import devices as _devices  # noqa: E402
 _devices.register(app)  # Settings -> Devices (multi-vendor onboarding, capability and telemetry status)

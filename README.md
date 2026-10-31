@@ -110,6 +110,20 @@ Requirements: a Linux VM (4 vCPU, 8 GB RAM, SSD) with Docker Engine and the comp
 ClickHouse (flows), the m0nitor app (Python 3.12, FastAPI), rsyslog and Caddy. Details and trust boundaries:
 [docs/architecture.md](docs/architecture.md).
 
+## Sizing
+
+| Site | Flow records/s (avg) | vCPU | RAM | Disk (30-day flows) | Basis |
+|---|---|---|---|---|---|
+| Small office, 1 firewall | up to ~500 | 4 (min) – 8 | 8 – 16 GB | 128 GB SSD | measured on a reference installation (≈250/s) |
+| Several firewalls / busy site | 500 – 5,000 | 8 | 16 GB | 250 – 500 GB SSD | storage calculated; CPU/RAM **not yet measured** |
+| Large | > 5,000 | — | — | calculate | **unknown**: benchmark the target hardware |
+
+No CPU throughput is claimed beyond what has been measured. Once installed, **Settings → System → Capacity planner**
+sizes your own server from its measurements: what it handles today, what runs out first, and what a new
+installation needs. See [hardware sizing](docs/hardware-sizing.md), [capacity planning](docs/capacity-planning.md),
+[firewall resource requirements](docs/firewall-resource-requirements.md) and
+[performance benchmarks](docs/performance-benchmarks.md).
+
 ## Documentation
 
 | | |
@@ -117,6 +131,7 @@ ClickHouse (flows), the m0nitor app (Python 3.12, FastAPI), rsyslog and Caddy. D
 | [Demo](docs/demo.md) · [Install, upgrade, backup, rollback](docs/install.md) · [Configuration](docs/configuration.md) | getting started |
 | [Devices](docs/devices.md) · [Compatibility matrix](docs/vendors.md) · [OPNsense / pfSense setup](docs/opnsense-setup.md) · [Blocking](docs/BLOCKING.md) · [GeoIP](docs/geoip.md) | device side |
 | [Maps](docs/maps.md) · [Findings and alerting](docs/alerting.md) · [NAT attribution](docs/nat-attribution.md) · [Threat intel](docs/threat-intel.md) | using m0nitor |
+| [Hardware sizing](docs/hardware-sizing.md) · [Capacity planning](docs/capacity-planning.md) · [Firewall resource requirements](docs/firewall-resource-requirements.md) · [Benchmarks](docs/performance-benchmarks.md) | sizing |
 | [Architecture](docs/architecture.md) · [API and storage](docs/api.md) · [Security and privacy](docs/privacy-hardening.md) | internals |
 | [Troubleshooting](docs/troubleshooting.md) · [Roadmap](docs/ROADMAP.md) · [All docs](docs/README.md) | more |
 
@@ -128,6 +143,7 @@ akvorado/            overlay for an upstream Akvorado release (config/ and docke
 caddy/               TLS front end
 host/                root-side helpers: site/ACL renderer, encrypted backup, optional mirror port; systemd units
 demo/                isolated demo: synthetic seed, live feeder, screenshot script
+bench/               benchmark harness: synthetic flow/syslog generator, isolated component and pipeline benchmarks
 docs/                documentation and screenshots
 config.example.yaml  example configuration (documentation and private address ranges only)
 ```

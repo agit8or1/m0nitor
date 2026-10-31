@@ -1,0 +1,113 @@
+#!/usr/bin/python3
+"""Read-only host facts for m0nitor's capacity planner (host network interfaces, CPU topology, disks, container limits,
+Kafka disk use). Run as root by netmon-hostinfo.timer every 5 minutes; writes /opt/netmon/data/hostinfo.json (mode 644).
+It only reads: /sys, lscpu, lsblk, systemd-detect-virt, `docker inspect` and the size of the Kafka volume. No container
+is started or changed, nothing is sent anywhere."""
+import glob
+import json
+import os
+import subprocess
+import time
+
+OUT = os.environ.get("NETMON_HOSTINFO", "/opt/netmon/data/hostinfo.json")
+VIRTUAL = ("lo", "veth", "br-", "docker", "virbr", "vnet", "tap", "tun", "wg", "zt", "flannel", "cni", "kube")
+
+
+def run(*cmd, timeout=20):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def read(p):
+    try:
+        with open(p) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def nics(prev):
+    out = []
+    for p in sorted(glob.glob("/sys/class/net/*")):
+        n = os.path.basename(p)
+        if n.startswith(VIRTUAL) or not os.path.exists(f"{p}/device"):
+            continue
+        sp = read(f"{p}/speed")
+        rx, tx = int(read(f"{p}/statistics/rx_bytes") or 0), int(read(f"{p}/statistics/tx_bytes") or 0)
+        x = {"name": n, "speed_mbps": int(sp) if sp and sp.lstrip("-").isdigit() and int(sp) > 0 else None, "state": read(f"{p}/operstate"),
+             "driver": os.path.basename(os.path.realpath(f"{p}/device/driver")) if os.path.exists(f"{p}/device/driver") else None,
+             "rx_bytes": rx, "tx_bytes": tx}
+        old = next((o for o in (prev.get("nics") or []) if o["name"] == n), None)
+        dt = time.time() - prev.get("ts", 0)
+        if old and 0 < dt < 3600 and rx >= old["rx_bytes"] and tx >= old["tx_bytes"]:
+            x["rx_bps"], x["tx_bps"] = 8 * (rx - old["rx_bytes"]) / dt, 8 * (tx - old["tx_bytes"]) / dt
+        out.append(x)
+    return out
+
+
+def lscpu():
+    try:
+        d = {x["field"].rstrip(":"): x["data"] for x in json.loads(run("lscpu", "-J"))["lscpu"]}
+    except (ValueError, KeyError):
+        return {}
+    return {"sockets": d.get("Socket(s)"), "cores_per_socket": d.get("Core(s) per socket"), "threads_per_core": d.get("Thread(s) per core"),
+            "model": d.get("Model name"), "hypervisor": d.get("Hypervisor vendor"), "max_mhz": d.get("CPU max MHz")}
+
+
+def disks():
+    try:
+        devs = json.loads(run("lsblk", "-J", "-b", "-d", "-o", "NAME,MODEL,ROTA,SIZE,TYPE,TRAN"))["blockdevices"]
+    except (ValueError, KeyError):
+        return []
+    return [{"name": d["name"], "model": (d.get("model") or "").strip(), "rota": d.get("rota"), "size": int(d.get("size") or 0), "tran": d.get("tran")}
+            for d in devs if d.get("type") == "disk"]
+
+
+def containers():
+    ids = run("docker", "ps", "-q").split()
+    if not ids:
+        return {}
+    try:
+        info = json.loads(run("docker", "inspect", *ids))
+    except ValueError:
+        return {}
+    out = {}
+    for c in info:
+        h = c.get("HostConfig") or {}
+        cpus = (h.get("NanoCpus") or 0) / 1e9 or ((h.get("CpuQuota") or 0) / (h.get("CpuPeriod") or 100000) if (h.get("CpuQuota") or 0) > 0 else None)
+        name = c.get("Name", "").lstrip("/")
+        if name.startswith(("akvorado-", "app-", "caddy")):
+            out[name] = {"cpus": cpus or None, "memory": h.get("Memory") or None}
+    return out
+
+
+def kafka():
+    vols = glob.glob("/var/lib/docker/volumes/*kafka*/_data")
+    if not vols:
+        return None
+    total = 0
+    for v in vols:
+        out = run("du", "-sb", v, timeout=60).split()
+        total += int(out[0]) if out and out[0].isdigit() else 0
+    return {"bytes": total, "volumes": [v.split("/")[-2] for v in vols]}
+
+
+def main():
+    try:
+        with open(OUT) as f:
+            prev = json.load(f)
+    except (OSError, ValueError):
+        prev = {}
+    doc = {"ts": time.time(), "virt": run("systemd-detect-virt").strip() or None, "lscpu": lscpu(), "nics": nics(prev), "disks": disks(),
+           "containers": containers(), "kafka": kafka()}
+    tmp = OUT + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(doc, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, OUT)
+
+
+if __name__ == "__main__":
+    main()
