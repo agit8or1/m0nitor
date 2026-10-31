@@ -93,3 +93,19 @@ def test_names_for_prefers_the_hosts_own_lookup():
 def test_query_parses_ptr_names():
     port = responder([(12, b"\x04host\x07example\x03net\x00", 900)])
     assert dr.query("7.113.0.203.in-addr.arpa", "PTR", "127.0.0.1", port=port) == [("host.example.net", 900)]
+
+
+def test_rdns_wait_returns_name_no_record_or_pending(cfg, monkeypatch):
+    import time as _t
+    from netmon import rdns
+    def fake(name, qtype, server, timeout=2.0):
+        if name.startswith("9.64.83.45"):
+            return [("scan.example.net.", 300)]
+        if name.startswith("10.64.83.45"):
+            _t.sleep(1.0)
+        return []
+    monkeypatch.setattr(rdns, "query", fake)
+    r = rdns.RDNS(cfg)
+    got = r.wait(["45.83.64.9", "45.83.64.8", "45.83.64.10"], timeout=0.5)
+    assert got == {"45.83.64.9": "scan.example.net", "45.83.64.8": "", "45.83.64.10": None}
+    assert r.get("45.83.64.9") == "scan.example.net"   # cached

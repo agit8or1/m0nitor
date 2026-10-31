@@ -543,6 +543,9 @@ class Dash:
             r["remote_name"] = self.cfg.label(r["remote"])
         self._names(rows, "asn", "asname", sc)
         self._fqdns(rows, sc)
+        rd = self.rdns.wait([r["remote"] for r in rows], timeout=2.0)   # reverse DNS: "" = no PTR, None = not answered yet
+        for r in rows:
+            r["rdns"] = rd.get(r["remote"])
         ports = sorted({(r["proto"], r["svc_port"]) for r in rows if r["svc_port"]})
         if ports:
             names = {(n["p"], n["port"]): n["name"] for n in self.q(sc, """

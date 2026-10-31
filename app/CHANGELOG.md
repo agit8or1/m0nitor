@@ -3,6 +3,12 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.06 — 2026-10-31
+
+### Added
+- Reverse DNS under every remote address in connection tables (Connections page, Overview recent connections,
+  server and country pages): "(name)", or "(no rDNS)" when the address has no PTR record.
+
 ## v1.05 — 2026-10-31
 
 ### Added

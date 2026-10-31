@@ -278,6 +278,11 @@ const NM = (() => {
       node.append(ul);
     }
   }
+  // reverse DNS under an address: "(name)", "(no rDNS)" when it has no PTR record, nothing while not looked up yet
+  function rdnsLine(name) {
+    return name ? el("div", { class: "sub fqdn", title: "reverse DNS (PTR)", text: `(${name})` })
+      : name === "" ? el("div", { class: "sub muted", title: "this address has no reverse DNS (PTR) record", text: "(no rDNS)" }) : null;
+  }
   function convTable(node, rows, opts = {}) {
     table(node, [
       { label: "Last seen", cls: "num", get: (r) => fmtTime(r.last, true) },
@@ -285,10 +290,10 @@ const NM = (() => {
           ? el("a", { href: href(`/netmon/servers/${r.server}`), text: r.server_name, title: r.server })
           : ipCell(r.server, "", href(`/netmon/servers/${r.server}`)) },
       { label: "Direction", get: (r) => el("span", { title: r.evidence, text: r.direction }) },
-      { label: "Remote IP", get: (r) => r.fqdn
-          ? el("span", {}, ipCell(r.remote, r.remote_name), el("div", { class: "sub fqdn", title: r.fqdn.basis },
-              `${r.fqdn.mine ? "" : "≈ "}${r.fqdn.names.join(", ")}${r.fqdn.more ? ` +${r.fqdn.more}` : ""}`))
-          : ipCell(r.remote, r.remote_name) },
+      { label: "Remote IP", get: (r) => el("span", {}, ipCell(r.remote, r.remote_name),
+          r.fqdn ? el("div", { class: "sub fqdn", title: r.fqdn.basis },
+            `${r.fqdn.mine ? "" : "≈ "}${r.fqdn.names.join(", ")}${r.fqdn.more ? ` +${r.fqdn.more}` : ""}`) : null,
+          rdnsLine(r.rdns)) },
       { label: "Country", get: (r) => r.cc ? el("a", { href: href(`/netmon/countries/${r.cc}`), text: r.cc_name }) : "Unknown" },
       { label: "Organization", get: (r) => r.asname || (r.asn ? `AS${r.asn}` : "—") },
       { label: "Service", get: (r) => el("span", {}, r.service, el("div", { class: "sub", text: r.service_evidence })) },
@@ -355,7 +360,7 @@ const NM = (() => {
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) location.reload(); });
   // server-rendered forms with data-confirm (e.g. Ack all) ask before submitting (inline handlers are blocked by the CSP)
   document.addEventListener("submit", (ev) => { const m = ev.target.dataset && ev.target.dataset.confirm; if (m && !confirm(m)) ev.preventDefault(); });
-  return { el, $, fmtBytes, fmtBps, fmtNum, ago, fmtTime, tz, css, sev, scope, qs, href, setScope, onScope, every, get, state, table, rank,
+  return { rdnsLine, el, $, fmtBytes, fmtBps, fmtNum, ago, fmtTime, tz, css, sev, scope, qs, href, setScope, onScope, every, get, state, table, rank,
     legendInOut, pager, lineChart, cards, alertList, ackButton, meters, convTable, scopeDesc, ipCell, namer, onLive: (f) => liveL.push(f), live: () => live,
     isPaused: () => paused };
 })();

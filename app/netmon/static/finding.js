@@ -54,8 +54,7 @@
           NM.pager(pager, pg, PER, rows.length, show); };
         const REMOTE_COLS = [
           { label: "Remote IP", get: (r) => el("span", {}, NM.ipCell(r.ip, r.name),
-              r.rdns ? el("div", { class: "sub fqdn", title: "reverse DNS (PTR)", text: `(${r.rdns})` })
-                : r.rdns === "" ? el("div", { class: "sub muted", title: "this address has no reverse DNS (PTR) record", text: "(no rDNS)" }) : null,
+              NM.rdnsLine(r.rdns),
               named.has(r.ip) ? el("span", { class: "tag", title: "named in this finding's evidence", text: "in evidence" }) : null,
               r.nofl ? el("span", { class: "tag", title: r.blocked ? "the firewall blocked it, so there are no flow records" : "no flow records in this window",
                 text: r.blocked ? `blocked · ${fmtNum(r.events)} pkts` : "no flows" }) : null) },
