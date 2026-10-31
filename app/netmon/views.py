@@ -1099,9 +1099,19 @@ def settings_page(req: Request):
 <tr><td>Inventory</td><td>{len(cfg.get('assets', {}))} named servers</td><td><a href="/netmon/settings/inventory">edit names</a></td></tr>
 <tr><td>Blocking</td><td>{f"{enforcement()[0]} of {enforcement()[1]} firewalls connected" if enforcement()[0] else 'not set up'}</td><td><a href="/netmon/blocks">block requests</a> · <a href="/netmon/settings/response">auto-response</a></td></tr>
 <tr><td>AI analysis</td><td>{'configured · ' + e(ai.ac.get('model')) if ai.enabled else 'not configured'}</td><td><a href="/netmon/investigations">setup</a></td></tr>
-<tr><td>GeoIP</td><td>IPinfo (country + ASN) · DB-IP Lite (city placement)</td><td><a href="/netmon/coverage">what is visible</a></td></tr>
+<tr><td>GeoIP</td><td>{e(geo_sources())}</td><td><a href="/netmon/coverage">what is visible</a></td></tr>
 </table></div></div></section>"""
     return page(req, "Settings · Health", body, "/netmon/settings", scoped=False)
+
+
+def geo_sources():
+    """The GeoIP databases actually loaded (country lookups, city placement on the map), not a fixed product list."""
+    def one(prov, role, missing):
+        if prov.get("database"):
+            return f"{prov['database']} ({role}, built {prov.get('built', '?')})"
+        return missing + (f": {prov['error']}" if prov.get("error") else "")
+    return " · ".join([one(blocks().geo.provenance(), "country", "no country database"),
+                       one(geocity.GEO.provenance(), "city placement", "no city database (map places countries only)")])
 
 
 def src_badge(src, na):
