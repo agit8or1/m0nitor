@@ -194,7 +194,8 @@ details.tech summary { cursor: pointer; color: var(--accent); font-size: 12px; }
 .dot { stroke: var(--surface); stroke-width: 1.5; } .dot.in { fill: var(--in); } .dot.out { fill: var(--out); }
 .unavail { fill: var(--surface-2); } .unavail-t { fill: var(--muted); font-size: 12px; }
 .tip { position: absolute; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
-  border-radius: 10px; padding: 10px 12px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); white-space: nowrap; z-index: 5; max-width: min(420px, 92%); }
+  border-radius: 10px; padding: 10px 12px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); white-space: nowrap; z-index: 5; max-width: min(560px, 92%); }
+.tip .pair { white-space: normal; padding-left: 1.2em; text-indent: -1.2em; overflow-wrap: anywhere; }
 .tip.pinned { pointer-events: auto; white-space: normal; } .tip .al { padding: 6px 0; border-top: 1px solid var(--grid); white-space: normal; } .tip .x { float: right; min-height: 0; padding: 0 6px; border: 0; background: none; color: var(--muted); }
 .tip[hidden] { display: none; }
 .tip .t { font-weight: 650; margin-bottom: 4px; } .tip .r { display: flex; align-items: center; gap: 6px; }

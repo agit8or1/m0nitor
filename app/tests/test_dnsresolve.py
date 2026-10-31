@@ -88,3 +88,8 @@ def test_names_for_prefers_the_hosts_own_lookup():
     assert ("10.40.0.20", "198.51.100.1") not in got
     assert ch.calls[0]["t0"] == 1000 - 86400
     assert dr.names_for(ch, ["site-a"], set(), 0, 1) == {}
+
+
+def test_query_parses_ptr_names():
+    port = responder([(12, b"\x04host\x07example\x03net\x00", 900)])
+    assert dr.query("7.113.0.203.in-addr.arpa", "PTR", "127.0.0.1", port=port) == [("host.example.net", 900)]

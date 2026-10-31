@@ -95,13 +95,15 @@ def sync_vips(user="vip-sync"):
         except Exception as ex:
             out[site["id"]] = f"error: {str(ex)[:150]}"
             continue
-        src, seen = f"vip:{site['id']}", set()
+        src, seen, fwa = f"vip:{site['id']}", set(), {}
         for v in rows:
             try:
                 ip = str(ipaddress.ip_address(str(v.get("subnet", "")).strip()))
             except ValueError:
                 continue
             name = vip_name(v.get("descr"))
+            if not cfg.is_internal(ip):   # the firewall's own public addresses (map tooltips name them "WAN alias ...")
+                fwa[ip] = {"iface": vip_name(v.get("%interface") or v.get("interface")) or "WAN", "descr": name, "site": site["id"]}
             if not name or cfg.is_internal(ip):
                 continue
             cur = db.get(ip)
@@ -110,6 +112,10 @@ def sync_vips(user="vip-sync"):
             seen.add(ip)
             db[ip] = {"name": name, "source": src, "notes": f"virtual IP ({v.get('%mode') or v.get('mode')}) on {v.get('%interface') or v.get('interface')}"
                       f" · {v.get('address') or ip} · {site['name']}"}
+        fall = get_setting(conn, "fwaddr:db", {}) or {}
+        if fall.get(site["id"]) != fwa:
+            fall[site["id"]] = fwa
+            put_setting(conn, "fwaddr:db", fall, user)
         nat = []
         try:
             for x in fw._call("GET", "/api/firewall/one_to_one/search_rule", params={"rowCount": "-1"}).get("rows", []):

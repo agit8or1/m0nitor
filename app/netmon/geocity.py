@@ -163,7 +163,7 @@ def regions(rows, geo=None):
         a["out_b"] += r["out_b"]
         a["flows"] += r["flows"]
         a["peers"] += 1
-        if r.get("pair") and len(a["pairs"]) < 5:      # rows arrive busiest first
+        if r.get("pair") and len(a["pairs"]) < 25:     # rows arrive busiest first; merged to 5 below
             a["pairs"].append(r["pair"])
         a["_w"] += w
         a["_lat"] += g["lat"] * w
@@ -175,5 +175,7 @@ def regions(rows, geo=None):
         cities, w = sorted(a.pop("_city").items(), key=lambda x: -x[1]), a.pop("_w")
         a["ll"] = [round(a.pop("_lat") / w, 3), round(a.pop("_lon") / w, 3)]
         a["cities"] = [c for c, _ in cities[:3]]
+        from .dash import merge_pairs
+        a["pairs"] = merge_pairs(a["pairs"])
         out.append(a)
     return sorted(out, key=lambda a: -(a["in_b"] + a["out_b"]))

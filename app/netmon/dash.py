@@ -82,6 +82,20 @@ def tuples(pairs):
     return "[" + ",".join(f"('{a}',{b})" if isinstance(b, int) else f"('{a}','{b}')" for a, b in pairs) + "]"
 
 
+def merge_pairs(ps, n=5):
+    """LAN hosts behind one NAT address show as the same public pair: add them up, keep the busiest n per direction."""
+    agg = {}
+    for p in ps:
+        k = (p["src"], p["dst"], p["dir"])
+        if k in agg:
+            agg[k]["b"] += p["b"]
+            agg[k]["flows"] += p["flows"]
+        else:
+            agg[k] = dict(p)
+    out = sorted(agg.values(), key=lambda p: -p["b"])
+    return [p for d in ("in", "out") for p in [x for x in out if x["dir"] == d][:n]]
+
+
 class Dash:
     def __init__(self, cfg, ch):
         self.cfg, self.ch = cfg, ch
@@ -246,16 +260,27 @@ class Dash:
         for r in self.q(sc, f"""
             SELECT if(INB, SrcCountry, DstCountry) AS cc, toUInt8(INB) AS inb, {IPS.format(c='SrcAddr')} AS src, {IPS.format(c='DstAddr')} AS dst,
                    sum(Bytes * SamplingRate) AS b, count() AS flows
-            FROM flows WHERE {self.where(sc)} GROUP BY cc, inb, src, dst ORDER BY b DESC LIMIT 5 BY cc, inb""", ttl=30):
+            FROM flows WHERE {self.where(sc)} GROUP BY cc, inb, src, dst ORDER BY b DESC LIMIT 25 BY cc, inb""", ttl=30):
             pairs.setdefault((r["cc"] or "").strip("\x00") or "??", []).append(self.pair(r["src"], r["dst"], r["b"], r["flows"], "in" if r["inb"] else "out"))
         for c in out:
-            c["pairs"] = pairs.get(c["cc"], [])
+            c["pairs"] = merge_pairs(pairs.get(c["cc"], []))
         return out
 
     def pair(self, src, dst, b, flows, dir):
         """One source -> destination address pair for map tooltips, with operator names where known."""
-        return {"src": src, "dst": dst, "src_name": self.cfg.label(self.cfg.binat.get(src, src)) or self.cfg.label(src),
-                "dst_name": self.cfg.label(self.cfg.binat.get(dst, dst)) or self.cfg.label(dst), "b": int(b), "flows": int(flows), "dir": dir}
+        if not hasattr(self, "rdns"):
+            from .rdns import RDNS
+            self.rdns = RDNS(self.cfg)
+        out = {"b": int(b), "flows": int(flows), "dir": dir}
+        for side, ip in (("src", src), ("dst", dst)):
+            # the public side of the firewall: an internal address is shown as the WAN address or WAN alias it is
+            # reached on (its 1:1 NAT address, else the site's outbound NAT / WAN address), never as the LAN address
+            pub = self.cfg.public_of(ip)
+            fw = self.cfg.fw_label(pub) or ("WAN" if pub != ip else "")
+            out[side], out[f"{side}_fw"] = pub, fw
+            out[f"{side}_name"] = "" if fw else self.cfg.label(ip)
+            out[f"{side}_rdns"] = self.rdns.get(pub)
+        return out
 
     def top_remotes(self, sc: Scope, cc: str, limit=500):
         """The busiest remote endpoints in one country (for placing that country's traffic by region on the map)."""

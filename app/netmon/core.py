@@ -73,6 +73,37 @@ class Config:
             return f"{inner['name'] if inner else self.binat[ip]} via 1:1 NAT ({ip})"
         return f"{a['name']} ({ip})" if a else ip
 
+    def public_of(self, ip: str) -> str:
+        """The public address an internal host is reached on at the WAN: its 1:1 NAT address, else its site's
+        outbound NAT (WAN) address. External addresses (and internal ones with no known NAT) are returned unchanged."""
+        try:
+            if not self.is_internal(ip):
+                return ip
+        except ValueError:
+            return ip
+        ext = next((x["external"] for x in self.raw.get("binat", []) if x.get("internal") == ip), None)
+        if ext:
+            return ext
+        a = ipaddress.ip_address(ip)
+        for s in self.sites:
+            nets = [ipaddress.ip_network(str(n), strict=False) for n in s.get("internal_nets", [])]
+            if (not nets or any(a in n for n in nets)) and s.get("outbound_nat_ips"):
+                return s["outbound_nat_ips"][0]
+        nat = self.raw.get("outbound_nat_ips", [])
+        return nat[0] if nat else ip
+
+    def fw_label(self, ip: str) -> str:
+        """The firewall's own public addresses: its WAN address ('WAN') or an interface virtual IP ('WAN alias <descr>')."""
+        multi = len(self.sites) > 1
+        for s in self.sites:
+            if ip in (s.get("outbound_nat_ips") or []):
+                return f"{s['name']} WAN" if multi else "WAN"
+        v = self.raw.get("fw_addrs", {}).get(ip)
+        if v:
+            iface = f"{self.site(v['site'])['name']} {v['iface']}" if multi and self.site(v.get("site", "")) else v["iface"]
+            return f"{iface} alias {v['descr']}".strip() if v.get("descr") else f"{iface} alias"
+        return ""
+
     def label(self, ip: str) -> str:
         """Operator-given name for any address (internal servers first, then external labels)."""
         a = self.raw.get("assets", {}).get(ip) or self.raw.get("labels", {}).get(ip)
@@ -209,6 +240,7 @@ def apply_assets(cfg, conn) -> None:
     cfg.raw["assets"] = copy.deepcopy(assets)
     cfg.raw["labels"] = copy.deepcopy(get_setting(conn, "labels:db", {}) or {})
     cfg.raw["binat"] = [x for rules in (get_setting(conn, "nat11:db", {}) or {}).values() for x in rules]
+    cfg.raw["fw_addrs"] = {ip: v for addrs in (get_setting(conn, "fwaddr:db", {}) or {}).values() for ip, v in addrs.items()}
 
 
 PROTO = {6: "tcp", 17: "udp", 1: "icmp", 58: "icmpv6"}

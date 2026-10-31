@@ -24,7 +24,7 @@ from .core import get_setting, get_state, put_setting, set_state, ThreadLocalDB
 SETTING = "dnsnames"
 DEFAULTS = {"enabled": True, "resolver": "", "fw_mode": "", "fw_note": "", "noted_by": "", "noted_at": None}
 FW_MODES = {"": "not recorded", "off": "off", "queries": "queries only", "queries+replies": "queries and replies"}
-QTYPES = {"A": 1, "AAAA": 28}
+QTYPES = {"A": 1, "AAAA": 28, "PTR": 12}
 IPS = "replaceOne(IPv6NumToString({c}), '::ffff:', '')"
 
 
@@ -85,7 +85,7 @@ def _name(buf, off):
 
 
 def query(name, qtype, server, timeout=2.0, port=53):
-    """[(address, ttl)] for name/qtype ('A' or 'AAAA') from server; [] for NXDOMAIN/no data. Raises on timeout."""
+    """[(address or PTR name, ttl)] for name/qtype ('A', 'AAAA' or 'PTR') from server; [] for NXDOMAIN/no data. Raises on timeout."""
     qid = int.from_bytes(os.urandom(2), "big")
     q = struct.pack(">HHHHHH", qid, 0x0100, 1, 0, 0, 0)   # recursion desired
     for label in name.rstrip(".").split("."):
@@ -114,12 +114,14 @@ def query(name, qtype, server, timeout=2.0, port=53):
         _, off = _name(buf, off)
         rtype, _, ttl, rdlen = struct.unpack(">HHIH", buf[off:off + 10])
         off += 10
-        rdata = buf[off:off + rdlen]
+        rdata, rd_off = buf[off:off + rdlen], off
         off += rdlen
         if rtype == 1 and rdlen == 4:
             out.append((str(ipaddress.IPv4Address(rdata)), ttl))
         elif rtype == 28 and rdlen == 16:
             out.append((str(ipaddress.IPv6Address(rdata)), ttl))
+        elif rtype == 12 and qtype == "PTR":
+            out.append((_name(buf, rd_off)[0], ttl))
     return out
 
 

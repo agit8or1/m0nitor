@@ -186,9 +186,10 @@ const NMMap = (() => {
     function pairRows(list, dir) {
       const ps = (list || []).filter((p) => !dir || dir === "both" || p.dir === dir).sort((a, b) => b.b - a.b).slice(0, 5);
       if (!ps.length) return [];
-      const ip = (a, n) => n ? `${a} (${n})` : a;
+      // "[WAN / WAN alias x | name] address (reverse DNS)": the firewall's public side, never a LAN address
+      const ip = (p, k) => [p[`${k}_fw`] || p[`${k}_name`], p[k], p[`${k}_rdns`] ? `(${p[`${k}_rdns`]})` : ""].filter(Boolean).join(" ");
       return [el("div", { class: "muted small", style: "margin-top:4px", text: "Top source → destination" }),
-        ...ps.map((p) => el("div", { class: "small mono", text: `${ip(p.src, p.src_name)} → ${ip(p.dst, p.dst_name)} · ${fmtBytes(p.b)}` }))];
+        ...ps.map((p) => el("div", { class: "small mono pair", text: `${ip(p, "src")}  ⟶  ${ip(p, "dst")} · ${fmtBytes(p.b)}` }))];
     }
     function arcTip(a) {
       const t = a.t, c = t.c;
