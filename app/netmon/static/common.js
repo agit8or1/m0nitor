@@ -87,7 +87,18 @@ const NM = (() => {
   function alertBox(msg) { const c = $("chips"); if (c) { c.replaceChildren(el("span", { class: "err", text: msg })); } }
 
   // ---- data ----
+  // top-of-page progress bar while any data request is pending (shown after 150 ms, so fast loads do not flicker)
+  let pending = 0, barT = null;
+  const bar = () => document.getElementById("nm-progress") || document.body.appendChild(el("div", { id: "nm-progress", role: "progressbar", "aria-label": "Loading" }));
+  function busy(d) {
+    pending = Math.max(0, pending + d); clearTimeout(barT);
+    if (pending) barT = setTimeout(() => bar().classList.add("on"), 150); else bar().classList.remove("on");
+  }
   async function get(url) {
+    busy(1);
+    try { return await getNow(url); } finally { busy(-1); }
+  }
+  async function getNow(url) {
     const r = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
     if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search); throw new Error("login required"); }
     let j; try { j = await r.json(); } catch (_) { throw new Error(`HTTP ${r.status}`); }

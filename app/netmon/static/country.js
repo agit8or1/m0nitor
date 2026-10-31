@@ -27,14 +27,20 @@
         el("p", {}, el("b", { text: "Outbound (to this country): " }), p.out.length ? `blocked — ${p.out.join("; ")}` : "allowed"),
         p.listed && !p.in.length && !p.out.length ? el("p", { class: "warnline", text: p.note }) : "",
         el("p", { class: "muted small", text: `${p.live ? "Checked" : "Last verified"} ${p.verified_at} · ${p.source}. This page does not change the firewall.` }));
-      const pv = d.preview;
+      NM.convTable($("t-conv"), d.conversations.rows, { empty: "No conversations with this country in this scope" });
+    } catch (e) { NM.state($("cards"), "error", e.message); }
+  }
+  // 7-day "if blocked" preview: heavy for busy countries, so it loads on its own (cached 10 min on the server)
+  async function preview() {
+    if (!$("t-preview").childElementCount) NM.state($("t-preview"), "loading", "Adding up the last 7 days…");
+    try {
+      const pv = await NM.get(`/netmon/api/country/${cc}/preview?${NM.qs({ cc: "" })}`), d = pv;
       $("t-preview").replaceChildren(
         el("p", {}, `Last 7 days: ${fmtBytes(pv.summary.in_b)} inbound and ${fmtBytes(pv.summary.out_b)} outbound with ${d.name}, involving ${fmtNum(pv.summary.servers)} servers and ${fmtNum(pv.summary.peers)} remote addresses. ` +
           "An inbound-only WAN block (like the GeoIP rule) stops new inbound connections from this country to the services below; established states continue until they close."),
         el("div", { class: "grid2 even" }, (() => { const a = el("div"); NM.rank(a, pv.servers.map((h) => ({ ...h, in_b: h.rx, out_b: h.tx })), { label: (h) => h.name || h.ip, sub: (h) => h.ip }); return a; })(),
           (() => { const b = el("div"); NM.rank(b, pv.services.exposed.map((x) => ({ ...x, in_b: x.b, out_b: 0 })), { label: (x) => `${x.name} ${x.proto}/${x.port}`, sub: (x) => `${fmtNum(x.clients)} clients from ${d.name}`, empty: "No inbound service use from this country" }); return b; })()));
-      NM.convTable($("t-conv"), d.conversations.rows, { empty: "No conversations with this country in this scope" });
-    } catch (e) { NM.state($("cards"), "error", e.message); }
+    } catch (e) { NM.state($("t-preview"), "error", e.message); }
   }
   // logged firewall blocks for this country: same aggregate (and cache) as the Countries map tooltip
   async function blocks() {
@@ -71,5 +77,5 @@
           "(same database as the traffic figures; the firewall's GeoIP alias uses its own source). Each record is one logged packet, not a connection or an attack; identical duplicate records are counted once." }));
     } catch (e) { NM.state(box, "error", e.message); }
   }
-  NM.onScope(() => { load(); blocks(); }); load(); blocks(); NM.every(load, 60000); NM.every(blocks, 60000);
+  NM.onScope(() => { load(); blocks(); preview(); }); load(); blocks(); preview(); NM.every(load, 60000); NM.every(blocks, 60000); NM.every(preview, 600000);
 })();

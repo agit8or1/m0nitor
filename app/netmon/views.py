@@ -592,19 +592,42 @@ def api_country(req: Request, cc: str):
 
     def run():
         coll = dash.collection(sc)
-        sc7 = scope_of(req, cc=cc, range="7d", **{"from": "", "to": ""})
-        srv7 = dash.servers(sc7, limit=100)["servers"]
-        svc7 = dash.services(sc7, 15)
         ids = alert_countries().get(cc, {}).get("ids", [])
         findings = [alert_brief(a) for a in conn.execute(
             f"SELECT * FROM alerts WHERE id IN ({','.join('?' * len(ids))}) ORDER BY last_seen DESC", ids)] if ids else []
         pol = geo_policy()
-        return {"ok": True, "scope": scope_json(sc), "cc": cc, "name": cname(cc), "collection": coll,
-                "summary": dash.summary(sc), "flow_series": dash.flow_series(sc, coll), "servers": dash.servers(sc, 50)["servers"][:20],
-                "orgs": dash.orgs(sc, 12), "conversations": dash.conversations(sc, page=1, per=25), "findings": findings,
+        jobs = {"summary": lambda: dash.summary(sc), "flow_series": lambda: dash.flow_series(sc, coll),
+                "servers": lambda: dash.servers(sc, 50)["servers"][:20], "orgs": lambda: dash.orgs(sc, 12),
+                "conversations": lambda: dash.conversations(sc, page=1, per=25)}
+        r = {k: f.result() for k, f in {k: POOL.submit(fn) for k, fn in jobs.items()}.items()}
+        return {"ok": True, "scope": scope_json(sc), "cc": cc, "name": cname(cc), "collection": coll, **r, "findings": findings,
                 "policy": {**policy_json(), "listed": cc in pol.get("countries", []),
-                           "in": pol["blocked_in"].get(cc, []), "out": pol["blocked_out"].get(cc, [])},
-                "preview": {"servers": srv7[:15], "services": svc7, "summary": dash.summary(sc7)}}
+                           "in": pol["blocked_in"].get(cc, []), "out": pol["blocked_out"].get(cc, [])}}
+    return guard(run)
+
+
+_PREVIEW7 = {}   # (cc, sites) -> (ts, preview): the 7-day block preview is heavy for busy countries; 10 min cache
+
+
+@app.get("/netmon/api/country/{cc}/preview")
+def api_country_preview(req: Request, cc: str):
+    """What a block of this country would have affected over the last 7 days (loaded after the page; cached)."""
+    current(req)
+    cc = cc.upper()
+    if cc not in META and cc != "??":
+        raise HTTPException(400, "unknown country code")
+    sc7 = scope_of(req, cc=cc, range="7d", **{"from": "", "to": ""})
+
+    def run():
+        key = (cc, tuple(s["id"] for s in sc7.sites))
+        hit = _PREVIEW7.get(key)
+        if hit and time.time() - hit[0] < 600:
+            return {"ok": True, **hit[1]}
+        jobs = {"servers": lambda: dash.servers(sc7, limit=100)["servers"][:15], "services": lambda: dash.services(sc7, 15),
+                "summary": lambda: dash.summary(sc7)}
+        pv = {"cc": cc, "name": cname(cc), "computed": time.time(), **{k: f.result() for k, f in {k: POOL.submit(fn) for k, fn in jobs.items()}.items()}}
+        _PREVIEW7[key] = (time.time(), pv)
+        return {"ok": True, **pv}
     return guard(run)
 
 

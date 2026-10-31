@@ -374,3 +374,17 @@ pre.changelog { max-height: none; overflow: visible; background: none; padding: 
 body:not(.role-admin) .subtabs a.adm { display: none; }
 .stack { display: flex; flex-direction: column; gap: 16px; } .stack > .card { margin: 0; }
 details.more { margin-top: 10px; } details.more > summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+/* loading: top progress bar, spinner state, shimmer placeholders in data panels that are still empty */
+#nm-progress { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 50; pointer-events: none; opacity: 0; transition: opacity .2s;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat; }
+#nm-progress.on { opacity: 1; animation: nm-bar 1.1s ease-in-out infinite; }
+@keyframes nm-bar { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+.state.loading::before { content: ""; display: inline-block; width: 13px; height: 13px; margin-right: 8px; vertical-align: -2px;
+  border: 2px solid var(--grid); border-top-color: var(--accent); border-radius: 50%; animation: nm-spin .8s linear infinite; }
+@keyframes nm-spin { to { transform: rotate(360deg); } }
+.card > div[id^="t-"]:empty, .card > div.chart:empty, section.cards:empty, .card > div[id$="map"]:empty, #conv:empty, #ft-remotes:empty {
+  min-height: 72px; border-radius: 8px;
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--grid) 50%, var(--surface-2) 100%) 0 0 / 200% 100%; animation: nm-shimmer 1.4s linear infinite; }
+section.cards:empty { min-height: 104px; }
+@keyframes nm-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { #nm-progress.on, .state.loading::before, .card > div:empty, section.cards:empty { animation: none; } }

@@ -3,6 +3,16 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.10 — 2026-10-31
+
+### Fixed
+- Country pages for busy countries took ~40 s to show anything: the 7-day "if this country were blocked" preview
+  now loads separately (`/netmon/api/country/{cc}/preview`, cached 10 min) and the page's own queries run in parallel.
+
+### Added
+- Loading feedback on every page: a thin progress bar at the top while data requests are pending, shimmer
+  placeholders in panels that have no data yet, and a spinner for sections that load on their own.
+
 ## v1.09 — 2026-10-31
 
 ### Changed
