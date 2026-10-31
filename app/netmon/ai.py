@@ -14,6 +14,7 @@ import time
 
 import httpx
 
+from . import secretbox
 from .core import DATA_DIR, audit, get_setting
 
 SCHEMA = {
@@ -66,7 +67,7 @@ class AI:
 
     def key_path(self):
         for p in (self.KEY_FILE, self.cfg.get("ai", {}).get("key_file", "")):
-            if p and os.path.exists(p) and open(p).read().strip():
+            if p and secretbox.read_file(p):
                 return p
         return None
 
@@ -131,7 +132,7 @@ class AI:
             raise RuntimeError("AI analysis is not configured")
         if self.used_today() >= self.ac.get("daily_request_limit", 25):
             raise RuntimeError("daily AI request limit reached")
-        key = open(self.key_path()).read().strip()
+        key = secretbox.read_file(self.key_path())
         model = self.ac["model"]
         cap = int(self.ac.get("max_output_tokens", 4000))
         # gpt-5* / o* are reasoning models: hidden reasoning tokens count against max_output_tokens.

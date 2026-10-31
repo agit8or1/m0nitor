@@ -3,6 +3,29 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.26 — 2026-10-31
+
+### Security
+- Secrets at rest are encrypted (AES-256-GCM, `netmon/secretbox.py`): notification channel credentials and TOTP
+  seeds in the database, and every credential file the app writes (firewall API keys, SNMP communities and SNMPv3
+  passphrases, the OpenAI key). Each value is bound to where it is stored, so a sealed value copied to another field or
+  file does not decrypt.
+- The master key lives in its own directory, `/opt/netmon/keys` (mounted read-only at `/run/keys`), not in `data/`:
+  a copy of the database or of `data/` alone no longer reveals credentials. Without a mounted key the app creates
+  `data/master.key` so upgrades keep working, and Settings → Health warns until it is moved.
+- Existing plaintext values are sealed at startup; operator-managed files under `secrets/` can be sealed in place with
+  `python -m netmon.secretbox seal` (they are read either way). Key rotation: keep the previous key as
+  `master.key.old`; everything is re-sealed with the new key at the next start.
+- New Health check "Secrets at rest": key location, sealed/pending counts, plaintext operator files, values the current
+  key cannot decrypt. It reports counts and paths only, never values.
+- The backup script also archives `keys/` (inside the encrypted backup), so a restore can decrypt the secrets.
+- New dependency: `cryptography` 50.0.2 (with `cffi`, `pycparser`), hash-pinned in `requirements.lock`.
+
+### Docs
+- docs/configuration.md: where each secret is stored (notification credentials are in the database, sealed, not in
+  `secrets/` as the table said), the master key, sealing operator files, rotation, and what this does not protect
+  against.
+
 ## v1.25 — 2026-10-31
 
 ### Security

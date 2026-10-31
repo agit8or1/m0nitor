@@ -11,7 +11,8 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
    `akvorado/docker-compose-local.yml` to `akvorado/docker/`. Add `docker/docker-compose-local.yml` as the last
    `COMPOSE_FILE` entry in `akvorado/.env` and choose the IPinfo GeoIP option there. `docker compose up -d`.
 3. **App:** `cp config.example.yaml app/config.yaml` and edit (networks, NAT addresses, users). Create
-   `secrets/` (mode 700) and `data/` owned by uid 10001. `cd app && docker compose up -d --build`.
+   `secrets/` and `keys/` (mode 700) and `data/` owned by uid 10001, and the master key in `keys/master.key`
+   ([configuration.md](configuration.md#secrets-at-rest)). `cd app && docker compose up -d --build`.
 4. **Schema:** `docker exec app-netmon-app-1 python -m netmon.schema | docker exec -i akvorado-clickhouse-1 clickhouse-client --multiquery`.
 5. **TLS front end:** `cp .env.example .env`, set `NETMON_SITE`; `cd caddy && docker compose --env-file ../.env up -d`.
    Afterwards the monitor's FQDN can be changed in the UI (Settings → Firewalls & sites → This monitor): the root helper
@@ -42,7 +43,8 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
 - Akvorado: restore the previous `.env`/compose files from the backup and `docker compose up -d`; flow data is kept.
 
 ## Backup
-`host/netmon-backup` + `netmon-backup.timer` (daily 03:15 UTC): consistent SQLite snapshot + configs + secrets, as an
+`host/netmon-backup` + `netmon-backup.timer` (daily 03:15 UTC): consistent SQLite snapshot + configs + secrets + the
+master key (`keys/`, needed to decrypt the stored credentials), as an
 AES-256 (`openssl enc -pbkdf2`) archive in `/var/backups/netmon`, 30 days kept. Create the key first:
 `install -m 600 /dev/null /root/netmon-backup.key && openssl rand -base64 48 > /root/netmon-backup.key`.
 ClickHouse flow data is **not** included (it rebuilds from new flows). Copy the key and archives somewhere other than

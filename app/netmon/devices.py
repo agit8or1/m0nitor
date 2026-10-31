@@ -19,7 +19,7 @@ import httpx
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import vendors
+from . import secretbox, vendors
 from .core import IFNAME, SITE_ID, audit, get_setting, get_state, put_setting
 
 DEV_KEY = "devices:db"
@@ -317,7 +317,7 @@ def build_snmp(form, prev, did):
     old = {}
     if prev.get("v3_file"):
         try:
-            old = json.load(open(prev["v3_file"]))
+            old = json.loads(secretbox.read_file(prev["v3_file"]) or "{}")
         except (OSError, ValueError):
             old = {}
     a, pr = (form.get("snmp_auth_pass") or "").strip() or old.get("auth"), (form.get("snmp_priv_pass") or "").strip() or old.get("priv")

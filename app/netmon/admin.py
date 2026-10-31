@@ -9,7 +9,7 @@ import httpx
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import auth
+from . import auth, secretbox
 from .core import apply_overrides, audit, get_setting, get_state, put_setting
 from .detect import fmt_ts
 from .notify import TYPES
@@ -261,9 +261,9 @@ def account(req: Request, enroll: str = "", msg: str = "", codes: str = ""):
 <input type=password name=password placeholder="current password" required autocomplete="current-password">
 <input name=code placeholder="6-digit code" required inputmode=numeric> <button>Disable 2FA</button></form>'''}"""
     else:
-        secret = row["totp_secret"] or auth.totp_new_secret()
-        if not row["totp_secret"]:
-            conn.execute("UPDATE users SET totp_secret=? WHERE username=?", (secret, u))
+        secret = auth.totp_secret_of(row["totp_secret"], u) or auth.totp_new_secret()
+        if not row["totp_secret"] or secret != auth.totp_secret_of(row["totp_secret"], u):
+            conn.execute("UPDATE users SET totp_secret=? WHERE username=?", (auth.totp_seal(secret, u), u))
             conn.commit()
         uri = auth.totp_uri(secret, u)
         tfa = f"""<p><span class='sev s-muted'>○ Not enabled</span>{' — required by your administrator' if required else ''}</p>
@@ -289,7 +289,7 @@ def enable_2fa(req: Request, code: str = Form(...), csrf: str = Form("")):
     u, _ = user_of(req)
     check_csrf(req, csrf)
     row = conn.execute("SELECT totp_secret FROM users WHERE username=?", (u,)).fetchone()
-    c = auth.totp_check(row["totp_secret"], code)
+    c = auth.totp_check(auth.totp_secret_of(row["totp_secret"], u), code)
     if c is None:
         return RedirectResponse("/netmon/account?msg=" + quote("That code did not match. Check the time on your phone and try again."), 303)
     codes, hashes = auth.new_recovery_codes()
@@ -460,7 +460,7 @@ async def add_channel(req: Request):
     qs, qe = _int(form.get("quiet_start"), 0, 23), _int(form.get("quiet_end"), 0, 23)
     conn.execute("INSERT INTO channels(name,type,config,min_severity,categories,quiet_start,quiet_end,quiet_allow_high,summary_daily,"
                  "max_per_hour,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                 (str(form.get("name", t))[:60], t, json.dumps(conf), form.get("min_severity") if form.get("min_severity") in SEVS else "medium",
+                 (str(form.get("name", t))[:60], t, secretbox.seal(json.dumps(conf), "channel"), form.get("min_severity") if form.get("min_severity") in SEVS else "medium",
                   json.dumps(cats), qs if qe is not None else None, qe if qs is not None else None, 1 if form.get("quiet_allow_high") else 0,
                   1 if form.get("summary_daily") else 0, _int(form.get("max_per_hour"), 1, 500) or 20, u, time.time()))
     conn.commit()
@@ -865,13 +865,8 @@ sync_sites()
 
 
 def write_secret(name, value):
-    os.makedirs(SECRETS, mode=0o700, exist_ok=True)
-    path = os.path.join(SECRETS, name)
-    fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(value.strip() + "\n")
-    os.replace(path + ".tmp", path)
-    return path
+    """Store a credential in data/secrets, sealed with the master key (netmon.secretbox)."""
+    return secretbox.write_file(os.path.join(SECRETS, name), value)
 
 
 def site_health():

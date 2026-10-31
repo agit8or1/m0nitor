@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, threatradar
+from . import auth, secretbox, threatradar
 from . import block as blk
 from .core import (DATA_DIR, EXPECTED_KEY, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
                    load_config, put_setting, set_state)
@@ -35,7 +35,9 @@ BRAND = str(cfg.get("brand") or "netmon")      # product name in the header and 
 conn = ThreadLocalDB()
 auth.init(conn)
 counters_init(conn)
-auth.bootstrap_admin(conn, os.environ.get("NETMON_ADMIN_PASSWORD_FILE", "/run/secrets/admin_password"))
+ADMIN_PASSWORD_FILE = os.environ.get("NETMON_ADMIN_PASSWORD_FILE", "/run/secrets/admin_password")
+auth.bootstrap_admin(conn, ADMIN_PASSWORD_FILE)
+secretbox.migrate(conn)   # seal plaintext credentials (and re-seal after a key rotation) before anything reads them
 notifier = Notifier(cfg, conn, cfg["akvorado_url"])
 det = Detector(cfg, ch, conn, notifier)
 dash = Dash(cfg, ch)

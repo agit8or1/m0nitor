@@ -125,7 +125,7 @@ class Health:
         s = settings(self.conn)
         out = []
         for fn in (self.c_netflow, self.c_collector, self.c_syslog, self.c_suricata, self.c_clickhouse, self.c_storage,
-                   self.c_geoip, self.c_notifications, self.c_detector, self.c_snmp, self.c_clock, self.c_optional):
+                   self.c_geoip, self.c_secrets, self.c_notifications, self.c_detector, self.c_snmp, self.c_clock, self.c_optional):
             try:
                 out += fn(s)
             except Exception as ex:
@@ -342,6 +342,38 @@ class Health:
                      f"{sum(c.values()):,} CVEs ({c.get('confirmed', 0)} confirmed exploited, {c.get('predicted', 0)} predicted, "
                      f"{c.get('disclosed', 0)} new) · fetched {_age(st['fetched'])}", st["fetched"],
                      f"last fetch failed: {st['error']}" if st.get("error") else "", lim, "Security → Threat intel")
+
+    def c_secrets(self, s):
+        """Secrets at rest (netmon.secretbox): where the master key is, and anything still plaintext or unreadable."""
+        from . import secretbox
+        st = secretbox.status(self.conn, self.cfg, [os.environ.get("NETMON_ADMIN_PASSWORD_FILE", "/run/secrets/admin_password")])
+        n = {}
+        for kind in st["counts"].values():
+            for k, v in kind.items():
+                n[k] = n.get(k, 0) + v
+        op = {p: x for p, x in st["operator_files"].items() if x in ("plaintext", "stale", "unreadable")}
+        problems, action = [], []
+        if st["error"] or not st["key_id"]:
+            problems.append(f"master key unusable: {st['error']}")
+        if n.get("unreadable"):
+            problems.append(f"{n['unreadable']} stored secret(s) cannot be decrypted with the current key")
+            action.append("Restore the master key they were sealed with (as <key file>.old), or re-enter those credentials.")
+        if st["source"] == "data-dir":
+            problems.append("master key is stored in the data directory, next to the data it protects")
+            action.append("Move it: install -d -o 10001 -g 10001 -m 700 /opt/netmon/keys; mv /opt/netmon/data/master.key "
+                          "/opt/netmon/keys/; mount ../keys at /run/keys (app/docker-compose.yml); restart the app.")
+        elif st["old_keys"]:
+            problems.append("old master key file(s) still present: " + ", ".join(os.path.basename(p) for p in st["old_keys"]))
+            action.append("Everything was re-sealed with the current key at startup; delete the old key file(s) once you no longer need to restore older backups.")
+        if op:
+            problems.append("plaintext operator file(s): " + ", ".join(sorted(op)))
+            action.append("Seal them: docs/configuration.md#secrets-at-rest (python -m netmon.secretbox seal).")
+        state = "fail" if (st["error"] or n.get("unreadable")) else "warn" if problems else "ok"
+        value = (f"{n.get('sealed', 0)} sealed · {n.get('plaintext', 0) + n.get('stale', 0)} pending · "
+                 f"key {st['key_id'] or '—'} ({'separate key directory' if st['source'] == 'mounted' else 'data directory'})")
+        return [check("secrets", "Monitor", "Secrets at rest (AES-256-GCM)", state, value, evidence="; ".join(problems),
+                      limits="Protects copies of the database and data directory; not a defence against root on this host.",
+                      action=" ".join(action))]
 
     def c_notifications(self, s):
         chans = self.conn.execute("SELECT count(*) FROM channels WHERE enabled=1").fetchone()[0]

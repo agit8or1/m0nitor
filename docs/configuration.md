@@ -6,7 +6,45 @@ m0nitor has three places for settings. Most day-to-day settings live in the UI.
 |---|---|---|
 | `app/config.yaml` | Seeds a fresh install: first site, networks, detection thresholds, service ports, users | Copy from [`config.example.yaml`](../config.example.yaml). After the first start the database is authoritative for sites, names and labels. |
 | UI → **Settings** (SQLite `data/netmon.db`) | Firewalls & sites, additional devices (`devices:db`), inventory names and labels, alert rules, notifications, auto-response, maintenance windows, users and 2FA, AI settings | Changes are audited (Settings → Audit log). |
-| `secrets/` (mode 700, files mode 600, owner uid 10001) | API keys, SNMP community, notification credentials, AI key | Never stored in config.yaml, the database's settings JSON, logs or the UI. |
+| `secrets/` (mode 700, files mode 600, owner uid 10001) | Operator-placed files: bootstrap admin password, firewall API key, SNMP community | Read-only for the app. Seal them in place (below); plaintext still works and Settings → Health flags it. |
+| `data/secrets/` and the database | Credentials entered in the UI: per-firewall API keys, SNMP communities and SNMPv3 passphrases, AI key (files); notification channel credentials and TOTP seeds (database) | Always sealed with the master key. Never in config.yaml, logs, exports or the UI after entry. |
+| `keys/master.key` (mode 400, owner uid 10001) | The master key for secrets at rest | Mounted read-only at `/run/keys`. Not in `data/`. |
+
+## Secrets at rest
+
+Every credential the app stores is sealed with AES-256-GCM (`netmon/secretbox.py`). The value's location (`channel`,
+`totp:<user>`, `file:<name>`) is bound as associated data, so a sealed value copied to another field or file does not
+decrypt, and any change to it is detected.
+
+- **Master key:** 32 random bytes in `/opt/netmon/keys/master.key`, mounted read-only at `/run/keys/master.key`
+  (`NETMON_MASTER_KEY_FILE` overrides the path). Create it before the first start:
+
+      sudo install -d -o 10001 -g 10001 -m 700 /opt/netmon/keys
+      sudo sh -c 'umask 077; openssl rand -base64 32 > /opt/netmon/keys/master.key'
+      sudo chown 10001:10001 /opt/netmon/keys/master.key && sudo chmod 400 /opt/netmon/keys/master.key
+
+  Without it the app creates `data/master.key` so it can still start, and Settings → Health warns until you move that
+  file to `/opt/netmon/keys/` and restart.
+- **Upgrade from v1.25 or earlier:** at the first start, plaintext values are sealed in place (the log shows
+  `secrets at rest: {...}` counts). Versions before v1.26 cannot read sealed values, so to roll back restore the
+  pre-upgrade backup of `netmon.db` and `data/secrets/`.
+- **Operator files** in `secrets/` are mounted read-only, so seal them with a one-off container:
+
+      cd /opt/netmon/app && docker compose run --rm --no-deps -v /opt/netmon/secrets:/seal netmon-app \
+          python -m netmon.secretbox seal /seal/opnsense_block.key /seal/snmp_community /seal/admin_password
+
+  The app reads sealed and plaintext files alike. To replace a sealed file, write the new plaintext value and seal it
+  again.
+- **Rotation:** rename `master.key` to `master.key.old`, create a new `master.key` as above, restart. Everything is
+  re-sealed with the new key at startup (including operator files only when you run `seal` again); Health lists the
+  old key until you delete it. Keep it while you may still restore backups made before the rotation.
+- **Lost key:** sealed values cannot be recovered. Health reports them as undecryptable; re-enter the credentials
+  (firewall and SNMP settings, notification channels, AI key). TOTP: sign in with a recovery code (stored as hashes,
+  not sealed), then enrol again.
+- **Status without revealing anything:** `docker exec app-netmon-app-1 python -m netmon.secretbox status`.
+- **What it protects against:** a copy of `netmon.db` or of `data/` (snapshot, disk image, support bundle) without the
+  key. It does not protect against root on the host or code running in the app container, which can read the key.
+  The encrypted backup includes `keys/` so a restore can decrypt; anyone with the backup key can read everything.
 
 ## config.yaml essentials
 

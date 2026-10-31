@@ -14,7 +14,8 @@ version, impact and reproduction steps. Do not include real network data, creden
   alias, its own auto-response alias and rules, recorded by UUID), and only when an admin has enabled that feature.
 - Every automation is switchable and ships off (auto-response ships in dry-run). Notifications stay off until a test
   to the configured destination succeeded.
-- Secrets live in files (mode 600, app uid 10001), never in config.yaml, the database's settings JSON, logs or the UI.
+- Secrets are encrypted at rest (AES-256-GCM, master key in its own directory, see docs/configuration.md#secrets-at-rest),
+  never in config.yaml, the database's settings JSON, logs or the UI.
   API secrets are never displayed after entry.
 - ClickHouse access from the app is read-only and parameterized; DDL is applied by an admin (`python -m netmon.schema`).
 - AI analysis is manual and preview-first: you see exactly what will be sent; internal addresses and names are

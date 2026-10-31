@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from urllib.parse import quote
 
 from .rdns import LIST_WAIT
-from . import counters, geocity
+from . import counters, geocity, secretbox
 from .ai import AI
 from .core import audit, get_state
 from .dash import META, cname
@@ -1255,11 +1255,7 @@ def save_ai(req: Request, key: str = Form(""), model: str = Form(...), daily: st
         err = check_key(key)
         if err:
             return RedirectResponse("/netmon/investigations?msg=" + quote(f"Key not saved: {err}"), 303)
-        os.makedirs(os.path.dirname(ai.KEY_FILE), mode=0o700, exist_ok=True)
-        fd = os.open(ai.KEY_FILE + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(key + "\n")
-        os.replace(ai.KEY_FILE + ".tmp", ai.KEY_FILE)
+        secretbox.write_file(ai.KEY_FILE, key)
     put_setting(conn, "ai", {"model": model.strip(), "daily_request_limit": d, "max_output_tokens": t}, u)
     audit(conn, u, "ai_settings_saved", {"model": model.strip(), "daily_request_limit": d, "max_output_tokens": t, "key_changed": bool(key)})
     return RedirectResponse("/netmon/investigations?msg=" + quote("AI settings saved." + (" Key checked with OpenAI and active." if key else "")), 303)
