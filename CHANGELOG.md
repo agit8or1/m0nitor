@@ -3,6 +3,15 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.24 — 2026-10-31
+
+### Security
+- Countries: the "latest result" kept for serving rolling windows (v1.21) also recorded custom windows, so a signed-in
+  user requesting many different custom ranges could make the app's memory grow without limit. Only rolling windows
+  ending now are kept, and the store is capped.
+- Test tooling: pytest 8.3.4 → 9.0.3 (PYSEC-2026-1845). Test image only; the production image does not include
+  pytest. Runtime dependency pins are unchanged.
+
 ## v1.23 — 2026-10-31
 
 ### Faster

@@ -283,7 +283,11 @@ class Blocks:
                 self._cache.clear()
             self._cache[key] = {"t": time.time(), "v": v}
             skey = (key[0], (t1 - t0) // 60)
-            if t1 >= self._latest.get(skey, {}).get("end", 0):
+            ttl = 300 if t1 - t0 > 86400 else 120 if t1 - t0 > 21600 else 60
+            # only rolling windows ending now are kept as "latest" (custom windows would grow this without bound)
+            if time.time() - t1 < 2 * ttl and t1 >= self._latest.get(skey, {}).get("end", 0):
+                if len(self._latest) > 20:
+                    self._latest.clear()
                 self._latest[skey] = {"t": time.time(), "v": v, "end": t1}
         return v
 
