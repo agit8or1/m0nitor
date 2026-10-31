@@ -3,6 +3,14 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.27 — 2026-10-31
+
+### Fixed
+- The backup (`host/netmon-backup`) now includes `data/secrets/`, the credential files entered in the UI (per-firewall
+  API keys, SNMP communities and SNMPv3 passphrases, the AI key). Before, a restore brought back the database and
+  `secrets/` but not these files, so they had to be entered again. They are sealed, and `keys/` is in the same
+  encrypted archive. A restore of the new archive was tested: the restored key decrypts the restored files.
+
 ## v1.26 — 2026-10-31
 
 ### Security
