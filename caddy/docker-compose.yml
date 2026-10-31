@@ -1,6 +1,6 @@
 services:
   caddy:
-    image: caddy:2.10.2-alpine
+    image: caddy:2.11.7-alpine
     network_mode: host   # needs host loopback to reach Traefik on 127.0.0.1:8081
     restart: unless-stopped
     environment:
