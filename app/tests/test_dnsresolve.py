@@ -109,3 +109,11 @@ def test_rdns_wait_returns_name_no_record_or_pending(cfg, monkeypatch):
     got = r.wait(["45.83.64.9", "45.83.64.8", "45.83.64.10"], timeout=0.5)
     assert got == {"45.83.64.9": "scan.example.net", "45.83.64.8": "", "45.83.64.10": None}
     assert r.get("45.83.64.9") == "scan.example.net"   # cached
+
+
+def test_rdns_lookup_failure_is_unknown_not_no_record(cfg, monkeypatch):
+    from netmon import rdns
+    def boom(*a, **k):
+        raise TimeoutError("timed out")
+    monkeypatch.setattr(rdns, "query", boom)
+    assert rdns.RDNS(cfg).wait(["45.83.64.7"], timeout=1.0) == {"45.83.64.7": None}

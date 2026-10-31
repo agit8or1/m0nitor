@@ -1,7 +1,7 @@
 services:
   netmon-app:
     build: .
-    image: netmon-app:1.11   # = netmon/__init__.py __version__ (tests/test_version.py)
+    image: netmon-app:1.12   # = netmon/__init__.py __version__ (tests/test_version.py)
     restart: unless-stopped
     read_only: true
     group_add: ["10001"]

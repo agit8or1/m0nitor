@@ -3,6 +3,12 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.12 — 2026-10-31
+
+### Fixed
+- A reverse DNS lookup that timed out was shown as "(no rDNS)"; it is now treated as unknown (nothing shown) and
+  retried after 10 minutes. "(no rDNS)" only means the resolver answered that the address has no PTR record.
+
 ## v1.11 — 2026-10-31
 
 ### Fixed

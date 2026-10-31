@@ -24,7 +24,7 @@ class RDNS:
         return ""
 
     def get(self, ip):
-        """Cached PTR name, '' when there is none (or not resolved yet: then it is queued)."""
+        """Cached PTR name; '' when the address has no PTR record; '' or None while unknown (then it is queued)."""
         if not ip:
             return ""
         now = time.time()
@@ -55,7 +55,7 @@ class RDNS:
                     break
             time.sleep(0.05)
         with self.lock:   # None = still being looked up; "" = no PTR record
-            return {ip: (None if ip in self.pending else self.cache.get(ip, ("",))[0]) for ip in ips}
+            return {ip: (None if ip in self.pending else self.cache.get(ip, (None,))[0]) for ip in ips}
 
     def _start(self):
         if self.thread is None:
@@ -76,7 +76,7 @@ class RDNS:
                     if ans:
                         name, ttl = ans[0][0].rstrip("."), min(POS_MAX, max(POS_MIN, ans[0][1]))
             except Exception:
-                ttl = 600   # timeout / bad answer: try again later
+                name, ttl = None, 600   # timeout / bad answer: unknown (not "no PTR record"); try again later
             with self.lock:
                 if len(self.cache) > MAX_CACHE:
                     self.cache.clear()
