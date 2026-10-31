@@ -156,13 +156,15 @@ def regions(rows, geo=None):
             continue
         name = g["region"] or g["city"] or "?"
         a = agg.setdefault((r["cc"], name), {"key": f"{r['cc']}:{name}", "cc": r["cc"], "region": name, "in_b": 0, "out_b": 0,
-                                              "flows": 0, "peers": 0, "_w": 0, "_lat": 0.0, "_lon": 0.0, "_city": {}})
+                                              "flows": 0, "peers": 0, "pairs": [], "_w": 0, "_lat": 0.0, "_lon": 0.0, "_city": {}})
         b = r["in_b"] + r["out_b"]
         w = max(b, 1)
         a["in_b"] += r["in_b"]
         a["out_b"] += r["out_b"]
         a["flows"] += r["flows"]
         a["peers"] += 1
+        if r.get("pair") and len(a["pairs"]) < 5:      # rows arrive busiest first
+            a["pairs"].append(r["pair"])
         a["_w"] += w
         a["_lat"] += g["lat"] * w
         a["_lon"] += g["lon"] * w

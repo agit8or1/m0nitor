@@ -78,8 +78,18 @@ const NMMap = (() => {
         } else if (ev.key === "Enter" && kf >= 0 && order[kf].properties.cc && onSelect) onSelect(order[kf].properties.cc);
       }).on("focus", () => { const order = keyOrder(); if (kf < 0) kf = 0; focusFeature(order[kf]); })
         .on("blur", () => { gC.selectAll("path").classed("kfocus", false); hide(); });
-      zoom = d3.zoom().scaleExtent([1, 8]).translateExtent([[0, 0], [W, H]]).on("zoom", (ev) => g.attr("transform", ev.transform));
+      zoom = d3.zoom().scaleExtent([1, 24]).translateExtent([[0, 0], [W, H]]).on("zoom", (ev) => { g.attr("transform", ev.transform); rescale(ev.transform.k); });
       svg.call(zoom).on("dblclick.zoom", null);
+    }
+    // Symbols (dots, site, labels, finding markers) keep their screen size while the map zooms, so zooming in pulls
+    // neighbouring sources apart instead of enlarging them together.
+    function rescale(k) {
+      if (!g) return;
+      g.selectAll("[data-r0]").attr("r", function () { return +this.dataset.r0 / k; });
+      g.selectAll("text[data-x0]").attr("x", function () { return +this.dataset.x0 + +this.dataset.dx / k; })
+        .attr("y", function () { return +this.dataset.y0 + +this.dataset.dy / k; })
+        .style("font-size", function () { return `${+this.dataset.fs / k}px`; }).style("stroke-width", `${3 / k}px`);
+      gM.selectAll("g").attr("transform", (m) => `translate(${m.p[0] + (m.off ? m.off[0] / k : 0)},${m.p[1] + (m.off ? m.off[1] / k : 0)}) scale(${1 / k})`);
     }
     const fname = (f) => f.properties.cc ? cname(f.properties.cc) : f.properties.label;
     const keyOrder = () => features.slice().sort((a, b) => fname(a).localeCompare(fname(b)));
@@ -172,6 +182,14 @@ const NMMap = (() => {
         hint()] : [blkRow(cc), el("div", { class: "muted small", text: "No observed traffic in this scope" })])];
     }
     const CITY = "city-level GeoIP (DB-IP Lite), approximate";
+    // busiest source -> destination address pairs behind an arc, region, endpoint or the site's own country
+    function pairRows(list, dir) {
+      const ps = (list || []).filter((p) => !dir || dir === "both" || p.dir === dir).sort((a, b) => b.b - a.b).slice(0, 5);
+      if (!ps.length) return [];
+      const ip = (a, n) => n ? `${a} (${n})` : a;
+      return [el("div", { class: "muted small", style: "margin-top:4px", text: "Top source → destination" }),
+        ...ps.map((p) => el("div", { class: "small mono", text: `${ip(p.src, p.src_name)} → ${ip(p.dst, p.dst_name)} · ${fmtBytes(p.b)}` }))];
+    }
     function arcTip(a) {
       const t = a.t, c = t.c;
       if (t.kind === "point") return pointTip(c, a.dir);
@@ -181,7 +199,7 @@ const NMMap = (() => {
         row("Volume", `${fmtBytes(b)} · avg ${fmtBps(b * 8 / last.span)}`), row("Window", win()),
         row("Endpoint", `${cname(c.cc)} — country centroid, approximate`),
         c.resid ? row("Shown here", "the part of this country's traffic not placed by city") : null,
-        row("Security", secLine(c.cc)),
+        row("Security", secLine(c.cc)), ...pairRows(c.pairs, a.dir),
         el("div", { class: "muted small", text: "Click to filter by this country" })];
     }
     // a region (several endpoints in the site's own country) or one endpoint of a finding
@@ -199,7 +217,7 @@ const NMMap = (() => {
         x.blocked && !x.in_b && !x.out_b ? row("Firewall", `${fmtNum(x.events || 0)} logged blocked packets — blocked, so no flows`) : null,
         x.named ? row("Finding", "named in this finding's evidence") : null,
         x.named && !x.in_b && !x.out_b && !x.blocked ? row("Flows", "none in the evidence window (it may have aged out or fallen between flow exports)") : null,
-        row("Placed by", CITY), row("Window", win()),
+        row("Placed by", CITY), row("Window", win()), ...pairRows(x.pairs, dir),
         el("div", { class: "muted small", text: x.href ? "Click to open its connections" : "Click to filter by this country" })];
     }
     function localTip(L) {
@@ -210,6 +228,7 @@ const NMMap = (() => {
         row(sw("out", "Outbound"), `${fmtBytes(tout)} · avg ${fmtBps(tout * 8 / last.span)}`), row("Window", win()),
         row("Location", L.pts.length ? "close to the site, or in its country with no city location" : "same country as the site (GeoIP country only)"),
         ...[...new Set(L.items.map((x) => x.c.cc))].map((cc) => row("Security", secLine(cc))),
+        ...pairRows(all.flatMap((x) => x.c.pairs || [])),
         el("div", { class: "muted small", text: "Remote endpoints are near the site or somewhere in its country — not at the site itself. Click to filter." })];
     }
     function alertTip(m, pin) {
@@ -307,7 +326,7 @@ const NMMap = (() => {
         .on("click", (ev, a) => pick(a.t));
       // endpoint / region dots at the far end of point arcs
       gA.selectAll("circle").data(shownP, (t) => t.key).join("circle").attr("class", (t) => `pt${t.c.blocked && !t.v ? " blk" : ""}${t.c.named ? " named" : ""}`)
-        .attr("cx", (t) => t.p1[0]).attr("cy", (t) => t.p1[1]).attr("r", (t) => t.c.named ? 4.5 : 2.6).attr("vector-effect", "non-scaling-stroke")
+        .attr("cx", (t) => t.p1[0]).attr("cy", (t) => t.p1[1]).attr("data-r0", (t) => t.c.named ? 4.5 : 2.6).attr("vector-effect", "non-scaling-stroke")
         .on("pointermove", (ev, t) => !pinned && show(ev, pointTip(t.c, null))).on("pointerleave", hide)
         .on("click", (ev, t) => pick(t));
 
@@ -316,35 +335,35 @@ const NMMap = (() => {
       gL.selectAll("*").remove();
       const homeC = homeCc && last.byCc[homeCc];
       if (p0 && tin + tout > 0)
-        gL.append("circle").attr("class", "localhit").attr("cx", p0[0]).attr("cy", p0[1]).attr("r", 9)
+        gL.append("circle").attr("class", "localhit").attr("cx", p0[0]).attr("cy", p0[1]).attr("data-r0", 9)
           .on("pointermove", (ev) => !pinned && show(ev, localTip(local))).on("pointerleave", hide)
           .on("click", () => { unpin(); if (onSelect && homeCc) onSelect(homeCc); });
       gS.selectAll("*").remove();
       for (const s of sites) { const [x, y] = proj([s.lon, s.lat]);
         const dx = 10;
-        gS.append("circle").attr("class", "site").attr("cx", x).attr("cy", y).attr("r", 5).attr("vector-effect", "non-scaling-stroke").style("pointer-events", "none");
-        gS.append("text").attr("class", "site-t").attr("x", x + dx).attr("y", y + 1).text(s.name);
+        gS.append("circle").attr("class", "site").attr("cx", x).attr("cy", y).attr("data-r0", 5).attr("vector-effect", "non-scaling-stroke").style("pointer-events", "none");
+        gS.append("text").attr("class", "site-t").attr("data-x0", x).attr("data-y0", y).attr("data-dx", dx).attr("data-dy", 1).attr("data-fs", 12).text(s.name);
         // the site's own country in numbers: it is usually most of the traffic and has no arc of its own
-        if (s === home && homeC && !policyOnly && !data.points) gS.append("text").attr("class", "site-sub").attr("x", x + dx).attr("y", y + 14)
+        if (s === home && homeC && !policyOnly && !data.points) gS.append("text").attr("class", "site-sub").attr("data-x0", x).attr("data-y0", y).attr("data-dx", dx).attr("data-dy", 14).attr("data-fs", 11)
           .text(`${homeCc} ⬇ ${fmtBytes(homeC.in_b)} ⬆ ${fmtBytes(homeC.out_b)}`); }
 
       // red = evidence-backed findings only: one marker per country whose endpoints are named in an open finding
       const marks = policyOnly ? [] : Object.entries(last.alerts).filter(([cc, a]) => a.security > 0 && (a.items || []).length).map(([cc, a]) => {
         let p = null;
-        if (cc === homeCc && p0) p = [p0[0] + 22, p0[1] - 20];
+        let off = null; if (cc === homeCc && p0) { p = p0; off = [22, -20]; }
         else { const c = last.byCc[cc], ll = (c && c.ll) || (meta[cc] && meta[cc].ll); if (ll) p = proj([ll[1], ll[0]]); }
-        return p ? { key: cc, cc, a, p, local: cc === homeCc } : null; }).filter(Boolean);
+        return p ? { key: cc, cc, a, p, off, local: cc === homeCc } : null; }).filter(Boolean);
       // a finding's named endpoints that city-level GeoIP places: the marker sits on the endpoint itself
       for (const x of policyOnly ? [] : pts) if (x.flag) {
         const p1 = proj([x.ll[1], x.ll[0]]); if (!p1) continue;
-        marks.push({ key: `p:${x.key}`, cc: x.cc, a: { security: 1, items: [{ ...x.flag, endpoints: [x.ip] }] }, p: p0 && near(p1) ? [p0[0] + 22, p0[1] - 20] : p1, at: x });
+        marks.push({ key: `p:${x.key}`, cc: x.cc, a: { security: 1, items: [{ ...x.flag, endpoints: [x.ip] }] }, p: p0 && near(p1) ? p0 : p1, off: p0 && near(p1) ? [22, -20] : null, at: x });
       }
       gM.selectAll("g").data(marks, (m) => m.key).join((en) => { const gg = en.append("g");
-          gg.append("circle").attr("class", "amark-ring").attr("r", 9); gg.append("path").attr("class", "amark").attr("d", d3.symbol(d3.symbolDiamond, 70)());
-          gg.append("circle").attr("class", "amark-hit").attr("r", 12).attr("fill", "transparent").style("cursor", "pointer"); return gg; })
-        .attr("transform", (m) => `translate(${m.p[0]},${m.p[1]})`)
+          gg.append("circle").attr("class", "amark-ring").attr("r", 9).style("pointer-events", "none"); gg.append("path").attr("class", "amark").attr("d", d3.symbol(d3.symbolDiamond, 70)());
+          gg.append("circle").attr("class", "amark-hit").attr("r", 7).attr("fill", "transparent").style("cursor", "pointer"); return gg; })
         .on("pointermove", (ev, m) => !pinned && show(ev, alertTip(m, false))).on("pointerleave", hide)
         .on("click", (ev, m) => { ev.stopPropagation(); pinned = true; show(ev, alertTip(m, true), true); });
+      rescale(d3.zoomTransform(svg.node()).k);
 
       const unknown = data.countries.find((c) => c.cc === "??");
       const restB = rest.reduce((s, x) => s + x.v, 0);

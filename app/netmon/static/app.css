@@ -161,7 +161,7 @@ details.tech summary { cursor: pointer; color: var(--accent); font-size: 12px; }
 .map { width: 100%; aspect-ratio: 2 / 1; position: relative; overflow: hidden; border-radius: 8px; }
 .map svg, .chart svg { display: block; width: 100%; height: 100%; }
 .chart { width: 100%; height: 300px; position: relative; }
-.sphere { fill: var(--sphere); } .graticule { fill: none; stroke: var(--grid); stroke-width: .5; }
+.sphere { fill: var(--sphere); } .graticule { fill: none; stroke: var(--grid); stroke-width: .5; vector-effect: non-scaling-stroke; }
 .country { stroke: var(--map-border); stroke-width: .6; cursor: pointer; vector-effect: non-scaling-stroke; }
 .country:hover { stroke: var(--accent); stroke-width: 1.4; } .country.sel { stroke: var(--accent); stroke-width: 2; }
 .arc { fill: none; stroke-linecap: round; opacity: .72; cursor: pointer; } .arc.in { stroke: var(--in); } .arc.out { stroke: var(--out); } .arc:hover, .arc.hl { opacity: 1; }

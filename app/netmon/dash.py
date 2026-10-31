@@ -19,6 +19,7 @@ from .core import PROTO, expand_flow_sql, flow_predicates
 
 IPS = "replaceOne(IPv6NumToString({c}), '::ffff:', '')"
 REMOTE_IP = IPS.format(c="if(INB, SrcAddr, DstAddr)")
+LOCAL_IP = IPS.format(c="if(INB, DstAddr, SrcAddr)")
 PUBS = "(SELECT arrayJoin(arrayMap(x -> toIPv6(concat('::ffff:', x)), {pubs:Array(String)})))"
 PRESETS = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800}
 MAX_SPAN = 31 * 86400
@@ -241,15 +242,36 @@ class Dash:
                         "top_asn": int(r["top_as"][0]) if r["top_as"] else 0,
                         "ll": META.get(cc, {}).get("ll")})
         self._names(out, "top_asn", "top_asname", sc)
+        pairs = {}
+        for r in self.q(sc, f"""
+            SELECT if(INB, SrcCountry, DstCountry) AS cc, toUInt8(INB) AS inb, {IPS.format(c='SrcAddr')} AS src, {IPS.format(c='DstAddr')} AS dst,
+                   sum(Bytes * SamplingRate) AS b, count() AS flows
+            FROM flows WHERE {self.where(sc)} GROUP BY cc, inb, src, dst ORDER BY b DESC LIMIT 5 BY cc, inb""", ttl=30):
+            pairs.setdefault((r["cc"] or "").strip("\x00") or "??", []).append(self.pair(r["src"], r["dst"], r["b"], r["flows"], "in" if r["inb"] else "out"))
+        for c in out:
+            c["pairs"] = pairs.get(c["cc"], [])
         return out
+
+    def pair(self, src, dst, b, flows, dir):
+        """One source -> destination address pair for map tooltips, with operator names where known."""
+        return {"src": src, "dst": dst, "src_name": self.cfg.label(self.cfg.binat.get(src, src)) or self.cfg.label(src),
+                "dst_name": self.cfg.label(self.cfg.binat.get(dst, dst)) or self.cfg.label(dst), "b": int(b), "flows": int(flows), "dir": dir}
 
     def top_remotes(self, sc: Scope, cc: str, limit=500):
         """The busiest remote endpoints in one country (for placing that country's traffic by region on the map)."""
         rows = self.q(sc, f"""
-            SELECT {REMOTE_IP} AS ip, sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b, count() AS flows
+            SELECT {REMOTE_IP} AS ip, sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b, count() AS flows,
+                   topKWeighted(1)({LOCAL_IP}, toUInt64(Bytes * SamplingRate)) AS loc
             FROM flows WHERE {self.where(sc)} AND if(INB, SrcCountry, DstCountry) = {{cc:String}}
             GROUP BY ip ORDER BY in_b + out_b DESC LIMIT {{l:UInt32}}""", {"cc": cc, "l": limit}, ttl=60)
-        return [{"ip": r["ip"], "cc": cc, "in_b": int(r["in_b"]), "out_b": int(r["out_b"]), "flows": int(r["flows"])} for r in rows]
+        return [{"ip": r["ip"], "cc": cc, "in_b": int(r["in_b"]), "out_b": int(r["out_b"]), "flows": int(r["flows"]),
+                 "pair": self._rpair(r["ip"], r["loc"], r["in_b"], r["out_b"], r["flows"])} for r in rows]
+
+    def _rpair(self, remote, loc, in_b, out_b, flows):
+        """A remote endpoint's busiest local partner, as source -> destination in its dominant direction."""
+        if not loc:
+            return None
+        return self.pair(remote, loc[0], in_b + out_b, flows, "in") if in_b >= out_b else self.pair(loc[0], remote, in_b + out_b, flows, "out")
 
     def finding_traffic(self, sc: Scope, subject: str, peers: list[str]):
         """WAN-boundary traffic behind one finding: flows whose local side is the finding's subject address,
@@ -264,7 +286,8 @@ class Dash:
         remotes = self.q(sc, f"""
             SELECT {REMOTE_IP} AS ip, any(if(INB, SrcCountry, DstCountry)) AS cc, any(if(INB, SrcAS, DstAS)) AS asn,
                    sumIf(Bytes * SamplingRate, INB) AS in_b, sumIf(Bytes * SamplingRate, OUTB) AS out_b, count() AS flows,
-                   topK(8)(DstPort) AS ports, any(Proto) AS proto, min(toUnixTimestamp(TimeReceived)) AS first, max(toUnixTimestamp(TimeReceived)) AS last
+                   topK(8)(DstPort) AS ports, any(Proto) AS proto, topKWeighted(1)({LOCAL_IP}, toUInt64(Bytes * SamplingRate)) AS loc,
+                   min(toUnixTimestamp(TimeReceived)) AS first, max(toUnixTimestamp(TimeReceived)) AS last
             FROM flows WHERE {w} GROUP BY ip ORDER BY has({{peers:Array(String)}}, ip) DESC, in_b + out_b DESC LIMIT 40""", x, ttl=60)   # named peers first, never cut off
         ports = self.q(sc, f"""
             SELECT DstPort AS port, Proto AS proto, count() AS flows, uniqExact({REMOTE_IP}) AS remotes,
@@ -278,7 +301,8 @@ class Dash:
             FROM flows WHERE {w} GROUP BY cc ORDER BY in_b + out_b DESC LIMIT 250""", x, ttl=60)
         out_r = [{"ip": r["ip"], "cc": (r["cc"] or "").strip("\x00") or "??", "asn": int(r["asn"] or 0), "in_b": int(r["in_b"]), "out_b": int(r["out_b"]),
                   "flows": int(r["flows"]), "ports": sorted({int(p) for p in r["ports"]}), "proto": PROTO.get(int(r["proto"] or 0), str(r["proto"])),
-                  "first": int(r["first"]), "last": int(r["last"]), "name": self.cfg.label(r["ip"])} for r in remotes]
+                  "first": int(r["first"]), "last": int(r["last"]), "name": self.cfg.label(r["ip"]),
+                  "pair": self._rpair(r["ip"], r["loc"], r["in_b"], r["out_b"], r["flows"])} for r in remotes]
         self._names(out_r, "asn", "asname", sc)
         for r in out_r:
             r["cc_name"] = cname(r["cc"])
