@@ -1,7 +1,9 @@
 # OPNsense setup
 
-Menu paths verified on OPNsense 26.7.x. netmon never changes these settings itself; the Settings → Integrations page
-shows the same steps with your monitor's address filled in.
+Menu paths verified on OPNsense 26.7.x. These are done by an administrator in the firewall GUI — m0nitor never changes
+them. Settings → Data sources shows the same steps with your monitor's address filled in, and the Coverage page shows
+which telemetry is arriving. (m0nitor writes to a firewall only through its own block alias and auto-response
+objects, and only when you enable those features — see [BLOCKING.md](BLOCKING.md).)
 
 1. **NetFlow** — Reporting → NetFlow: listening interfaces WAN + LAN (or LAN bridge); WAN interfaces (egress only) WAN;
    version v9; destination `<monitor>:2055`; active timeout 120 s.
@@ -11,7 +13,7 @@ shows the same steps with your monitor's address filled in.
 4. **Suricata (optional)** — Services → Intrusion Detection: IPS mode **off**, syslog alerts + eve syslog output on.
 5. **API user (optional; needed for the live GeoIP policy, inventory sync and blocking)** — a dedicated user with only:
    Firewall: Alias: Edit (alias_util), Firewall: Rules (read), Virtual IPs, 1:1 NAT pages (read in practice). Store the
-   key as `secrets/opnsense_block.key` or per firewall in Settings → Firewalls. See BLOCKING.md for the alias and rules.
+   key as `secrets/opnsense_block.key` or per firewall in Settings → Firewalls. See [BLOCKING.md](BLOCKING.md) for the alias and rules.
 
 ## Unbound query logging (optional, for DNS context)
 Services → Unbound DNS → Advanced: Log queries / Log replies. Volume can be large; DNS retention is separately

@@ -1,6 +1,6 @@
 # Install, upgrade, uninstall, backup, restore, rollback
 
-There is no installer script yet (see ROADMAP). These are the steps the reference deployment was built with, on
+There is no installer script yet (see [ROADMAP.md](ROADMAP.md)). To evaluate first, run the [demo](demo.md). These are the steps the reference deployment was built with, on
 Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume `/opt/netmon`.
 
 ## Install
@@ -21,11 +21,12 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
    `/etc/systemd/system/`, `systemctl enable --now netmon-apply-sites.path`. Add firewalls in Settings → Firewalls;
    the helper renders the NetFlow/syslog ACLs, rsyslog config and Akvorado exporter metadata.
 7. **ufw:** allow 22 and 443 from management networks only; the helper adds the per-firewall 2055/5514 rules.
-8. **Firewall side:** docs/opnsense-setup.md. Then check the Coverage page.
+8. **Firewall side:** [opnsense-setup.md](opnsense-setup.md). Then check the Coverage page.
 
 ## Upgrade
 - App: `git pull` (or copy the new release), `cd app && docker compose up -d --build`, then re-run the schema step
-  (idempotent). Read CHANGELOG.md first.
+  (idempotent). Read [CHANGELOG.md](../CHANGELOG.md) first; releases are tagged `vX.YY` and the running version
+  is shown in the top bar and at `/netmon/healthz`.
 - Akvorado: follow Akvorado's documented upgrade (download `docker-compose-upgrade.tar.gz` for the new version, review
   the `.dist` diffs, keep the local overrides, `docker compose pull`, stop the orchestrator, `docker compose up --wait`).
 

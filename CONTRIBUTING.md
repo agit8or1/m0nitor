@@ -10,10 +10,18 @@
 
 ## Workflow
 1. Branch from `main`; keep changes focused.
-2. Run the tests (see README "Development"); add tests with synthetic fixtures for new behaviour.
-3. `ruff check app` must pass (CI runs it).
-4. Update CHANGELOG.md under "Unreleased" and docs where behaviour changes.
-5. Open a pull request; CI must be green.
+2. Run the tests (see the README, "Contributing and security"); add tests with synthetic fixtures for new behaviour.
+3. `ruff check app` must pass (CI runs it, together with gitleaks and the tests).
+4. **Versioning:** every change is a new version. Bump `__version__` in `app/netmon/__init__.py` (`1.12` → `1.13`),
+   the image tag in `app/docker-compose.yml`, and add a `## v1.13 — YYYY-MM-DD` section at the top of
+   `app/CHANGELOG.md` (the root `CHANGELOG.md` is a copy). `tests/test_version.py` checks that all three agree.
+5. Update the docs where behaviour changes; screenshots come from the demo (`demo/screenshots.py`), never from a
+   real network.
+6. Open a pull request using the template; CI must be green.
+
+## Local setup
+- Demo with synthetic data: [docs/demo.md](docs/demo.md).
+- Lint like CI: `docker run --rm -v "$PWD":/src:ro -w /src python:3.12-slim sh -c "pip install -q ruff==0.8.4 && ruff check --no-cache app"`.
 
 ## Commit identity
 Use a neutral or project identity unless you choose otherwise; do not include personal infrastructure names in

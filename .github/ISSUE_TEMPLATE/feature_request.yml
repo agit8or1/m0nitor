@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+  - type: textarea
+    id: telemetry
+    attributes:
+      label: Telemetry it needs
+      description: Which source would provide the data (NetFlow, syslog, SNMP, firewall API, DNS, Zeek)? m0nitor only shows what telemetry can support.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I checked the roadmap (docs/ROADMAP.md) and existing issues.
