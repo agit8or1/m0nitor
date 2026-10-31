@@ -3,6 +3,19 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.13 — 2026-10-31
+
+### Security
+- Dependency upgrade for published advisories: Starlette 0.41.3 → 1.10.0 (several advisories, fixed in 0.47.2–1.3.1),
+  python-multipart 0.0.20 → 0.0.33 (advisories fixed in 0.0.22–0.0.31), FastAPI 0.115.6 → 0.162.0 and
+  uvicorn 0.34.0 → 0.54.0 to match. Lock files regenerated with hashes.
+- TLS front end: Caddy 2.10.2 → 2.11.7 (fixes Caddy, smallstep and Go module advisories).
+
+### Changed
+- Startup moved from the removed `on_event("startup")` hook to a lifespan handler (Starlette 1.x).
+- A missing or empty required form field still answers 400 with the readable "Not saved" page; FastAPI's newer
+  versions would otherwise answer 422.
+
 ## v1.12 — 2026-10-31
 
 ### Fixed

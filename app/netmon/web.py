@@ -12,9 +12,11 @@ import os
 import secrets
 import threading
 import time
+from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -54,7 +56,13 @@ def site_checks(req_sites=None, name="sites"):
     return "".join(f"<label class='chk'><input type=checkbox name={name} value='{e(x['id'])}' "
                    f"{'checked' if not req_sites or x['id'] in req_sites else ''}> {e(x['name'])}"
                    f"{'' if blk.enforcer(x).enabled else ' <span class=muted>(no API key)</span>'}</label>" for x in cfg.sites)
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+@asynccontextmanager
+async def _lifespan(_app):
+    start()   # background threads (detector, ingest, health); defined below
+    yield
+
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
 app.mount("/netmon/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 
@@ -129,6 +137,17 @@ async def _http_error(req: Request, exc: HTTPException):
         return HTMLResponse(body, status_code=exc.status_code, headers=SECURITY_HEADERS)
     from fastapi.exception_handlers import http_exception_handler
     return await http_exception_handler(req, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(req: Request, exc: RequestValidationError):
+    """A missing or empty required form field stays a plain 400 as before the FastAPI 0.16x upgrade; type errors keep 422."""
+    errs = exc.errors()
+    if errs and all(e.get("type") == "missing" for e in errs):
+        fields = sorted({str(e.get("loc", ["", "?"])[-1]) for e in errs})
+        return await _http_error(req, HTTPException(400, "missing field: " + ", ".join(fields)))
+    from fastapi.exception_handlers import request_validation_exception_handler
+    return await request_validation_exception_handler(req, exc)
 
 
 def client_ip(req: Request) -> str:
@@ -1297,7 +1316,6 @@ def health_loop():
     h.loop(60)
 
 
-@app.on_event("startup")
 def start():
     if os.environ.get("NETMON_DETECTOR", "1") == "1":
         from .logingest import Ingest
