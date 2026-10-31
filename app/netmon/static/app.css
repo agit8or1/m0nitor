@@ -365,3 +365,4 @@ form.inline input.sm { width: 12em; padding: 2px 6px; font-size: 12px; } button.
 pre.changelog { max-height: none; overflow: visible; background: none; padding: 0; }
 .changelog { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; margin: 0; }
 .srvaddrs { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: -6px 0 12px; font-size: 13px; } .srvaddr code { font-size: 12.5px; }
+.ver { font-size: 11.5px; font-weight: 600; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; margin-left: 8px; text-decoration: none; align-self: center; white-space: nowrap; } a.ver:hover { color: var(--accent); border-color: var(--accent); }

@@ -223,7 +223,7 @@ def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtit
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)} · {e(BRAND)}</title>
 <meta name="nm-csrf" content="{e(csrf_token(req))}"><meta name="nm-role" content="{e(r)}">
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body>
-<header class="appbar"><a class="brand" href="/"><span class="logo">◎</span> {e(BRAND)}</a>
+<header class="appbar"><a class="brand" href="/"><span class="logo">◎</span> {e(BRAND)}</a><a class="ver" href="/netmon/changelog" title="Version — what changed">v{VERSION}</a>
 <nav class="mainnav">{nav}<a href="/visualize" target="_blank" rel="noopener" class="ext" title="Akvorado: raw flow exploration">Advanced flow explorer ↗</a></nav>
 <div class="who"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select> <span>{e(u)}</span> <small>{e(r)}</small>
 <form method="post" action="/logout" class="inline">{csrf_field(req)}<button class="link">Sign out</button></form></div></header>
@@ -244,7 +244,7 @@ LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · {brand}</title>
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body class="login"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select>
 <form method="post" action="/login" class="loginbox">
-<div class="brand big"><span class="logo">◎</span> {brand}</div>
+<div class="brand big"><span class="logo">◎</span> {brand} <span class="ver">v{version}</span></div>
 <p class="muted">Network monitoring for {exporter}</p>
 {error}
 <label>Username<input name="username" autocomplete="username" required autofocus></label>
@@ -269,7 +269,7 @@ def safe_next(n: str) -> str:
 @app.get("/login", response_class=HTMLResponse)
 def login_page(next: str = "/", error: str = ""):
     msg = {"bad": "Invalid username or password.", "slow": "Too many attempts. Try again in 15 minutes."}.get(error, "")
-    return HTMLResponse(LOGIN_HTML.format(ASSET_V=ASSET_V, brand=e(BRAND), exporter=e(cfg["exporter"]), next=e(safe_next(next)),
+    return HTMLResponse(LOGIN_HTML.format(ASSET_V=ASSET_V, version=VERSION, brand=e(BRAND), exporter=e(cfg["exporter"]), next=e(safe_next(next)),
                                           error=f'<div class="err">{e(msg)}</div>' if msg else ""),
                         headers=SECURITY_HEADERS)
 
@@ -306,7 +306,7 @@ MFA_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Two-factor · {brand}</title>
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body class="login"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select>
 <form method="post" action="/login/2fa" class="loginbox">
-<div class="brand big"><span class="logo">◎</span> {brand}</div>
+<div class="brand big"><span class="logo">◎</span> {brand} <span class="ver">v{version}</span></div>
 <p class="muted">Enter the 6-digit code from your authenticator app for <b>{user}</b>, or a recovery code.</p>{error}
 <label>Code<input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus maxlength="16"></label>
 <button class="primary">Verify</button><p class="muted small"><a href="/login">Start over</a></p></form></body></html>"""
@@ -318,7 +318,7 @@ def mfa_page(req: Request, error: str = ""):
     if not p:
         return RedirectResponse("/login", 303)
     msg = {"bad": "That code is not valid.", "slow": "Too many attempts. Start over in 15 minutes."}.get(error, "")
-    return HTMLResponse(MFA_HTML.format(ASSET_V=ASSET_V, brand=e(BRAND), user=e(p["username"]), error=f'<div class="err">{e(msg)}</div>' if msg else ""),
+    return HTMLResponse(MFA_HTML.format(ASSET_V=ASSET_V, version=VERSION, brand=e(BRAND), user=e(p["username"]), error=f'<div class="err">{e(msg)}</div>' if msg else ""),
                         headers=SECURITY_HEADERS)
 
 

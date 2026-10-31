@@ -61,7 +61,9 @@
         (() => { const t = el("div", { class: "wrap" }); NM.table(t, [
           { label: "Time", cls: "num", get: (r) => NM.fmtTime(r.ts, true) }, { label: "Firewall", get: (r) => r.firewall }, { label: "Interface", get: (r) => r.iface },
           { label: "Direction", get: (r) => r.direction === "in" ? "⬇ inbound" : "⬆ outbound" },
-          { label: "Source", get: (r) => NM.ipCell(r.src, "") }, { label: "Destination", get: (r) => el("span", { class: "mono", text: r.dst }) },
+          { label: "Source", get: (r) => el("span", {}, r.src_fw ? el("div", { class: "sub", text: r.src_fw }) : null, NM.ipCell(r.src, ""), NM.rdnsLine(r.src_rdns)) },
+          { label: "Destination", get: (r) => el("span", {}, r.dst_fw ? el("div", { class: "sub", text: r.dst_fw }) : null,
+            el("span", { class: "mono", text: r.dst }), NM.rdnsLine(r.dst_rdns)) },
           { label: "Service", get: (r) => `${r.proto}${r.dport ? `/${r.dport}` : ""}` },
           { label: "Rule", get: (r) => el("span", { title: r.rid }, r.rule, r.geoip_rule ? el("span", { class: "tag", text: "GeoIP" }) : null) },
           { label: "Length", cls: "num", get: (r) => `${fmtNum(r.length)} B` }], d.rows, { empty: "No records" }); return t; })(),

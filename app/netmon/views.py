@@ -473,9 +473,18 @@ def api_country_blocks(req: Request, cc: str):
     if cc not in META:
         raise HTTPException(400, "unknown country code")
     sc = scope_of(req, cc="")
-    return guard(lambda: {"ok": True, "scope": scope_json(sc), "cc": cc, "name": cname(cc),
-                          "stats": {k: x for k, x in block_stats(sc).items() if k != "countries"},
-                          **blocks().events(sc.sites, sc.start, sc.end, cc)})
+
+    def run():
+        ev = blocks().events(sc.sites, sc.start, sc.end, cc)
+        rows = ev.get("rows") or []
+        rd = dash.rdns.wait([r[k] for r in rows for k in ("src", "dst") if r.get(k)], timeout=2.0)
+        for r in rows:   # reverse DNS, and the firewall's own addresses named as WAN / WAN alias
+            for k in ("src", "dst"):
+                if r.get(k):
+                    r[f"{k}_rdns"], r[f"{k}_fw"] = rd.get(r[k]), cfg.fw_label(r[k])
+        return {"ok": True, "scope": scope_json(sc), "cc": cc, "name": cname(cc),
+                "stats": {k: x for k, x in block_stats(sc).items() if k != "countries"}, **ev}
+    return guard(run)
 
 
 _GEO = {}   # site id -> {"t", "v"}

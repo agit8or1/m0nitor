@@ -457,4 +457,7 @@ def test_changelog_page_and_footer_version():
     c = client("viewer1", VIEWPW)
     r = c.get("/netmon/changelog")
     assert r.status_code == 200 and f"## v{__version__}" in r.text
-    assert f'href="/netmon/changelog">v{__version__}</a>' in c.get("/netmon/security").text
+    sec = c.get("/netmon/security").text
+    assert f'href="/netmon/changelog">v{__version__}</a>' in sec                      # footer
+    assert f'<a class="ver" href="/netmon/changelog" title="Version — what changed">v{__version__}</a>' in sec   # top bar
+    assert f'<span class="ver">v{__version__}</span>' in client().get("/login").text  # sign-in page

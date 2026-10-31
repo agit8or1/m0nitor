@@ -3,6 +3,14 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.08 — 2026-10-31
+
+### Added
+- Country pages: the logged block records show reverse DNS under source and destination, and name the firewall's
+  own addresses as WAN / WAN alias.
+- The version is shown next to the product name in the top bar of every page (links to the changelog) and on the
+  sign-in and two-factor pages.
+
 ## v1.07 — 2026-10-31
 
 ### Added
