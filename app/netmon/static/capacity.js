@@ -88,7 +88,7 @@
       const fix = admin ? el("details", {}, el("summary", { text: "Correct detected values" }), correctForm(i)) : null;
       return card("Current m0nitor server", "installed resources and what m0nitor can actually use", gradeBox(ov.grade),
         el("div", { class: "grid2 even" }, el("div", {}, kv(lines)), el("div", {}, kv(now),
-          el("p", { class: "row" }, el("button", { text: "Refresh hardware" }), " ", el("span", { class: "muted small", text: `measured over ${win(o.window)}` })))), fix);
+          el("p", { class: "row" }, el("button", { text: "Recalculate now", title: "Re-read hardware and re-measure (results are otherwise cached for 5 minutes)" }), " ", el("span", { class: "muted small", text: o.hardware_change ? `measured over ${dur(o.window.t1 - o.window.resources_t0)} since the hardware change (${o.hardware_change.before.vcpus} → ${o.hardware_change.after.vcpus} vCPU, ${fmtBytes(o.hardware_change.before.ram_bytes)} → ${fmtBytes(o.hardware_change.after.ram_bytes)} RAM); workload over ${win(o.window)}` : `measured over ${win(o.window)}` })))), fix);
     }
     function gradeBox(g) {
       if (!g || g.value == null) return el("div", { class: "grade" }, el("span", { class: "grade-n unknown", text: "?" }),
@@ -112,6 +112,7 @@
       f.append(el("button", { text: "Save corrections" }), el("p", { class: "muted small", text: "Leave a field empty to use the detected value. Detected values stay visible beside yours." }));
       return f;
     }
+    const dur = (sec) => sec < 2 * 86400 ? `${(sec / 3600).toFixed(1)} hours` : `${(sec / 86400).toFixed(1)} days`;
     const win = (w) => `${((w.t1 - w.t0) / 86400).toFixed(1)} days${w.note ? ` (${w.note})` : ""}`;
 
     // ---- mode A / C
@@ -299,7 +300,7 @@
         suggested: st.calc?.suggested ? { flows: st.calc.suggested.flows, events: st.calc.suggested.events } : null }); alert("Plan saved."); }
       catch (e) { alert(`Not saved: ${e.message}`); }
     }
-    body.addEventListener("click", (ev) => { if (ev.target.textContent === "Refresh hardware") load(true); });
+    body.addEventListener("click", (ev) => { if (ev.target.textContent === "Recalculate now") load(true); });
   }
 
   // =================================================================== resources

@@ -62,7 +62,7 @@ def overview(window="7d", t0=None, t1=None, refresh=False):
         manual = get_setting(conn, "capacity:server_manual", {}) or {}
         inv = C.server_inventory(dash.ch, manual)
         obs = C.observe(dash.ch, cfg, conn, window, t0, t1)
-        model = C.cpu_model(dash.ch, cfg, obs["window"]["t0"], obs["window"]["t1"])
+        model = C.cpu_model(dash.ch, cfg, obs["window"].get("resources_t0") or obs["window"]["t0"], obs["window"]["t1"])
         try:
             tabs = C.storage(dash.ch)
         except Exception:

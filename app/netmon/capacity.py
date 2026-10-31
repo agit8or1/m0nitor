@@ -468,6 +468,38 @@ def pick_window(ch, want="7d", t0=None, t1=None, now=None):
     return t0, t1, ""
 
 
+HW_WARMUP_S = 600     # skip the first 10 minutes after a hardware change: boot and ClickHouse catch-up are not normal load
+
+
+def hardware_change(ch, t0, t1, step=300):
+    """Newest time in [t0, t1) where the vCPU count or total RAM changed (VM resized or moved), from ClickHouse's own
+    per-CPU idle and OSMemoryTotal samples. Resource figures measured before it describe other hardware. None if no change."""
+    try:
+        rows = ch.query("SELECT toUInt32(toStartOfInterval(event_time, toIntervalSecond({step:UInt32}))) AS b, "
+                        "uniqExactIf(metric, startsWith(metric, 'OSIdleTimeCPU')) AS cpus, maxIf(value, metric = 'OSMemoryTotal') AS mem "
+                        "FROM system.asynchronous_metric_log WHERE event_time >= {t0:DateTime} AND event_time < {t1:DateTime} "
+                        "AND (startsWith(metric, 'OSIdleTimeCPU') OR metric = 'OSMemoryTotal') GROUP BY b ORDER BY b",
+                        {"step": step, "t0": _dt(t0), "t1": _dt(t1)})
+    except Exception:
+        return None
+    return find_change([(int(r["b"]), int(r["cpus"]), float(r["mem"])) for r in rows], step)
+
+
+def find_change(rows, step=300):
+    """rows: (bucket, vCPUs, RAM bytes) ascending. Newest bucket whose hardware differs from the newest bucket's (RAM
+    within 2 % counts as equal). The bucket right after it can hold samples of both, so the change counts from the end
+    of that bucket."""
+    rows = [r for r in rows if r[1] and r[2]]
+    if len(rows) < 2:
+        return None
+    _, cpus, mem = rows[-1]
+    for i in range(len(rows) - 2, -1, -1):
+        b, c, m = rows[i]
+        if c != cpus or abs(m - mem) > 0.02 * mem:
+            return {"at": rows[i + 1][0] + step, "before": {"vcpus": c, "ram_bytes": m}, "after": {"vcpus": cpus, "ram_bytes": mem}}
+    return None
+
+
 def observe(ch, cfg, conn, window="7d", t0=None, t1=None):
     """'Use My Current Setup': measured workload, resources and inventory counts for the window."""
     t0, t1, note = pick_window(ch, window, t0, t1)
@@ -483,8 +515,18 @@ def observe(ch, cfg, conn, window="7d", t0=None, t1=None):
     out["throughput_flow"]["source"] = "flow-estimated (WAN boundary, sampled bytes x sampling rate, by time received)"
     out["throughput_snmp"] = summarize(snmp, t0, t1, gap_steps=3)
     out["throughput_snmp"]["source"] = "SNMP IF-MIB 64-bit counters on the WAN interface(s), summed in+out"
+    r0, hw = t0, (hardware_change(ch, t0, t1) if not err else None)
+    if hw:
+        settle = hw["at"] + HW_WARMUP_S
+        r0 = max(t0, settle if t1 - settle >= 1800 else hw["at"])
+        gb = lambda b: f"{b / 2**30:.0f} GB"  # noqa: E731
+        hw["note"] = (f"hardware changed at {_dt(hw['at'])} UTC ({hw['before']['vcpus']} vCPU / {gb(hw['before']['ram_bytes'])} -> "
+                      f"{hw['after']['vcpus']} vCPU / {gb(hw['after']['ram_bytes'])}): CPU, memory and disk figures are measured "
+                      f"since {_dt(r0)} UTC only" + (", skipping the first 10 minutes after the change" if r0 > hw["at"] else ""))
+    out["window"]["resources_t0"] = r0
+    out["hardware_change"] = hw
     for k in ("cpu", "mem", "io_util", "write_Bps", "read_Bps", "io_latency_ms", "iowait", "steal", "ch_rss"):
-        out[k] = summarize(pick(res, k), t0, t1, gap_steps=5)
+        out[k] = summarize(pick(res, k), r0, t1, gap_steps=5)
     out["fs_growth"] = fs_growth(res)
     out["flows_trend"] = daily_trend(pick(wl, "flows"))
     out["events_trend"] = daily_trend(pick(wl, "events"))
@@ -833,6 +875,8 @@ def hardware_grade(obs, cap, inv=None, fc=None, cpu_target=0.7, mem_target=0.85)
         score = min(score, 30)
         caps.append(f"disk limit reached in {days:.0f} days: capped at 30")
     conf = (obs.get("cpu") or {}).get("confidence") or "low"
+    if obs.get("hardware_change"):
+        caps.append(obs["hardware_change"]["note"])
     score = round(score)
     band = next(t for lo, t in GRADE_BANDS if score >= lo)
     return {"label": "ESTIMATED", "value": score, "band": band, "limited_by": weakest, "components": parts, "caps": caps,

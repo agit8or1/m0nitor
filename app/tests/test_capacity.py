@@ -394,3 +394,24 @@ def test_grade_band_matches_displayed_value():
     cap = {"bottleneck": {"limits": {"disk_io": {"multiplier": 8.0}}}}
     g = C.hardware_grade(_obs(cpu={"p95": 0.1}, mem={"p95": 0.85 / 1.99}), cap)   # memory scores 49.7 -> shown 50
     assert g["value"] == 50 and g["band"] == "comfortable"
+
+
+# ---------------------------------------------------------------- hardware change
+def test_find_change_detects_vm_resize():
+    gb = 2**30
+    rows = [(T0 + 300 * i, 16, 15.6 * gb) for i in range(500)] + [(T0 + 300 * i, 48, 31.3 * gb) for i in range(502, 520)]
+    hw = C.find_change(rows)
+    assert hw["before"] == {"vcpus": 16, "ram_bytes": 15.6 * gb} and hw["after"]["vcpus"] == 48
+    assert hw["at"] == T0 + 300 * 503          # end of the first bucket on the new hardware: it may hold mixed samples
+
+
+def test_find_change_ignores_small_ram_jitter_and_no_change():
+    gb = 2**30
+    assert C.find_change([(T0 + 300 * i, 16, (15.6 + 0.1 * (i % 2)) * gb) for i in range(100)]) is None
+    assert C.find_change([(T0, 16, 15.6 * gb)]) is None
+
+
+def test_grade_reports_hardware_change():
+    hw = {"at": T0, "before": {"vcpus": 16, "ram_bytes": 1}, "after": {"vcpus": 48, "ram_bytes": 2}, "note": "hardware changed"}
+    g = C.hardware_grade({**_obs(cpu={"p95": 0.1}, mem={"p95": 0.2}), "hardware_change": hw}, {})
+    assert "hardware changed" in g["caps"]

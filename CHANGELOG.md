@@ -3,6 +3,17 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.30 — 2026-10-31
+
+### Fixed
+- **Hardware grade ignored a VM resize.** CPU, memory and disk figures were P95s over the whole window (7 days by
+  default), so after adding vCPUs or RAM the grade kept describing the old hardware for days. The planner now finds
+  the last change of vCPU count or total RAM (from ClickHouse's per-CPU and memory samples) and measures resources
+  only from there, skipping the first 10 minutes after the change (boot and catch-up load). The CPU model is fitted
+  on the same span. The grade and the server card say when the hardware changed and what changed; workload rates
+  (flows, events) still use the full window. Confidence is low until about 6 hours have been measured.
+- The server card's button is now **Recalculate now** (it was "Refresh hardware"); it bypasses the 5-minute cache.
+
 ## v1.29 — 2026-10-31
 
 ### Added
