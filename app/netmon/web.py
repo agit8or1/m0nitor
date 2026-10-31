@@ -222,7 +222,7 @@ def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtit
     return HTMLResponse(f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)} · {e(BRAND)}</title>
 <meta name="nm-csrf" content="{e(csrf_token(req))}"><meta name="nm-role" content="{e(r)}">
-<link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body>
+<link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body class="role-{e(r)}">
 <header class="appbar"><a class="brand" href="/"><span class="logo">◎</span> {e(BRAND)}</a><a class="ver" href="/netmon/changelog" title="Version — what changed">v{VERSION}</a>
 <nav class="mainnav">{nav}<a href="/visualize" target="_blank" rel="noopener" class="ext" title="Akvorado: raw flow exploration">Advanced flow explorer ↗</a></nav>
 <div class="who"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select> <span>{e(u)}</span> <small>{e(r)}</small>
@@ -1229,7 +1229,7 @@ def audit_view(req: Request):
     trs = "".join(f"<tr><td class='num'>{e(fmt_ts(x['ts']))}</td><td>{e(x['user'])}</td><td><code>{e(x['action'])}</code></td><td><code>{e(x['detail'])}</code></td></tr>"
                   for x in rows)
     from .admin import SETTINGS_TABS, tabs
-    return page(req, "Audit log", tabs(SETTINGS_TABS, "/netmon/audit") + f"<p class='muted'>Append-only (database triggers refuse updates and deletes).</p><div class='card wrap'><table class='tbl'><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>{trs}</table></div>", "/netmon/settings", scoped=False)
+    return page(req, "Settings · Audit log", tabs(SETTINGS_TABS, "/netmon/audit") + f"<p class='muted'>Append-only (database triggers refuse updates and deletes).</p><div class='card wrap'><table class='tbl'><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>{trs}</table></div>", "/netmon/settings", scoped=False)
 
 
 def responder_loop():

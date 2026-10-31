@@ -13,15 +13,20 @@ from . import auth
 from .core import apply_overrides, audit, get_setting, get_state, put_setting
 from .detect import fmt_ts
 from .notify import TYPES
-from .views import ai, guard, scope_of
-from .web import (ROLES, app, cfg, check_csrf, conn, csrf_field, current, dash, e, enforcement, need, notifier, page, user_of)
+from .views import guard, scope_of
+from .web import (ROLES, app, cfg, check_csrf, conn, csrf_field, current, dash, e, need, notifier, page, user_of)
 
-SETTINGS_TABS = [("Health", "/netmon/settings"), ("Coverage", "/netmon/coverage"), ("Firewalls & sites", "/netmon/settings/sites"), ("Inventory", "/netmon/settings/inventory"),
-                 ("Auto-response", "/netmon/settings/response"),
-                 ("Notifications", "/netmon/settings/notifications"),
-                 ("Alert rules", "/netmon/settings/rules"), ("Maintenance", "/netmon/settings/maintenance"),
-                 ("Users & 2FA", "/netmon/users"), ("Integrations", "/netmon/settings/integrations"),
-                 ("My account", "/netmon/account"), ("Audit log", "/netmon/audit")]
+# (name, href, group, admin-only): grouped in this order; admin-only entries are hidden from other roles
+SETTINGS_TABS = [("Health", "/netmon/settings", "Status", False), ("Coverage", "/netmon/coverage", "Status", False),
+                 ("Firewalls & sites", "/netmon/settings/sites", "Data", False),
+                 ("Data sources", "/netmon/settings/integrations", "Data", False),
+                 ("Inventory", "/netmon/settings/inventory", "Data", False),
+                 ("Alert rules", "/netmon/settings/rules", "Detection & response", False),
+                 ("Notifications", "/netmon/settings/notifications", "Detection & response", False),
+                 ("Auto-response", "/netmon/settings/response", "Detection & response", False),
+                 ("Maintenance", "/netmon/settings/maintenance", "Detection & response", False),
+                 ("My account", "/netmon/account", "Access", False), ("Users & 2FA", "/netmon/users", "Access", True),
+                 ("Audit log", "/netmon/audit", "Access", True)]
 SECURITY_TABS = [("Findings", "/netmon/security"), ("Firewall events", "/netmon/firewall"), ("IDS alerts", "/netmon/ids"),
                  ("Threat intel", "/netmon/threat-intel"), ("Block requests", "/netmon/blocks"), ("Suppressions", "/netmon/exceptions")]
 
@@ -189,6 +194,12 @@ def tip_box(key, open_=False):
 
 
 def tabs(items, active):
+    if items and len(items[0]) == 4:   # grouped settings menu
+        groups = {}
+        for n, h, g, adm in items:
+            groups.setdefault(g, []).append(f"<a href='{h}' class='{'on' if h == active else ''}{' adm' if adm else ''}'>{e(n)}</a>")
+        return ("<nav class='subtabs grouped' aria-label='Settings'>" + "".join(
+            f"<div class='tgrp'><span class='tgl'>{e(g)}</span><div class='tgl-links'>{''.join(links)}</div></div>" for g, links in groups.items()) + "</nav>")
     return "<nav class='subtabs'>" + "".join(f"<a href='{h}' class='{'on' if h == active else ''}'>{e(n)}</a>" for n, h in items) + "</nav>"
 
 
@@ -269,7 +280,7 @@ def account(req: Request, enroll: str = "", msg: str = "", codes: str = ""):
 <label>New password (12+ characters)<input type=password name=new required minlength=12 autocomplete="new-password"></label>
 <button>Change password</button></form>
 <p class="muted small">Signed in as <b>{e(u)}</b> ({e(r)}). Changing your password signs out your other sessions.</p></div></section>"""
-    return page(req, "My account", body, "/netmon/settings", scoped=False)
+    return page(req, "Settings · My account", body, "/netmon/settings", scoped=False)
 
 
 @app.post("/netmon/account/2fa/enable")
@@ -682,15 +693,11 @@ def integrations_page(req: Request):
 <tr><td>Syslog receiver (rsyslog, TCP 5514)</td><td>{status_badge('ok' if ing.get('lines') else 'na', na='Listening — nothing received yet')}</td>
 <td>{ing.get('lines', 0):,} lines parsed · {ing.get('errors', 0)} errors · unparsed {e(json.dumps(ing.get('unparsed', {})))}{(' · ' + e(ing.get('error'))) if ing.get('error') else ''}</td></tr>
 </table></section>
-<section class="card"><div class="card-h"><h2>OPNsense setup tips</h2><span class="muted small">do these in the OPNsense GUI · netmon never changes the firewall itself</span></div>
+<section class="card"><div class="card-h"><h2>OPNsense setup tips</h2><span class="muted small">steps to do in the OPNsense GUI</span></div>
 {''.join(tip_box(k, open_=(k == 'syslog' and not s['fw']['last']) or (k == 'ids' and not s['ids']['last'])) for k in TIPS)}
 <p class="note">Transport: TCP, ideally on a directly attached management network. OPNsense also supports TLS(4) for remote syslog; that needs a CA trusted on both sides and can be added later.</p></section>
-<section class="card"><div class="card-h"><h2>Other integrations</h2></div><table class="tbl">
-<tr><td>Inventory</td><td><a href="/netmon/settings/inventory">{len(cfg.get('assets', {}))} named servers</a> (netmon database)</td><td>NetBox: not configured</td></tr>
-<tr><td>GeoIP</td><td>IPinfo free (country + ASN)</td><td>country centroids only</td></tr>
-<tr><td>Blocking (firewall alias)</td><td>{f"{enforcement()[0]} of {enforcement()[1]} firewalls connected" if enforcement()[0] else 'not set up'}</td><td><a href="/netmon/blocks">block requests</a></td></tr>
-<tr><td>AI analysis</td><td>{'configured · ' + e(ai.ac.get('model')) if ai.enabled else 'not configured'}</td><td><a href="/netmon/investigations">setup</a></td></tr></table></section>"""
-    return page(req, "Settings · Integrations", body, "/netmon/settings", scoped=False)
+"""
+    return page(req, "Settings · Data sources", body, "/netmon/settings", scoped=False)
 
 
 # ---- firewall events & IDS -------------------------------------------------------------------

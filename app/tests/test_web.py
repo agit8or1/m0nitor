@@ -461,3 +461,5 @@ def test_changelog_page_and_footer_version():
     assert f'href="/netmon/changelog">v{__version__}</a>' in sec                      # footer
     assert f'<a class="ver" href="/netmon/changelog" title="Version — what changed">v{__version__}</a>' in sec   # top bar
     assert f'<span class="ver">v{__version__}</span>' in client().get("/login").text  # sign-in page
+    assert '<body class="role-viewer">' in sec          # admin-only settings tabs are hidden by role class
+    assert "class='subtabs grouped'" in c.get("/netmon/settings/integrations").text

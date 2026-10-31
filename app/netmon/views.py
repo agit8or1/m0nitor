@@ -1055,9 +1055,6 @@ def settings_page(req: Request):
             snmp_rows += (f"<tr><td>{e(s['name'])}</td><td>{e(name)}</td><td>{sev_ok(ok)}</td>"
                           f"<td class='num'>{e(fmt_ts(ts)) if ts else 'never'}</td><td>{e((v or {}).get('speed_mbps', '—'))} Mb/s port speed</td>"
                           f"<td>{e((v or {}).get('error') or '')}</td></tr>")
-    sites = "".join(f"<tr><td>{e(s['name'])}</td><td><code>{e(s['exporter'])}</code></td><td>WAN {e(s['wan_if'])} · LAN {e(s['lan_if'])}</td>"
-                    f"<td>{e(next((l['source'] for l in site_locations() if l['id'] == s['id']), 'not set'))}</td>"
-                    f"<td>{e(s.get('wan_capacity_mbps') or 'not configured')}</td></tr>" for s in cfg["sites"])
     age = coll["age"]
     from .admin import SETTINGS_TABS, sources, tabs
     S = sources()
@@ -1072,20 +1069,15 @@ def settings_page(req: Request):
 <tr><td>Suricata IDS</td><td>{src_badge(S['ids'], 'Not connected')}</td><td>{f"last alert {fmt_ts(S['ids']['last'])} · {S['ids']['alerts24']} / 24 h" if S['ids']['last'] else 'not enabled on OPNsense — <a href="/netmon/settings/integrations">set up</a>'}</td></tr>
 <tr><td>Notifications</td><td>{sev_ok(True, f"{S['channels']} channel(s)") if S['channels'] else sev_ok(None, 'Not configured')}</td><td><a href="/netmon/settings/notifications">email, SMS, webhook, Slack, Teams, Discord, ntfy, Pushover</a></td></tr>
 </table></div>
-<div class="card"><div class="card-h"><h2>WAN interface counters (SNMP, read-only)</h2></div><table class="tbl"><tr><th>Site</th><th>Interface</th><th>Status</th><th>Last poll</th><th>Speed</th><th></th></tr>{snmp_rows or '<tr><td colspan=6 class=muted>Not configured</td></tr>'}</table>
-<p class="note">Port speed is not contracted capacity; utilization is shown only when <code>wan_capacity_mbps</code> is set per site.</p></div></section>
-<section class="card"><div class="card-h"><h2>Sites &amp; data-center locations</h2><span class="muted small">edit /opt/netmon/app/config.yaml → sites</span></div>
-<table class="tbl"><tr><th>Site</th><th>Exporter</th><th>Accounting boundary</th><th>Map location</th><th>WAN capacity (Mb/s)</th></tr>{sites}</table></section>
-<section class="grid2 even"><div class="card"><div class="card-h"><h2>Integrations</h2></div><table class="tbl">
-<tr><td>Inventory</td><td><a href="/netmon/settings/inventory">{len(cfg.get('assets', {}))} named servers</a> (netmon database)</td><td>NetBox: not configured</td></tr>
-<tr><td>GeoIP</td><td>IPinfo free (country + ASN), refreshed by Akvorado</td><td>country centroids only; no city data</td></tr>
-<tr><td>Blocking</td><td>{f"{enforcement()[0]} of {enforcement()[1]} firewalls connected" if enforcement()[0] else 'not set up'}</td><td><a href="/netmon/blocks">block requests</a></td></tr>
+<div class="stack"><div class="card"><div class="card-h"><h2>WAN interface counters (SNMP, read-only)</h2></div><table class="tbl"><tr><th>Site</th><th>Interface</th><th>Status</th><th>Last poll</th><th>Speed</th><th></th></tr>{snmp_rows or '<tr><td colspan=6 class=muted>Not configured</td></tr>'}</table>
+<p class="note">Port speed is not contracted capacity; utilization is shown only when a WAN capacity is set on <a href="/netmon/settings/sites">Firewalls &amp; sites</a>.</p></div>
+<div class="card"><div class="card-h"><h2>Features</h2></div><table class="tbl">
+<tr><td>Firewalls</td><td>{len(cfg["sites"])} site(s)</td><td><a href="/netmon/settings/sites">Firewalls &amp; sites</a></td></tr>
+<tr><td>Inventory</td><td>{len(cfg.get('assets', {}))} named servers</td><td><a href="/netmon/settings/inventory">edit names</a></td></tr>
+<tr><td>Blocking</td><td>{f"{enforcement()[0]} of {enforcement()[1]} firewalls connected" if enforcement()[0] else 'not set up'}</td><td><a href="/netmon/blocks">block requests</a> · <a href="/netmon/settings/response">auto-response</a></td></tr>
 <tr><td>AI analysis</td><td>{'configured · ' + e(ai.ac.get('model')) if ai.enabled else 'not configured'}</td><td><a href="/netmon/investigations">setup</a></td></tr>
-</table></div>
-<div class="card"><div class="card-h"><h2>Administration</h2></div><ul class="links">
-<li><a href="/netmon/coverage">Telemetry coverage — what is and is not visible</a></li>
-{'<li><a href="/netmon/users">Users &amp; roles</a></li><li><a href="/netmon/audit">Audit log</a></li>' if r == 'admin' else ''}
-<li><a href="/netmon/exceptions">Alert suppressions</a></li><li><a href="/visualize" target="_blank" rel="noopener">Advanced flow explorer (Akvorado)</a></li></ul></div></section>"""
+<tr><td>GeoIP</td><td>IPinfo (country + ASN) · DB-IP Lite (city placement)</td><td><a href="/netmon/coverage">what is visible</a></td></tr>
+</table></div></div></section>"""
     return page(req, "Settings · Health", body, "/netmon/settings", scoped=False)
 
 

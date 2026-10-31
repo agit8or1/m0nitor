@@ -3,6 +3,18 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.09 — 2026-10-31
+
+### Changed
+- Settings menu grouped into Status, Data, Detection & response and Access; admin-only pages (Users & 2FA,
+  Audit log) are hidden from other roles; every settings page is titled "Settings · …".
+- Settings → Health is one status view: collection health, SNMP counters and a Features summary (firewalls,
+  inventory, blocking, AI, GeoIP). The duplicate sites table, the outdated "edit config.yaml" note and the links
+  card are gone; GeoIP now mentions city placement.
+- "Integrations" is renamed "Data sources" (telemetry status and OPNsense setup steps); its duplicate integrations
+  table is gone.
+- Auto-response shows the latest 25 decisions with older ones folded.
+
 ## v1.08 — 2026-10-31
 
 ### Added

@@ -141,14 +141,14 @@ addresses you named in Inventory, addresses a person un-blocked in the last 7 da
 <td class="num" title="{e(fmt_ts(b['expires_at']))}">in {max(0, (b['expires_at'] - now)) / 3600:.1f} h</td>
 <td>{rm(b)}</td></tr>""" for b in active)
     logs = conn.execute("SELECT * FROM response_log ORDER BY id DESC LIMIT 150").fetchall()
-    lrows = ""
+    lrows = []
     for x in logs:
         cls, txt = DECISION.get(x["decision"], ("muted", x["decision"]))
         ev = json.loads(x["evidence"] or "{}")
         name = cfg.label(x["address"])
         name = f"<div class='sub'>{e(name)}</div>" if name else ""
         link = f"<a href='/netmon/block/{x['block_id']}'>block #{x['block_id']}</a>" if x["block_id"] else ""
-        lrows += (f"<tr><td class='num'>{e(fmt_ts(x['ts']))}</td><td><a class='mono' href='/netmon/connections?rip={e(x['address'])}'>{e(x['address'])}</a>{name}</td>"
+        lrows.append(f"<tr><td class='num'>{e(fmt_ts(x['ts']))}</td><td><a class='mono' href='/netmon/connections?rip={e(x['address'])}'>{e(x['address'])}</a>{name}</td>"
                   f"<td>{e(respond.TRIGGER_LABEL.get(x['trigger'], x['trigger']))}</td><td><span class='sev s-{cls}'>{txt}</span></td>"
                   f"<td class='small'>{e(ev.get('title', ''))}<div class='sub'>{e(x['reason'])}</div></td>"
                   f"<td>{link}<details class='tech'><summary>evidence</summary><pre>{e(json.dumps(ev.get('evidence'), indent=1, default=str))}</pre></details></td></tr>")
@@ -169,8 +169,9 @@ addresses you named in Inventory, addresses a person un-blocked in the last 7 da
 <section class="card" id="log"><div class="card-h"><h2>Decisions</h2><span class="muted small">every candidate, with the guardrail that stopped it · one entry per address and trigger per hour</span></div>
 {f'<form method=post action="{BASE}/evaluate" class="row">{csrf_field(req)}<button>Evaluate now (dry run)</button><span class="muted small">runs the triggers once without blocking, whatever the mode</span></form>' if admin else ''}
 <div class="wrap"><table class="tbl"><thead><tr><th class="num">Time</th><th>Address</th><th>Trigger</th><th>Decision</th><th>Why</th><th></th></tr></thead>
-<tbody>{lrows or '<tr><td colspan=6 class="state empty">No candidates yet</td></tr>'}</tbody></table></div></section>"""
-    return page(req, "Auto-response", body, "/netmon/settings", scoped=False)
+<tbody>{''.join(lrows[:25]) or '<tr><td colspan=6 class="state empty">No candidates yet</td></tr>'}</tbody></table></div>
+{f'<details class="more"><summary>Show {len(lrows) - 25} older decisions</summary><div class="wrap"><table class="tbl"><tbody>{"".join(lrows[25:])}</tbody></table></div></details>' if len(lrows) > 25 else ''}</section>"""
+    return page(req, "Settings · Auto-response", body, "/netmon/settings", scoped=False)
 
 
 @app.post(BASE)

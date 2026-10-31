@@ -154,7 +154,7 @@ def coverage_page(req: Request, msg: str = ""):
 <section class="card"><div class="card-h"><h2>What is visible</h2></div>
 <div class="wrap"><table class="tbl"><tr><th>Capability</th><th>Coverage</th><th>Evidence</th><th>Limits</th><th>Last data / validation</th></tr>{crow}</table></div></section>
 {form}"""
-    return page(req, "Coverage & source health", body, "/netmon/settings", scoped=False)
+    return page(req, "Settings · Coverage", body, "/netmon/settings", scoped=False)
 
 
 @app.post("/netmon/coverage/settings")

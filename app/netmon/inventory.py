@@ -273,4 +273,4 @@ def inventory_page(req: Request, msg: str = ""):
 <div class="wrap"><table class="tbl"><thead><tr><th>Label</th><th>IP</th><th>Source</th><th>Notes</th><th></th></tr></thead>
 <tbody>{lrows or '<tr><td colspan=5 class="state empty">No labels yet. Use ✎ next to any IP address, or the form below.</td></tr>'}</tbody></table></div>
 <p class="note">Tip: every IP address in connection tables, findings, IDS alerts and search results has a ✎ button to name it in place.</p></section>{add}"""
-    return page(req, "Inventory", body, "/netmon/settings", scoped=False)
+    return page(req, "Settings · Inventory", body, "/netmon/settings", scoped=False)
