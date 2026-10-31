@@ -3,6 +3,24 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.25 — 2026-10-31
+
+### Security
+- Third-party images with fixable HIGH/CRITICAL CVEs updated; none of the images below has a fixable one left:
+  - Kafka 4.3.1 → 4.3.2 plus Alpine package updates (was 29 HIGH and 1 CRITICAL, brotli).
+  - Traefik pinned to v3.7.17 (was one fixable HIGH).
+  - IPinfo GeoIP updater: Alpine package updates (was 2 HIGH and 1 CRITICAL).
+  - Caddy v2.11.7 rebuilt from source with Go 1.26.10, go-jose v4.1.6 and golang.org/x/net v0.60.0, plus Alpine
+    package updates (was 9 HIGH and 1 CRITICAL). Same module set as the official image.
+- Kafka, the GeoIP updater and Caddy are built locally from the upstream images (`akvorado/docker-compose-local.yml`,
+  `caddy/image/Dockerfile`); refresh them with `docker compose build --pull` (see docs/install.md, Upgrade).
+- Remaining, not fixable yet: Akvorado 2026.10.1 (one HIGH, golang.org/x/net, needs an Akvorado release); Debian
+  and Valkey base packages; Caddy's go-jose v3 (no fixed release).
+
+### Fixed
+- `akvorado/docker-compose-local.yml` in the repository lacked the IPFIX (4739) and sFlow (6343) ports and the
+  markers the host helper rewrites (multi-vendor setup, v1.14).
+
 ## v1.24 — 2026-10-31
 
 ### Security

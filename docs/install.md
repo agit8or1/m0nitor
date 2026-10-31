@@ -29,6 +29,12 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
   is shown in the top bar and at `/netmon/healthz`.
 - Akvorado: follow Akvorado's documented upgrade (download `docker-compose-upgrade.tar.gz` for the new version, review
   the `.dist` diffs, keep the local overrides, `docker compose pull`, stop the orchestrator, `docker compose up --wait`).
+- Patched third-party images: Kafka and the IPinfo GeoIP updater (`akvorado/docker-compose-local.yml`) and Caddy
+  (`caddy/image/Dockerfile`) are built locally from the upstream images with current Alpine packages (and, for Caddy,
+  a current Go toolchain and dependency versions), because the upstream images carried fixable CVEs. Refresh them when
+  an image scan shows fixable CVEs: `docker compose build --pull kafka geoip && docker compose up -d kafka geoip` in
+  `akvorado/`, and `docker compose build --pull && docker compose up -d` in `caddy/`. Restarting Kafka interrupts flow
+  intake for a few seconds. Once upstream publishes fixed images, switch back to them and drop the local builds.
 
 ## Rollback
 - App: check out the previous tag/commit and rebuild; the SQLite schema is additive (new tables/columns only), so an

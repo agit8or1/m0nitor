@@ -1,6 +1,8 @@
 services:
   caddy:
-    image: caddy:2.11.7-alpine
+    # Caddy v2.11.7 rebuilt with patched Go and dependencies (see image/Dockerfile) until upstream rebuilds.
+    image: netmon/caddy:2.11.7-patched
+    build: ./image
     network_mode: host   # needs host loopback to reach Traefik on 127.0.0.1:8081
     restart: unless-stopped
     environment:
