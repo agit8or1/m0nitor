@@ -3,6 +3,13 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.17 — 2026-10-31
+
+### Fixed
+- Settings → Health, Features card: the GeoIP row named fixed products ("IPinfo (country + ASN) · DB-IP Lite") whatever
+  was installed. It now names the country and city databases actually loaded, with their build dates, or says that
+  one is missing. The demo therefore shows its synthetic country data instead of a product it does not use.
+
 ## v1.16 — 2026-10-31
 
 ### Fixed

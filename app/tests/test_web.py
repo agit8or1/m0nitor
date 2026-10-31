@@ -463,3 +463,16 @@ def test_changelog_page_and_footer_version():
     assert f'<span class="ver">v{__version__}</span>' in client().get("/login").text  # sign-in page
     assert '<body class="role-viewer">' in sec          # admin-only settings tabs are hidden by role class
     assert "class='subtabs grouped'" in c.get("/netmon/settings/integrations").text
+
+
+def test_features_card_names_the_geoip_databases_actually_loaded(monkeypatch):
+    from netmon import geocity, views
+    geo = views.blocks().geo
+    monkeypatch.setattr(geo, "provenance", lambda: {"database": "csv (synthetic/offline)", "built": "2026-10-31"})
+    monkeypatch.setattr(geocity.GEO, "provenance", lambda: {"database": None})
+    txt = views.geo_sources()
+    assert txt.startswith("csv (synthetic/offline) (country, built 2026-10-31)") and "no city database" in txt
+    assert "IPinfo" not in txt and "DB-IP" not in txt                       # never claims a database that is not loaded
+    monkeypatch.setattr(geo, "provenance", lambda: {"database": None, "error": "No such file"})
+    monkeypatch.setattr(geocity.GEO, "provenance", lambda: {"database": "DBIP-City-Lite", "built": "2026-10-01"})
+    assert views.geo_sources() == "no country database: No such file · DBIP-City-Lite (city placement, built 2026-10-01)"
