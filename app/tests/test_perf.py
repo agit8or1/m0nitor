@@ -1,4 +1,5 @@
 """Query caching for long ranges: window rounding, cache lifetime and background warm-up (fake ClickHouse)."""
+import netmon.web  # noqa: F401  (netmon.views needs netmon.web loaded first)
 from netmon import views, web
 from netmon.dash import PRESETS, QUANTUM
 
@@ -139,3 +140,21 @@ def test_block_stats_rolling_window_never_waits_and_history_is_exact():
     assert ch.n > n and b.stats(sites, t0 + 120, t1 + 120)["window"] == [t0 + 120, t1 + 120]   # refreshed in background
     old = (t0 - 3 * 86400, t1 - 3 * 86400)
     assert b.stats(sites, *old)["window"] == list(old)                 # historical window: exact, never a stale stand-in
+
+
+def test_block_stats_custom_windows_do_not_grow_memory():
+    import time
+    from netmon.geoblocks import Blocks
+
+    class CH:
+        def query(self, sql, params=None):
+            return [{"n": 0}] if "count() AS n" in sql else []
+    b = Blocks(web.cfg, CH(), lambda s: {}, lambda s: object())
+    old = int(time.time()) - 30 * 86400
+    for i in range(200):                       # many different historical/custom windows
+        b.stats(web.cfg.sites, old - 3600 - i * 60, old)
+    assert len(b._latest) == 0 and len(b._cache) <= 51
+    now = int(time.time()) // 60 * 60
+    for i in range(40):                        # many rolling windows of different lengths
+        b.stats(web.cfg.sites, now - 3600 - i * 60, now)
+    assert len(b._latest) <= 21
