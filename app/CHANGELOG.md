@@ -3,6 +3,16 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.31 — 2026-10-31
+
+### Fixed
+- **Hardware grade right after a resize was decided by a few minutes of data.** With only minutes measured on the
+  new hardware, the "P95" was simply the busiest minute (boot catch-up or a one-off job), so a mostly idle, larger
+  server could be graded "undersized". For the first 6 hours after a vCPU or RAM change, CPU and memory are now
+  **projected** from the previous hardware's measurements, scaled by old/new vCPUs and old/new RAM (labelled
+  ESTIMATED, confidence one step lower). Disk I/O keeps the whole window, since the disk did not change. After 6
+  hours the new hardware's own measurements take over; the server card shows when that happens.
+
 ## v1.30 — 2026-10-31
 
 ### Fixed

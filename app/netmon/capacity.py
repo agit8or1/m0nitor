@@ -500,6 +500,22 @@ def find_change(rows, step=300):
     return None
 
 
+HW_MIN_S = 6 * 3600   # measure this long on new hardware before its own P95 replaces the projection
+
+
+def projected(summary, ratio, what):
+    """A resource summary from the previous hardware, scaled by old/new capacity (fraction used x old/new). ESTIMATED;
+    confidence one step below the measurement's. Assumes the same work needs the same absolute CPU time and memory."""
+    out = {k: x for k, x in summary.items() if k not in ("avg", "p95", "peak")}
+    for k in ("avg", "p95", "peak"):
+        if summary.get(k) is not None:
+            out[k] = min(1.0, summary[k] * ratio)
+    conf = {"high": "medium"}.get(summary.get("confidence"), "low")
+    out.update({"label": "ESTIMATED", "projected": True, "ratio": ratio, "confidence": conf,
+                "confidence_reason": f"projected from the previous hardware ({summary.get('confidence_reason', '')}), scaled by {what}"})
+    return out
+
+
 def observe(ch, cfg, conn, window="7d", t0=None, t1=None):
     """'Use My Current Setup': measured workload, resources and inventory counts for the window."""
     t0, t1, note = pick_window(ch, window, t0, t1)
@@ -516,17 +532,35 @@ def observe(ch, cfg, conn, window="7d", t0=None, t1=None):
     out["throughput_snmp"] = summarize(snmp, t0, t1, gap_steps=3)
     out["throughput_snmp"]["source"] = "SNMP IF-MIB 64-bit counters on the WAN interface(s), summed in+out"
     r0, hw = t0, (hardware_change(ch, t0, t1) if not err else None)
+    keys = ("cpu", "mem", "io_util", "write_Bps", "read_Bps", "io_latency_ms", "iowait", "steal", "ch_rss")
     if hw:
         settle = hw["at"] + HW_WARMUP_S
         r0 = max(t0, settle if t1 - settle >= 1800 else hw["at"])
-        gb = lambda b: f"{b / 2**30:.0f} GB"  # noqa: E731
-        hw["note"] = (f"hardware changed at {_dt(hw['at'])} UTC ({hw['before']['vcpus']} vCPU / {gb(hw['before']['ram_bytes'])} -> "
-                      f"{hw['after']['vcpus']} vCPU / {gb(hw['after']['ram_bytes'])}): CPU, memory and disk figures are measured "
-                      f"since {_dt(r0)} UTC only" + (", skipping the first 10 minutes after the change" if r0 > hw["at"] else ""))
+        hw["measured_from"] = r0
+        hw["ready_at"] = settle + HW_MIN_S
     out["window"]["resources_t0"] = r0
     out["hardware_change"] = hw
-    for k in ("cpu", "mem", "io_util", "write_Bps", "read_Bps", "io_latency_ms", "iowait", "steal", "ch_rss"):
+    for k in keys:
         out[k] = summarize(pick(res, k), r0, t1, gap_steps=5)
+    if hw:
+        gb = lambda b: f"{b / 2**30:.0f} GB"  # noqa: E731
+        what = (f"hardware changed at {_dt(hw['at'])} UTC ({hw['before']['vcpus']} vCPU / {gb(hw['before']['ram_bytes'])} -> "
+                f"{hw['after']['vcpus']} vCPU / {gb(hw['after']['ram_bytes'])})")
+        before = {k: summarize(pick(res, k), t0, hw["at"] - 300, gap_steps=5) for k in ("cpu", "mem")}
+        if t1 < hw["ready_at"] and all(x.get("p95") is not None for x in before.values()):
+            # Too little time on the new hardware for a P95 (a few minutes of boot, catch-up or a single job decide it):
+            # project the previous hardware's load onto the new resources until HW_MIN_S have been measured.
+            out["cpu"] = projected(before["cpu"], hw["before"]["vcpus"] / hw["after"]["vcpus"], "vCPU")
+            out["mem"] = projected(before["mem"], hw["before"]["ram_bytes"] / hw["after"]["ram_bytes"], "RAM")
+            for k in ("io_util", "write_Bps", "read_Bps", "io_latency_ms"):     # the disk did not change: use the whole window
+                out[k] = summarize(pick(res, k), t0, t1, gap_steps=5)
+            hw["mode"] = "projected"
+            hw["note"] = (f"{what}: CPU and memory are PROJECTED from {before['cpu']['observed_hours'] / 24:.1f} days on the previous "
+                          f"hardware, scaled to the new vCPU count and RAM; measured values replace them from {_dt(hw['ready_at'])} UTC")
+        else:
+            hw["mode"] = "measured"
+            hw["note"] = (f"{what}: CPU, memory and disk figures are measured since {_dt(r0)} UTC only"
+                          + (", skipping the first 10 minutes after the change" if r0 > hw["at"] else ""))
     out["fs_growth"] = fs_growth(res)
     out["flows_trend"] = daily_trend(pick(wl, "flows"))
     out["events_trend"] = daily_trend(pick(wl, "events"))

@@ -415,3 +415,13 @@ def test_grade_reports_hardware_change():
     hw = {"at": T0, "before": {"vcpus": 16, "ram_bytes": 1}, "after": {"vcpus": 48, "ram_bytes": 2}, "note": "hardware changed"}
     g = C.hardware_grade({**_obs(cpu={"p95": 0.1}, mem={"p95": 0.2}), "hardware_change": hw}, {})
     assert "hardware changed" in g["caps"]
+
+
+def test_projection_scales_previous_load_to_new_hardware():
+    before = {"label": "MEASURED", "avg": 0.27, "p95": 0.36, "peak": 0.9, "observed_hours": 50, "confidence": "medium"}
+    p = C.projected(before, 16 / 48, "vCPU")
+    assert p["label"] == "ESTIMATED" and p["projected"] and p["confidence"] == "low"
+    assert abs(p["p95"] - 0.12) < 1e-9 and abs(p["peak"] - 0.3) < 1e-9
+    g = C.hardware_grade(_obs(cpu=p, mem=C.projected({"p95": 0.5, "confidence": "high"}, 0.5, "RAM")), {})
+    assert g["components"]["cpu"]["score"] > 80          # 0.7 / 0.12 = 5.8x -> 83
+    assert C.projected({"p95": 0.9}, 2.0, "RAM")["p95"] == 1.0   # shrinking hardware is capped at 100 % in use
