@@ -186,8 +186,12 @@ const NMMap = (() => {
     function pairRows(list, dir) {
       const ps = (list || []).filter((p) => !dir || dir === "both" || p.dir === dir).sort((a, b) => b.b - a.b).slice(0, 5);
       if (!ps.length) return [];
-      // "[WAN / WAN alias x | name] address (reverse DNS)": the firewall's public side, never a LAN address
-      const ip = (p, k) => [p[`${k}_fw`] || p[`${k}_name`], p[k], p[`${k}_rdns`] ? `(${p[`${k}_rdns`]})` : ""].filter(Boolean).join(" ");
+      // "[WAN / WAN alias x | name] public address (reverse DNS) → internal server(s) behind it"
+      // in flow order: inbound "… ⟶ WAN alias x 1.2.3.4 (rdns) → server", outbound "server → WAN alias x 1.2.3.4 (rdns) ⟶ …"
+      const names = (n) => n && n.length ? `${n.slice(0, 3).join(", ")}${n.length > 3 ? ` +${n.length - 3}` : ""}` : "";
+      const ip = (p, k) => { const n = names(p[`${k}_inner`]);
+        return [k === "src" && n ? `${n} →` : "", p[`${k}_fw`] || p[`${k}_name`], p[k], p[`${k}_rdns`] ? `(${p[`${k}_rdns`]})` : "",
+          k === "dst" && n ? `→ ${n}` : ""].filter(Boolean).join(" "); };
       return [el("div", { class: "muted small", style: "margin-top:4px", text: "Top source → destination" }),
         ...ps.map((p) => el("div", { class: "small mono pair", text: `${ip(p, "src")}  ⟶  ${ip(p, "dst")} · ${fmtBytes(p.b)}` }))];
     }
@@ -206,7 +210,7 @@ const NMMap = (() => {
     // a region (several endpoints in the site's own country) or one endpoint of a finding
     function pointTip(x, dir) {
       const where = x.ip ? [x.city, x.region, cname(x.cc)].filter(Boolean).join(", ") : `${x.region}, ${cname(x.cc)}`;
-      const title = x.ip ? (x.name && x.name !== x.ip ? `${x.name} (${x.ip})` : x.ip) : where;
+      const title = x.ip ? `${x.name && x.name !== x.ip ? `${x.name} ${x.ip}` : x.ip}${x.rdns ? ` (${x.rdns})` : ""}` : where;
       const site = last.sites && last.sites[0] ? last.sites[0].name : "site";
       return [el("div", { class: "t", text: dir === "in" ? `${title} → ${site}` : dir === "out" ? `${site} → ${title}` : title }),
         x.ip ? row("Location", where || cname(x.cc)) : row("Cities", (x.cities || []).join(", ") || "—"),

@@ -42,3 +42,12 @@ def test_map_pairs_name_firewall_wan_aliases_nat_and_rdns(cfg, monkeypatch):
     assert (p["dst"], p["dst_fw"], p["dst_name"]) == ("198.51.100.230", "WAN alias app.example.com", "")
     p = d.pair("10.40.0.161", "45.83.64.9", 10, 1, "out")      # no 1:1 NAT: the site's WAN (outbound NAT) address
     assert (p["src"], p["src_fw"], p["dst_rdns"]) == ("203.0.113.179", "WAN", "scan.example.net")
+    assert p["src_inner"] == ["monitor"] and p["dst_inner"] == []
+
+
+def test_merged_pairs_keep_every_internal_name():
+    from netmon.dash import merge_pairs
+    a = {"src": "45.83.64.9", "dst": "203.0.113.179", "dir": "in", "b": 5, "flows": 1, "src_inner": [], "dst_inner": ["10.40.0.31"]}
+    b = {**a, "b": 7, "dst_inner": ["monitor"]}
+    (m,) = merge_pairs([a, b])
+    assert m["b"] == 12 and m["dst_inner"] == ["10.40.0.31", "monitor"] and a["dst_inner"] == ["10.40.0.31"]

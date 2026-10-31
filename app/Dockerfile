@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends snmp && rm -rf 
 COPY requirements.lock requirements-dev.lock ./
 ARG DEV=0
 RUN if [ "$DEV" = 1 ]; then L=requirements-dev.lock; else L=requirements.lock; fi && pip install --no-cache-dir --require-hashes -r "$L"
+COPY CHANGELOG.md ./
 COPY netmon ./netmon
 COPY tests ./tests
 RUN useradd -u 10001 -r -s /usr/sbin/nologin netmon

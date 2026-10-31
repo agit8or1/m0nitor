@@ -19,7 +19,7 @@
         const named0 = new Set(d.peers), item = d.finding && d.finding.security ? d.finding : null;   // red ◆ for security findings only
         const points = [...d.remotes, ...(d.evidence_only || []).map((r) => ({ ...r, in_b: 0, out_b: 0, flows: 0 }))].filter((r) => r.loc).map((r) => ({
           key: r.ip, ip: r.ip, name: r.name, asname: r.asname, cc: r.cc, ll: [r.loc.lat, r.loc.lon], city: r.loc.city, region: r.loc.region,
-          in_b: r.in_b, out_b: r.out_b, flows: r.flows, ports: r.ports, pairs: r.pair ? [r.pair] : [], blocked: !!r.blocked, events: r.events,
+          rdns: r.rdns, in_b: r.in_b, out_b: r.out_b, flows: r.flows, ports: r.ports, pairs: r.pair ? [r.pair] : [], blocked: !!r.blocked, events: r.events,
           named: named0.has(r.ip), flag: named0.has(r.ip) && item ? item : null, href: NM.href("/netmon/connections", { rip: r.ip }) }));
         // country markers only for named endpoints the city database could not place
         const located = new Set(points.map((x) => x.ip)), alerts = {};
@@ -54,6 +54,8 @@
           NM.pager(pager, pg, PER, rows.length, show); };
         const REMOTE_COLS = [
           { label: "Remote IP", get: (r) => el("span", {}, NM.ipCell(r.ip, r.name),
+              r.rdns ? el("div", { class: "sub fqdn", title: "reverse DNS (PTR)", text: `(${r.rdns})` })
+                : r.rdns === "" ? el("div", { class: "sub muted", title: "this address has no reverse DNS (PTR) record", text: "(no rDNS)" }) : null,
               named.has(r.ip) ? el("span", { class: "tag", title: "named in this finding's evidence", text: "in evidence" }) : null,
               r.nofl ? el("span", { class: "tag", title: r.blocked ? "the firewall blocked it, so there are no flow records" : "no flow records in this window",
                 text: r.blocked ? `blocked · ${fmtNum(r.events)} pkts` : "no flows" }) : null) },

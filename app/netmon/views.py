@@ -323,6 +323,9 @@ def api_alert_traffic(req: Request, aid: int):
             d["evidence_only"].append({"ip": ip, "cc": cc, "cc_name": cname(cc), "events": int(ev.get("events") or 0),
                                        "blocked": a["rule"].startswith("fw_blocked"), "name": cfg.label(ip)})
         geocity.locate(d["evidence_only"])
+        rd = dash.rdns.wait([r["ip"] for r in d["remotes"] + d["evidence_only"]])
+        for r in d["remotes"] + d["evidence_only"]:
+            r["rdns"] = rd.get(r["ip"])
         marks = {}
         for r in d["remotes"]:
             if r["ip"] in named and r["cc"] != "??":

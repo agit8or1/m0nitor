@@ -1,7 +1,29 @@
 # Changelog
 
-## Unreleased
+Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
+with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.05 — 2026-10-31
+
+### Added
+- Map tooltips list the top five source → destination address pairs per arc, region, endpoint and the site's own
+  country, per direction. The firewall side is shown as the public address it is reached on — "WAN" (the outbound
+  NAT address) or "WAN alias <description>" (an interface virtual IP) — followed by the internal server(s) behind it.
+  LAN hosts behind one NAT address are merged into one line.
+- Reverse DNS names in parentheses after addresses: PTR support in the built-in DNS client and a non-blocking,
+  in-memory cache resolved through the site's firewall (new names appear on the next refresh).
+- Finding pages: reverse DNS under each remote endpoint ("no rDNS" when the address has no PTR record).
+- Virtual IP sync records each VIP's interface and description (setting `fwaddr:db`).
+- Version number and this changelog: footer link on every page, `/netmon/changelog`, `version` in `/netmon/healthz`.
+
+### Changed
+- Map zooms to 24x; dots, site markers, labels and finding markers keep their screen size, so zooming separates
+  nearby sources.
+- Finding markers catch the pointer only on the diamond (the ring no longer hides neighbouring sources).
+- The near-site ring around each firewall location is gone (it hid the site); its traffic stays in the site's
+  tooltip and in the numbers under the site label.
+
+## Before v1.05 (2026-10-29 – 2026-10-30, unversioned)
 ### Added
 - Monitor identity setting (Settings → Firewalls & sites → This monitor): FQDN served by the TLS front end (root
   helper renders the Caddyfile site line, validates, restarts Caddy) and used in notification links; address firewalls

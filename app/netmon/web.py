@@ -69,6 +69,8 @@ def _asset_version() -> str:
 
 
 ASSET_V = _asset_version()
+from . import __version__ as VERSION   # noqa: E402
+CHANGELOG = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CHANGELOG.md")
 
 
 @app.middleware("http")
@@ -229,7 +231,7 @@ def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtit
 <div class="titlerow"><h1>{e(title)}</h1>{f'<span class="muted">{e(subtitle)}</span>' if subtitle else ''}<span id="scopedesc" class="muted small"></span></div>
 {scopebar() if scoped else '<div id="fresh" class="pill solo">…</div>'}
 {body}<p class="attrib muted small">Country and ASN data: <a href="https://ipinfo.io" rel="noopener">IP address data powered by IPinfo</a>
-(CC BY-SA 4.0) · map: Natural Earth · <a href="/netmon/coverage">what is visible</a></p></main><script src="/netmon/static/common.js?v={ASSET_V}"></script>{scr}</body></html>""", headers=SECURITY_HEADERS)
+(CC BY-SA 4.0) · map: Natural Earth · <a href="/netmon/coverage">what is visible</a> · <a href="/netmon/changelog">v{VERSION}</a></p></main><script src="/netmon/static/common.js?v={ASSET_V}"></script>{scr}</body></html>""", headers=SECURITY_HEADERS)
 
 
 def sev(s):
@@ -364,11 +366,22 @@ def verify(req: Request):
     return Response(status_code=200, headers={"Remote-User": s[0]})
 
 
+@app.get("/netmon/changelog", response_class=HTMLResponse)
+def changelog_page(req: Request):
+    """What changed in each version (CHANGELOG.md shipped in the image)."""
+    current(req)
+    try:
+        text = open(CHANGELOG, encoding="utf-8").read()
+    except OSError:
+        text = "CHANGELOG.md is not in this build."
+    return page(req, "Changelog", f'<section class="card"><pre class="changelog">{e(text)}</pre></section>', subtitle=f"running v{VERSION}", scoped=False)
+
+
 @app.get("/netmon/healthz")
 def healthz():
     st, ts = get_state(conn, "detector", {})
     ok = bool(ts and time.time() - ts < 3 * cfg["detector"]["interval_seconds"])
-    return JSONResponse({"detector_ok": ok, "last_run": ts}, status_code=200 if ok else 503)
+    return JSONResponse({"detector_ok": ok, "last_run": ts, "version": VERSION}, status_code=200 if ok else 503)
 
 
 def detector_status():

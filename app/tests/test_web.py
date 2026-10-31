@@ -215,6 +215,7 @@ def test_ack_clears_map_marker_without_waiting_for_cache():
 
 def test_finding_map_places_endpoints_and_blocked_scanners(monkeypatch):
     from netmon import geocity, views
+    monkeypatch.setattr(web.dash.rdns, "wait", lambda ips, timeout=3.0: {"45.83.64.9": "scan.example.net"})
     now = time.time()
     aid = web.conn.execute(
         "INSERT INTO alerts(key,rule,severity,confidence,asset,subject,title,first_seen,last_seen,window_start,window_end,"
@@ -231,7 +232,7 @@ def test_finding_map_places_endpoints_and_blocked_scanners(monkeypatch):
     assert d["remotes"][0]["loc"] == de
     assert d["finding"]["id"] == aid and d["finding"]["security"] is False   # blocked scans are info: no red marker
     assert d["evidence_only"] == [{"ip": "45.83.64.9", "cc": "DE", "cc_name": d["evidence_only"][0]["cc_name"], "events": 393,
-                                   "blocked": True, "name": d["evidence_only"][0]["name"], "loc": de}]
+                                   "blocked": True, "name": d["evidence_only"][0]["name"], "loc": de, "rdns": "scan.example.net"}]
     page_ = client("admin", ADMINPW).get(f"/netmon/alert/{aid}").text
     assert page_.index('id="ftraffic"') < page_.index("<h2>Evidence</h2>")   # the map comes before the evidence table
 
@@ -448,3 +449,12 @@ def test_monitor_reverse_proxy_confirmation():
     assert not admin.monitor_settings()["via_proxy"] and admin.monitor_settings()["proxy_by"] == ""
     a.post("/netmon/settings/monitor", data={"fqdn": "", "via_proxy": "1", "csrf": tok})
     assert not admin.monitor_settings()["via_proxy"]               # no FQDN, nothing to proxy
+
+
+def test_changelog_page_and_footer_version():
+    from netmon import __version__
+    assert client().get("/netmon/changelog", follow_redirects=False).status_code in (302, 303, 307)
+    c = client("viewer1", VIEWPW)
+    r = c.get("/netmon/changelog")
+    assert r.status_code == 200 and f"## v{__version__}" in r.text
+    assert f'href="/netmon/changelog">v{__version__}</a>' in c.get("/netmon/security").text

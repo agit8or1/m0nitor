@@ -90,8 +90,10 @@ def merge_pairs(ps, n=5):
         if k in agg:
             agg[k]["b"] += p["b"]
             agg[k]["flows"] += p["flows"]
+            for side in ("src", "dst"):
+                agg[k][f"{side}_inner"] += [x for x in p.get(f"{side}_inner", []) if x not in agg[k][f"{side}_inner"]]
         else:
-            agg[k] = dict(p)
+            agg[k] = {**p, "src_inner": list(p.get("src_inner", [])), "dst_inner": list(p.get("dst_inner", []))}
     out = sorted(agg.values(), key=lambda p: -p["b"])
     return [p for d in ("in", "out") for p in [x for x in out if x["dir"] == d][:n]]
 
@@ -100,6 +102,8 @@ class Dash:
     def __init__(self, cfg, ch):
         self.cfg, self.ch = cfg, ch
         self._cache, self._lock = {}, threading.Lock()
+        from .rdns import RDNS
+        self.rdns = RDNS(cfg)          # reverse DNS names for tooltips and endpoint tables
 
     # ---- scope -------------------------------------------------------------
     def scope(self, site="all", range_key="15m", start=None, end=None, cc="", host="", asn="", port="", rip=""):
@@ -268,9 +272,6 @@ class Dash:
 
     def pair(self, src, dst, b, flows, dir):
         """One source -> destination address pair for map tooltips, with operator names where known."""
-        if not hasattr(self, "rdns"):
-            from .rdns import RDNS
-            self.rdns = RDNS(self.cfg)
         out = {"b": int(b), "flows": int(flows), "dir": dir}
         for side, ip in (("src", src), ("dst", dst)):
             # the public side of the firewall: an internal address is shown as the WAN address or WAN alias it is
@@ -279,6 +280,9 @@ class Dash:
             fw = self.cfg.fw_label(pub) or ("WAN" if pub != ip else "")
             out[side], out[f"{side}_fw"] = pub, fw
             out[f"{side}_name"] = "" if fw else self.cfg.label(ip)
+            # the internal server(s) behind that public address (a name, else the LAN address)
+            inner = self.cfg.binat.get(ip) or (ip if pub != ip else "")
+            out[f"{side}_inner"] = [self.cfg.label(inner) or inner] if inner else []
             out[f"{side}_rdns"] = self.rdns.get(pub)
         return out
 

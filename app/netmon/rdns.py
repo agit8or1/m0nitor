@@ -43,6 +43,20 @@ class RDNS:
         self._start()
         return hit[0] if hit else ""
 
+    def wait(self, ips, timeout=3.0):
+        """{ip: name, "" (no PTR) or None (not answered in time)}, waiting up to timeout (pages that do not refresh)."""
+        ips = [ip for ip in dict.fromkeys(ips) if ip]
+        for ip in ips:
+            self.get(ip)
+        end = time.time() + timeout
+        while time.time() < end:
+            with self.lock:
+                if not any(ip in self.pending for ip in ips):
+                    break
+            time.sleep(0.05)
+        with self.lock:   # None = still being looked up; "" = no PTR record
+            return {ip: (None if ip in self.pending else self.cache.get(ip, ("",))[0]) for ip in ips}
+
     def _start(self):
         if self.thread is None:
             with self.lock:
