@@ -3,6 +3,17 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.33 — 2026-11-03
+
+### Added
+- **Assign roles to servers more easily.** Settings → Inventory has an **Assign a role** card: give several internal
+  IPs or CIDRs (up to 256 addresses) one role at once, for example a fleet of crawler VMs. Only the role changes on
+  servers that are already named; unnamed addresses are added under their IP (or skipped with "Only servers
+  already named"). Every role field (Inventory, server page, ✎ editor) now offers a picker with standard roles plus
+  those already in use, and shows the role **seen in traffic** over the last 7 days (e.g. `mail+web`, with the
+  services behind it) with a **Use** button.
+- A server can get a role without a name; it is then listed under its IP.
+
 ## v1.32 — 2026-11-03
 
 ### Changed

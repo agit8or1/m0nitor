@@ -13,6 +13,10 @@ from .web import ROLES, app, cfg, check_csrf, conn, csrf_field, current, e, need
 # no markup or quote characters: names end up in titles, notifications and AI evidence
 NAME_RE = re.compile(r"^[\w .,:;/+()&@#=~-]{1,64}$")
 ROLE_RE = re.compile(r"^[\w .,/+&-]{0,32}$")
+# offered in the role picker (any other text is still accepted); the AI uses the role to judge what is normal for a server
+STANDARD_ROLES = ("web", "mail", "dns", "mail+dns", "web+dns", "reverse-proxy", "database", "file server", "storage", "backup",
+                  "hypervisor", "firewall", "vpn", "remote-access", "management", "monitoring", "workstation", "marketing crawler")
+BULK_MAX = 256
 
 apply_assets(cfg, conn)
 
@@ -37,6 +41,75 @@ def clean_list(v, what, exclude=""):
     return out
 
 
+def role_options():
+    """Standard roles plus every role already in use, for the role picker."""
+    used = {a.get("role") for a in cfg.get("assets", {}).values() if a.get("role")}
+    return sorted(set(STANDARD_ROLES) | used, key=str.lower)
+
+
+def role_datalist():
+    return "<datalist id=nm-roles>" + "".join(f"<option value=\"{e(r)}\">" for r in role_options()) + "</datalist>"
+
+
+def suggest_role(ip):
+    """Role observed in the last 7 days of traffic (services remote clients completed connections to)."""
+    from .profile import observed
+    from .web import dash
+    o = observed(dash, ip)
+    return {"observed_role": o["observed_role"], "serves": [s["function"] for s in o["observed_serves"]]}
+
+
+def bulk_targets(text):
+    """Internal addresses named by a comma/space separated list of IPs and CIDRs (at most BULK_MAX)."""
+    out = []
+    for tok in re.split(r"[\s,;]+", (text or "").strip()):
+        if not tok:
+            continue
+        try:
+            net = ipaddress.ip_network(tok, strict=False)
+        except ValueError:
+            raise ValueError(f"{tok!r} is not an IP address or CIDR")
+        if net.num_addresses > BULK_MAX:
+            raise ValueError(f"{tok} has more than {BULK_MAX} addresses")
+        hosts = [net.network_address] if net.num_addresses == 1 else list(net.hosts())
+        for a in hosts:
+            ip = str(a)
+            if not cfg.is_internal(ip):
+                raise ValueError(f"{ip} is not an internal address; roles are for internal servers")
+            if ip not in out:
+                out.append(ip)
+        if len(out) > BULK_MAX:
+            raise ValueError(f"more than {BULK_MAX} addresses")
+    if not out:
+        raise ValueError("no addresses given")
+    return out
+
+
+def assign_role(text, role, user, role_of_user, only_named=False):
+    """Set the role of several internal servers at once. Unnamed addresses are added under their IP as the name
+    (unless only_named). Name, notes and other fields of named servers are kept."""
+    if ROLES[role_of_user] < ROLES["admin"]:
+        raise PermissionError("assigning server roles requires role admin")
+    role = clean(role, ROLE_RE, "Role", 32)
+    ips = bulk_targets(text)
+    db = get_setting(conn, "assets:db", {}) or {}
+    changed, added = [], []
+    for ip in ips:
+        if ip in db:
+            if db[ip].get("role") != role:
+                changed.append({"ip": ip, "old": db[ip].get("role", "")})
+                db[ip] = {**db[ip], "role": role}
+        elif not only_named:
+            db[ip] = {"name": ip, "role": role, "sensitive": False, "notes": ""}
+            added.append(ip)
+    put_setting(conn, "assets:db", db, user)
+    apply_assets(cfg, conn)
+    audit(conn, user, "asset_role_bulk", {"role": role, "changed": changed, "added": added})
+    skipped = len(ips) - len(changed) - len(added)
+    return (f"Role {role or '(none)'}: {len(changed)} server(s) updated, {len(added)} added"
+            + (f", {skipped} unchanged or skipped" if skipped else "") + ".")
+
+
 def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", software=""):
     """Set or clear the name (and aliases) for `ip`. Internal addresses (servers) need admin: `sensitive` changes detection
     severity. External labels need analyst. Returns a status message."""
@@ -49,6 +122,8 @@ def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", softw
     if ROLES[role_of_user] < ROLES[need_role]:
         raise PermissionError(f"naming {'servers' if internal else 'external addresses'} requires role {need_role}")
     name = clean(name, NAME_RE, "Name", 64)
+    if not name and internal and (role or software):   # a role alone is enough; the server is listed under its IP
+        name = ip
     notes = " ".join((notes or "").split())[:300].replace("<", "‹").replace(">", "›")
     alias_list = clean_list(aliases, "Aliases", name) if name else []
     sw = clean_list(software, "Software") if name and internal else []
@@ -200,7 +275,8 @@ def name_json(ip, role):
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
     return {"ip": ip, "internal": internal, "name": a.get("name", ""), "role": a.get("role", ""), "sensitive": bool(a.get("sensitive")),
             "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "software": a.get("software", []), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
-            "needs": "admin" if internal else "analyst"}
+            "needs": "admin" if internal else "analyst",
+            **({"role_options": role_options()} if internal else {})}
 
 
 @app.get("/netmon/api/name")
@@ -216,11 +292,12 @@ def name_form(req, ip, back, compact=False):
     """Edit form for one address (server or external), pre-filled from the DB."""
     internal = cfg.is_internal(ip)
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
-    extra = (f"""<label>Role<input name=role value="{e(a.get('role', ''))}" maxlength=32 placeholder="web, mail, backup…"></label>
+    extra = (f"""<label>Role<input name=role value="{e(a.get('role', ''))}" maxlength=32 list=nm-roles placeholder="pick or type: web, mail, backup…"></label>
+<p class="muted small rolehint" data-ip="{e(ip)}"></p>
 <label class="check"><input type=checkbox name=sensitive value=1 {'checked' if a.get('sensitive') else ''}> Sensitive
 <span class="muted small">— new outbound destinations from this server are raised one severity level</span></label>
 <label>Software<input name=software value="{e(', '.join(a.get('software', [])))}" maxlength=400 placeholder="products it runs, comma-separated (e.g. nextcloud, proxmox ve) — matched against threat intel"></label>""" if internal else "")
-    return f"""<form method=post action="/netmon/names" class="stackform{'' if compact else ' wide'} nameform">{csrf_field(req)}
+    return f"""{'' if compact or not internal else role_datalist()}<form method=post action="/netmon/names" class="stackform{'' if compact else ' wide'} nameform">{csrf_field(req)}
 <input type=hidden name=ip value="{e(ip)}"><input type=hidden name=back value="{e(back)}">
 <label>Name<input name=name value="{e(a.get('name', ''))}" maxlength=64 placeholder="{'server name' if internal else 'e.g. Office VPN, Backup provider'}"></label>
 <label>Aliases<input name=aliases value="{e(', '.join(a.get('aliases', [])))}" maxlength=400 placeholder="other names, comma-separated (e.g. ns1, cp.example.com)"></label>
@@ -261,16 +338,54 @@ def inventory_page(req: Request, msg: str = ""):
 <form method=post action="/netmon/names" class="stackform wide">{csrf_field(req)}<input type=hidden name=back value="{back}">
 <label>IP address<input name=ip required placeholder="10.0.0.50 or 203.0.113.7" class="mono"></label>
 <label>Name<input name=name required maxlength=64></label>
-{'<label>Role <span class="muted small">(internal servers only)</span><input name=role maxlength=32></label><label class="check"><input type=checkbox name=sensitive value=1> Sensitive <span class="muted small">(internal servers only)</span></label>' if admin else ''}
+{'<label>Role <span class="muted small">(internal servers only)</span><input name=role maxlength=32 list=nm-roles></label><label class="check"><input type=checkbox name=sensitive value=1> Sensitive <span class="muted small">(internal servers only)</span></label>' if admin else ''}
 <label>Notes<input name=notes maxlength=300></label><div class="row"><button class="primary">Save</button></div>
 <p class="note">Internal addresses become named servers{'' if admin else ' (admins only)'}; any other address gets a label shown next to it in connection tables and findings.</p></form></section>""" if analyst else ""
-    body = f"""{tabs(SETTINGS_TABS, back)}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}
+    bulk = f"""<section class="card" id="roles"><div class="card-h"><h2>Assign a role</h2><span class="muted small">several servers at once</span></div>
+<form method=post action="/netmon/settings/inventory/roles" class="stackform wide">{csrf_field(req)}
+<label>Servers<textarea name=ips rows=2 required class="mono" placeholder="internal IPs or CIDRs, comma- or space-separated (e.g. 10.0.0.21, 10.0.0.30/30)"></textarea></label>
+<label>Role<input name=role maxlength=32 list=nm-roles placeholder="pick or type; leave blank to clear"></label>
+<label class="check"><input type=checkbox name=only_named value=1> Only servers already named <span class="muted small">— otherwise unnamed addresses are added, listed under their IP</span></label>
+<div class="row"><button class="primary">Assign role</button></div>
+<p class="note">Only the role changes; names, notes and other settings of named servers are kept. At most {BULK_MAX} addresses.</p></form></section>""" if admin else ""
+    body = f"""{role_datalist()}{tabs(SETTINGS_TABS, back)}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}
 <section class="card"><div class="card-h"><h2>Internal servers</h2><span class="muted small">{len(assets)} named · stored in the netmon database</span></div>
 <div class="wrap"><table class="tbl"><thead><tr><th>Name</th><th>IP</th><th>Role</th><th></th><th>Notes</th><th></th></tr></thead>
 <tbody>{srows or '<tr><td colspan=6 class="state empty">No servers named yet</td></tr>'}</tbody></table></div>
-<p class="note">Names appear across the dashboard, in finding titles and notifications. Before AI analysis, server names are replaced by pseudonyms just like internal IPs.</p></section>
+<p class="note">Names appear across the dashboard, in finding titles and notifications. Before AI analysis, server names are replaced by pseudonyms just like internal IPs.
+A server's role tells AI analysis what is normal for it (inbound mail to a mail server, outbound connections from a crawler).</p></section>
+{bulk}
 <section class="card" id="labels"><div class="card-h"><h2>Public and external address labels</h2><span class="muted small">{len(labels)} labelled</span></div>{sync}
 <div class="wrap"><table class="tbl"><thead><tr><th>Label</th><th>IP</th><th>Source</th><th>Notes</th><th></th></tr></thead>
 <tbody>{lrows or '<tr><td colspan=5 class="state empty">No labels yet. Use ✎ next to any IP address, or the form below.</td></tr>'}</tbody></table></div>
 <p class="note">Tip: every IP address in connection tables, findings, IDS alerts and search results has a ✎ button to name it in place.</p></section>{add}"""
     return page(req, "Settings · Inventory", body, "/netmon/settings", scoped=False)
+
+
+@app.post("/netmon/settings/inventory/roles")
+def post_roles(req: Request, ips: str = Form(...), role: str = Form(""), only_named: str = Form(""), csrf: str = Form("")):
+    u = need(req, "admin")
+    check_csrf(req, csrf)
+    _, r = user_of(req)
+    try:
+        msg = assign_role(ips, role, u, r, only_named == "1")
+    except PermissionError as ex:
+        raise HTTPException(403, str(ex))
+    except ValueError as ex:
+        msg = f"Not saved: {ex}"
+    return back_to("/netmon/settings/inventory#roles", msg)
+
+
+@app.get("/netmon/api/role-suggest")
+def api_role_suggest(req: Request, ip: str):
+    need(req, "analyst")
+    try:
+        ip = str(ipaddress.ip_address(ip.strip()))
+    except ValueError:
+        raise HTTPException(400, "not an IP address")
+    if not cfg.is_internal(ip):
+        raise HTTPException(400, "roles are for internal servers")
+    try:
+        return {"ok": True, **suggest_role(ip)}
+    except Exception as ex:   # ClickHouse unavailable: the editor just shows no suggestion
+        return {"ok": False, "error": type(ex).__name__}

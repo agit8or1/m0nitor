@@ -331,12 +331,15 @@ const NM = (() => {
     let d;
     try { d = await get(`/netmon/api/name?ip=${encodeURIComponent(ip)}`); } catch (e) { alert(e.message); return; }
     const dlg = el("dialog", { class: "namer" }), msg = el("p", { class: "muted small" });
+    const hint = el("p", { class: "muted small rolehint", "data-ip": d.ip });
     const inp = (n, v, ph, extra = {}) => el("input", { name: n, value: v || "", placeholder: ph, maxlength: n === "notes" ? 300 : 64, ...extra });
     const f = el("form", { method: "dialog", class: "stackform" },
       el("h2", { text: d.internal ? `Name server ${d.ip}` : `Label ${d.ip}` }),
       el("label", {}, "Name", inp("name", d.name, d.internal ? "server name" : "e.g. Office VPN, Backup provider", { autofocus: true })),
       el("label", {}, "Aliases", inp("aliases", (d.aliases || []).join(", "), "other names, comma-separated (e.g. ns1, cp.example.com)", { maxlength: 400 })),
-      d.internal ? el("label", {}, "Role", inp("role", d.role, "web, mail, backup…")) : null,
+      d.internal ? el("datalist", { id: "nm-roles-dlg" }, ...(d.role_options || []).map((r) => el("option", { value: r }))) : null,
+      d.internal ? el("label", {}, "Role", inp("role", d.role, "pick or type: web, mail, backup…", { list: "nm-roles-dlg", maxlength: 32 })) : null,
+      d.internal ? hint : null,
       d.internal ? el("label", {}, "Software", inp("software", (d.software || []).join(", "), "products it runs (e.g. nextcloud, proxmox ve) — matched against threat intel", { maxlength: 400 })) : null,
       d.internal ? el("label", { class: "check" }, el("input", { type: "checkbox", name: "sensitive", value: "1", checked: d.sensitive }), " Sensitive — new outbound destinations raised one severity level") : null,
       el("label", {}, "Notes", inp("notes", d.notes, "optional")),
@@ -359,10 +362,30 @@ const NM = (() => {
         if (onSaved) onSaved(j);
       } catch (e) { msg.textContent = e.message; msg.className = "warnline"; }
     });
+    if (d.internal) roleHint(hint, () => f.elements.role);
     dlg.append(f); document.body.append(dlg);
     dlg.addEventListener("close", () => dlg.remove());
     dlg.showModal();
   }
+
+  // "Seen in traffic: mail+web [Use]" under a Role field; input() returns the role <input> to fill
+  async function roleHint(node, input) {
+    if (node.dataset.done) return;
+    node.dataset.done = "1"; node.textContent = "Checking the last 7 days of traffic…";
+    let j;
+    try { j = await get(`/netmon/api/role-suggest?ip=${encodeURIComponent(node.dataset.ip)}`); } catch (e) { node.textContent = ""; return; }
+    if (!j.ok || !j.serves || !j.serves.length) { node.textContent = j.ok ? "No public service seen in the last 7 days." : ""; return; }
+    const use = el("button", { type: "button", class: "ghost small", text: "Use" });
+    use.addEventListener("click", () => { const i = input(); if (i) { i.value = j.observed_role; i.focus(); } });
+    node.replaceChildren(`Seen in traffic: ${j.observed_role} (${j.serves.join(", ")}) `, use);
+  }
+  document.addEventListener("toggle", (ev) => {   // Inventory "Edit" rows: look up the suggestion when a row is opened
+    const h = ev.target.querySelector && ev.target.open && ev.target.querySelector(".rolehint[data-ip]");
+    if (h) roleHint(h, () => h.closest("form").elements.role);
+  }, true);
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll(".rolehint[data-ip]").forEach((h) => { if (!h.closest("details")) roleHint(h, () => h.closest("form").elements.role); });
+  });
 
   function scopeDesc(sc) { const n = $("scopedesc"); if (n && sc) n.textContent = `${sc.describe} · ${fmtTime(sc.start, true)} → ${fmtTime(sc.end, true)} (${tz})`; }
 
