@@ -3,6 +3,21 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.32 — 2026-11-03
+
+### Changed
+- **AI analysis now knows what the server does.** The evidence sent for a finding or a server analysis includes the
+  server's function: the role, software and notes set in Settings → Inventory, whether an admin marked it as an
+  expected device, and the services it was actually seen serving and using over the last 7 days (for example
+  "mail (SMTP), mail (IMAPS), web (HTTPS)" → observed role `mail+web`; scans without a completed handshake do not
+  count). For a 1:1 NAT address this is the internal server behind it. For the shared outbound NAT address, the
+  internal hosts that received replies from the same remote address around the finding's window are listed with
+  their functions, marked as likely rather than proven.
+- The model is told to calibrate the threat score against that function (inbound SMTP to a mail server or scanner
+  noise against a web server is weaker evidence; outbound SMTP from a backup or web server, or a declared/observed
+  role mismatch, is stronger) and to say in the score rationale how the function moved the score. Country and
+  time-window analyses list each server's declared role.
+
 ## v1.31 — 2026-10-31
 
 ### Fixed

@@ -18,7 +18,8 @@ from .rdns import LIST_WAIT
 from . import counters, geocity, secretbox
 from .ai import AI
 from .core import audit, get_state
-from .dash import META, cname
+from .dash import IPS, META, cname
+from .profile import server_profile
 from .detect import fmt_ts
 from .web import (CATEGORY, RULE_LABEL, ROLES, app, cfg, lan_hosts_text, check_csrf, conn, csrf_field, csrf_token, current, dash, detector_status, e, enforcement,
                   internal_ip, need, page, user_of)
@@ -1006,22 +1007,49 @@ def search_page(req: Request, q: str = ""):
 
 
 # ---- investigations (AI) ------------------------------------------------------------------
-def asset_context(ip):
-    """What kind of address the finding is about - decisive for calibration (a shared NAT aggregates many hosts)."""
+def nat_peers_hosts(peers, t0, t1, limit=3):
+    """LAN hosts that received replies from these remotes in [t0, t1]: who is behind a shared-NAT finding."""
+    out = {}
+    for peer in peers[:3]:
+        try:
+            sc = dash.scope(range_key="custom", start=int(t0) - 300, end=int(t1) + 300, rip=peer)
+            rows = dash.q(sc, f"""SELECT {IPS.format(c='DstAddr')} AS host, count() AS flows FROM flows
+                WHERE {dash.where(sc)} AND INB AND TOLAN GROUP BY host ORDER BY flows DESC LIMIT {int(limit)}""", ttl=300)
+        except Exception:
+            continue
+        for r in rows:
+            if cfg.is_internal(r["host"]):
+                out[r["host"]] = out.get(r["host"], 0) + int(r["flows"])
+    return sorted(out, key=lambda h: -out[h])[:limit]
+
+
+def asset_context(ip, alert=None):
+    """What kind of address the finding is about and what the server behind it does - decisive for calibration
+    (inbound SMTP is normal for a mail server, a shared NAT aggregates many hosts)."""
     if not ip:
         return {"kind": "none"}
     if ip in cfg.get("outbound_nat_ips", []):
-        return {"kind": "shared outbound NAT address", "note": "Traffic of many internal hosts (and the firewall itself) leaves through "
-                "this one address, so per-address counts aggregate all of them; it is not a single machine."}
+        ctx = {"kind": "shared outbound NAT address", "note": "Traffic of many internal hosts (and the firewall itself) leaves through "
+               "this one address, so per-address counts aggregate all of them; it is not a single machine."}
+        if alert is not None:
+            ev = json.loads(alert["evidence"] or "[]")
+            peers = list(dict.fromkeys(x.get("peer") for x in ev if isinstance(x, dict) and x.get("peer")))
+            hosts = nat_peers_hosts(peers, alert["window_start"], alert["window_end"]) if peers else []
+            if hosts:
+                ctx["likely_internal_hosts"] = [{"host": h, **server_profile(cfg, conn, dash, h)} for h in hosts]
+                ctx["attribution"] = ("internal hosts that received replies from the same remote address(es) around the finding's "
+                                      "window; likely, not proven, to be the host(s) behind it")
+        return ctx
     if ip in cfg.binat:
-        return {"kind": "1:1 NAT address of one internal host"}
+        inner = cfg.binat[ip]
+        return {"kind": "1:1 NAT address of one internal host", "internal_host": inner, **server_profile(cfg, conn, dash, inner)}
     try:
         internal = cfg.is_internal(ip)
     except ValueError:
         internal = False
-    a = cfg.asset(ip) if internal else {}
-    return {"kind": "internal server" if internal else "public address", "role": a.get("role", "unknown"),
-            "sensitive": bool(a.get("sensitive"))}
+    if not internal:
+        return {"kind": "public address"}
+    return {"kind": "internal server", **server_profile(cfg, conn, dash, ip)}
 
 
 def ai_evidence(req, kind, target):
@@ -1037,7 +1065,8 @@ def ai_evidence(req, kind, target):
             "conversations": [{k: r[k] for k in ("remote", "cc", "asname", "proto", "service", "direction", "evidence", "rx", "flows", "last")} for r in conv],
             "alerts": [{k: a[k] for k in ("title", "rule", "severity", "confidence", "why")} for a in
                        (alert_brief(x) for x in conn.execute("SELECT * FROM alerts WHERE asset=? AND test=0 ORDER BY last_seen DESC LIMIT 10", (ip,)))],
-            "collection": [{"first_flow": coll["first"], "last_flow": coll["last"], "active_timeout_s": cfg["exporter_active_timeout"]}]}
+            "collection": [{"first_flow": coll["first"], "last_flow": coll["last"], "active_timeout_s": cfg["exporter_active_timeout"]}],
+            "asset_context": [asset_context(ip)]}
     if kind == "alert":
         a = conn.execute("SELECT * FROM alerts WHERE id=?", (int(target),)).fetchone()
         if not a:
@@ -1052,7 +1081,7 @@ def ai_evidence(req, kind, target):
             "evidence": ev[:5],
             "activity": [{k: og[k] for k in ("state", "label", "first_seen", "last_seen", "detections", "span_hours", "days_seen",
                                              "recent_flows", "recent_window_min")}],
-            "asset_context": [asset_context(a["asset"])]}
+            "asset_context": [asset_context(a["asset"], a)]}
     if kind == "country":
         cc = target.upper()
         if cc not in META:
@@ -1060,14 +1089,16 @@ def ai_evidence(req, kind, target):
         sc = scope_of(req, cc=cc)
         return f"Summarize traffic with {cname(cc)} over {sc.describe()}", {
             "scope": [scope_json(sc)], "summary": [dash.summary(sc)],
-            "servers": [{k: s[k] for k in ("ip", "name", "rx", "tx", "peers")} for s in dash.servers(sc, 20)["servers"][:15]],
+            "servers": [{k: s[k] for k in ("ip", "name", "rx", "tx", "peers")} | {"role": cfg.asset(s["ip"]).get("role") or "not set"}
+                        for s in dash.servers(sc, 20)["servers"][:15]],
             "organizations": dash.orgs(sc, 10),
             "conversations": [{k: r[k] for k in ("server", "remote", "asname", "service", "direction", "rx", "flows")} for r in dash.conversations(sc, per=15)["rows"]]}
     if kind == "window":
         sc = scope_of(req)
         return f"Summarize unusual traffic over {sc.describe()}", {
             "scope": [scope_json(sc)], "summary": [dash.summary(sc)],
-            "servers": [{k: s[k] for k in ("ip", "name", "rx", "tx", "peers", "countries")} for s in dash.servers(sc, 20)["servers"][:15]],
+            "servers": [{k: s[k] for k in ("ip", "name", "rx", "tx", "peers", "countries")} | {"role": cfg.asset(s["ip"]).get("role") or "not set"}
+                        for s in dash.servers(sc, 20)["servers"][:15]],
             "countries": [{k: c[k] for k in ("cc", "name", "in_b", "out_b", "servers")} for c in dash.countries(sc, 15)],
             "organizations": dash.orgs(sc, 10),
             "open_alerts": [{k: a[k] for k in ("title", "rule", "severity", "confidence")} for a in map(alert_brief, open_alerts()[:20])]}
