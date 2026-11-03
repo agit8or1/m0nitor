@@ -20,6 +20,7 @@ from .ai import AI
 from .core import audit, get_state
 from .dash import IPS, META, cname
 from .profile import server_profile
+from .devtypes import CATEGORY_NAMES
 from .detect import fmt_ts
 from .web import (CATEGORY, RULE_LABEL, ROLES, app, cfg, lan_hosts_text, check_csrf, conn, csrf_field, csrf_token, current, dash, detector_status, e, enforcement,
                   internal_ip, need, page, user_of)
@@ -426,7 +427,7 @@ def api_alert_traffic(req: Request, aid: int):
 
 
 @app.get("/netmon/api/servers")
-def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "total", per: int = 50):
+def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "total", per: int = 50, cat: str = ""):
     current(req)
     sc = scope_of(req)
 
@@ -436,6 +437,11 @@ def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "
         key = {"total": lambda h: h["rx"] + h["tx"], "in": lambda h: h["rx"], "out": lambda h: h["tx"],
                "last": lambda h: h["last"] or 0, "countries": lambda h: h["countries"]}.get(sort, lambda h: h["rx"] + h["tx"])
         rows.sort(key=key, reverse=True)
+        cats = {}
+        for h in rows:
+            cats[h.get("category", "Unclassified")] = cats.get(h.get("category", "Unclassified"), 0) + 1
+        if cat:
+            rows = [h for h in rows if h.get("category") == cat]
         counts = {}
         for a in open_alerts():
             counts[a["asset"]] = counts.get(a["asset"], 0) + 1
@@ -455,7 +461,8 @@ def api_servers(req: Request, page_: int = Query(1, alias="page"), sort: str = "
             h["public"] = [{"ip": x, "fw": cfg.fw_label(x), "rdns": rd.get(x)} for x in h["public"]]
             h["top_remote_rdns"] = rd.get(h["top_remote"]) if h.get("top_remote") else None
         return {"ok": True, "scope": scope, "rows": shown, "total": len(rows),
-                "page": p, "per": per_, "unattributed_nat_tx": d["unattributed_nat_tx"]}
+                "page": p, "per": per_, "unattributed_nat_tx": d["unattributed_nat_tx"],
+                "categories": [{"name": c, "n": cats[c]} for c in CATEGORY_NAMES if cats.get(c)], "cat": cat}
     return guard(run)
 
 
@@ -783,7 +790,7 @@ def address_prefix_matches(q):
         for r in rows:
             seen.add(r["ip"])
             name = cfg.label(r["ip"])
-            out.append({"type": "Server" if cfg.is_internal(r["ip"]) else "Remote IP", "label": f"{name} ({r['ip']})" if name else r["ip"],
+            out.append({"type": "Device" if cfg.is_internal(r["ip"]) else "Remote IP", "label": f"{name} ({r['ip']})" if name else r["ip"],
                         "ip": r["ip"], "name": name,
                         "sub": f"{int(r['flows']):,} flows · last seen {fmt_ts(int(r['last']))}",
                         "href": f"/netmon/servers/{r['ip']}" if cfg.is_internal(r["ip"]) else f"/netmon/connections?rip={r['ip']}"})
@@ -820,7 +827,7 @@ def api_search(req: Request, q: str = ""):
     ql, res = q.lower(), []
     for ip, a in cfg.get("assets", {}).items():
         if ql in ip or ql in a["name"].lower() or ql in a.get("role", "").lower() or any(ql in x.lower() for x in a.get("aliases", [])):
-            res.append({"type": "Server", "label": a["name"], "sub": " · ".join(x for x in (ip, a.get("role"), ", ".join(a.get("aliases", []))) if x),
+            res.append({"type": "Device", "label": a["name"], "sub": " · ".join(x for x in (ip, a.get("role"), ", ".join(a.get("aliases", []))) if x),
                         "href": f"/netmon/servers/{ip}"})
     for ip, a in cfg.get("labels", {}).items():
         if ql in ip or ql in a["name"].lower() or ql in a.get("notes", "").lower() or any(ql in x.lower() for x in a.get("aliases", [])):
@@ -838,7 +845,7 @@ def api_search(req: Request, q: str = ""):
     try:
         ip = str(ipaddress.ip_address(q))
         if cfg.is_internal(ip):
-            res.append({"type": "Server", "label": cfg.asset_label(ip), "sub": "internal address", "href": f"/netmon/servers/{ip}"})
+            res.append({"type": "Device", "label": cfg.asset_label(ip), "sub": "internal address", "href": f"/netmon/servers/{ip}"})
         else:
             res.append({"type": "Remote IP", "label": cfg.label(ip) or ip, "ip": ip, "name": cfg.label(ip), "sub": "connections with this address",
                         "href": f"/netmon/connections?rip={ip}"})
@@ -896,13 +903,15 @@ def overview(req: Request):
 @app.get("/netmon/servers", response_class=HTMLResponse)
 def servers_page(req: Request):
     from .admin import tip_box
-    body = f"""<section class="card"><div class="card-h"><h2>Internal servers</h2><span class="muted small" id="srvnote"></span></div>
+    body = f"""<section class="card"><div class="card-h"><h2>Internal devices</h2><span class="muted small" id="srvnote"></span></div>
+<div class="chips" id="srvcats"></div>
 <div class="wrap"><table class="tbl sortable" id="srv"><thead><tr><th data-sort="name">Name</th><th>Internal IP</th><th data-sort="in" class="num">Inbound rate</th>
 <th data-sort="out" class="num">Outbound rate</th><th data-sort="total" class="num">Total transfer</th><th>Top remote</th><th data-sort="countries" class="num">Countries</th>
 <th class="num">Alerts</th><th data-sort="last" class="num">Last seen</th></tr></thead><tbody></tbody></table></div><div class="pager" id="pager"></div>
-<p class="note">Inbound = Internet → server (exact, after de-NAT). Outbound = server → Internet, only where a port-forward reply maps uniquely to the server;
-traffic the server sends through the shared NAT address is shown separately and cannot be attributed from flows. Rates = transfer ÷ selected window (flow-estimated).</p>{tip_box("inventory")}</section>"""
-    return page(req, "Servers", body, "/netmon/servers", ("servers.js",))
+<p class="note">Internal devices that exchanged traffic with the Internet in the selected window, by category (from each device's type in Settings → Inventory).
+Inbound = Internet → device (exact, after de-NAT). Outbound = device → Internet, only where a port-forward reply maps uniquely to the device;
+traffic a device sends through the shared NAT address is shown separately and cannot be attributed from flows. Rates = transfer ÷ selected window (flow-estimated).</p>{tip_box("inventory")}</section>"""
+    return page(req, "Internal devices", body, "/netmon/servers", ("servers.js",))
 
 
 @app.get("/netmon/servers/{ip}", response_class=HTMLResponse)
@@ -1236,7 +1245,7 @@ def settings_page(req: Request):
 <p class="note">Port speed is not contracted capacity; utilization is shown only when a WAN capacity is set on <a href="/netmon/settings/sites">Firewalls &amp; sites</a>.</p></div>
 <div class="card"><div class="card-h"><h2>Features</h2></div><table class="tbl">
 <tr><td>Firewalls</td><td>{len(cfg["sites"])} site(s)</td><td><a href="/netmon/settings/sites">Firewalls &amp; sites</a></td></tr>
-<tr><td>Inventory</td><td>{len(cfg.get('assets', {}))} named servers</td><td><a href="/netmon/settings/inventory">edit names</a></td></tr>
+<tr><td>Inventory</td><td>{len(cfg.get('assets', {}))} internal devices</td><td><a href="/netmon/settings/inventory">edit names</a></td></tr>
 <tr><td>Blocking</td><td>{f"{enforcement()[0]} of {enforcement()[1]} firewalls connected" if enforcement()[0] else 'not set up'}</td><td><a href="/netmon/blocks">block requests</a> · <a href="/netmon/settings/response">auto-response</a></td></tr>
 <tr><td>AI analysis</td><td>{'configured · ' + e(ai.ac.get('model')) if ai.enabled else 'not configured'}</td><td><a href="/netmon/investigations">setup</a></td></tr>
 <tr><td>GeoIP</td><td>{e(geo_sources())}</td><td><a href="/netmon/coverage">what is visible</a></td></tr>

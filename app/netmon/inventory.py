@@ -2,6 +2,7 @@
 labels for external addresses (labels:db: name, notes). config.yaml `assets:` only seeds a fresh DB."""
 import ipaddress
 import re
+import time
 from urllib.parse import quote
 
 from fastapi import Form, HTTPException, Request
@@ -18,8 +19,7 @@ STANDARD_ROLES = ("web", "mail", "dns", "mail+dns", "web+dns", "reverse-proxy", 
                   "hypervisor", "firewall", "vpn", "remote-access", "management", "monitoring", "workstation", "marketing crawler")
 BULK_MAX = 256
 # what an internal address IS (role = what it does); a fixed list so filters and AI analysis can rely on it
-DEVICE_TYPES = ("physical server", "virtual machine", "container", "hypervisor host", "workstation / laptop", "mobile device",
-                "printer", "IoT / camera", "VoIP phone", "network device (switch / AP)", "firewall / router", "storage / NAS", "other")
+from .devtypes import CATEGORIES, CATEGORY_NAMES, DEVICE_TYPES, category_of  # noqa: E402,F401
 
 
 def clean_type(v):
@@ -105,7 +105,7 @@ def bulk_targets(text):
 
 def assign_role(text, role, user, role_of_user, only_named=False, kind="__keep", keep_role=False):
     """Set the role of several internal servers at once. Unnamed addresses are added under their IP as the name
-    (unless only_named). Name, notes and other fields of named servers are kept."""
+    (unless only_named). Name, notes and other fields of named devices are kept."""
     if ROLES[role_of_user] < ROLES["admin"]:
         raise PermissionError("assigning server roles requires role admin")
     role = clean(role, ROLE_RE, "Role", 32)
@@ -120,7 +120,8 @@ def assign_role(text, role, user, role_of_user, only_named=False, kind="__keep",
             if upd:
                 changed.append({"ip": ip, "old": {k: db[ip].get(k, "") for k in upd}})
                 db[ip] = {**db[ip], **upd}
-                db[ip] = {k: v for k, v in db[ip].items() if not (k == "kind" and not v)}
+                db[ip] = {k: v for k, v in db[ip].items() if not (k == "kind" and not v) and k != "source"
+                          and not (k == "kind_source" and "kind" in upd)}
         elif not only_named:
             db[ip] = {"name": ip, "role": "" if keep_role else role, "sensitive": False, "notes": "", **({"kind": new["kind"]} if new.get("kind") else {})}
             added.append(ip)
@@ -163,6 +164,11 @@ def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", softw
         k = (old or {}).get("kind", "") if kind is None else kind   # None = caller did not offer the field: keep it
         if k:
             db[ip]["kind"] = k
+        for f in ("mac", "vendor", "discovered"):   # discovery facts survive a manual edit; the entry is now a person's
+            if (old or {}).get(f):
+                db[ip][f] = old[f]
+        if kind is None and (old or {}).get("kind_source") and k == old.get("kind"):
+            db[ip]["kind_source"] = old["kind_source"]
         msg = f"Saved {name} ({ip})."
     else:
         db[ip] = {"name": name, "notes": notes, **({"aliases": alias_list} if alias_list else {})}   # no "source": a person's label, never replaced by a sync
@@ -344,13 +350,27 @@ def inventory_page(req: Request, msg: str = ""):
     labels = sorted(cfg.get("labels", {}).items(), key=lambda kv: ipaddress.ip_address(kv[0]))
 
     def aka(a):
-        return f"<div class='sub'>aka {e(', '.join(a['aliases']))}</div>" if a.get("aliases") else ""
+        out = f"<div class='sub'>aka {e(', '.join(a['aliases']))}</div>" if a.get("aliases") else ""
+        if a.get("mac"):
+            out += f"<div class='sub mono'>{e(a['mac'])}{' · ' + e(a['vendor']) if a.get('vendor') else ''}</div>"
+        if a.get("source") == "auto":
+            out += "<div class='sub'><span class='tag' title='added by auto-discovery; edit it to make it yours'>auto-discovered</span></div>"
+        return out
 
     def edit(ip, ok):
         return f"<details class='tech'><summary>Edit</summary>{name_form(req, ip, back + '#n-' + ip.replace(':', '-'), True)}</details>" if ok else ""
-    srows = "".join(f"""<tr id="n-{e(ip.replace(':', '-'))}"><td><a href="/netmon/servers/{e(ip)}">{e(a['name'])}</a>{aka(a)}</td><td class="mono">{e(ip)}</td>
-<td>{e(a.get('kind') or '—')}</td><td>{e(a.get('role') or '—')}</td><td>{'<span class="tag">sensitive</span>' if a.get('sensitive') else ''}</td><td class="small">{e(a.get('notes', ''))}</td>
-<td>{edit(ip, admin)}</td></tr>""" for ip, a in assets)
+    def srow(ip, a):
+        return f"""<tr id="n-{e(ip.replace(':', '-'))}"><td><a href="/netmon/servers/{e(ip)}">{e(a['name'])}</a>{aka(a)}</td><td class="mono">{e(ip)}</td>
+<td>{e(a.get('kind') or '—')}{f"<div class='sub' title='{e(a['kind_source'])}'>auto</div>" if a.get('kind_source') else ''}</td><td>{e(a.get('role') or '—')}</td><td>{'<span class="tag">sensitive</span>' if a.get('sensitive') else ''}</td><td class="small">{e(a.get('notes', ''))}</td>
+<td>{edit(ip, admin)}</td></tr>"""
+    groups = {c: [] for c in CATEGORY_NAMES}
+    for ip, a in assets:
+        groups[category_of(a.get("kind"))].append((ip, a))
+    chips = "".join(f"<a class='chip' href='#cat-{i}'>{e(c)} <b>{len(groups[c])}</b></a>" for i, c in enumerate(CATEGORY_NAMES) if groups[c])
+    head = "<thead><tr><th>Name</th><th>IP</th><th>Type</th><th>Role</th><th></th><th>Notes</th><th></th></tr></thead>"
+    srows = "".join(f"""<h3 class="catgroup" id="cat-{i}">{e(c)} <span class="muted small">{len(groups[c])}</span></h3>
+<div class="wrap"><table class="tbl invgrp"><colgroup><col class="c-name"><col class="c-ip"><col class="c-type"><col class="c-role"><col class="c-tag"><col><col class="c-edit"></colgroup>{head}<tbody>{''.join(srow(ip, a) for ip, a in groups[c])}</tbody></table></div>"""
+                    for i, c in enumerate(CATEGORY_NAMES) if groups[c])
     def src(a):
         s = a.get("source", "")
         return f"<span class='tag' title='imported; edit to make it yours'>{e(cfg.site(s[4:])['name'] if s.startswith('vip:') and cfg.site(s[4:]) else s)} virtual IP</span>" if s else "manual"
@@ -369,23 +389,39 @@ def inventory_page(req: Request, msg: str = ""):
 <label>Name<input name=name required maxlength=64></label>
 {'<label>Type <span class="muted small">(internal only)</span>' + type_select() + '</label><label>Role <span class="muted small">(internal servers only)</span><input name=role maxlength=32 list=nm-roles></label><label class="check"><input type=checkbox name=sensitive value=1> Sensitive <span class="muted small">(internal servers only)</span></label>' if admin else ''}
 <label>Notes<input name=notes maxlength=300></label><div class="row"><button class="primary">Save</button></div>
-<p class="note">Internal addresses become named servers{'' if admin else ' (admins only)'}; any other address gets a label shown next to it in connection tables and findings.</p></form></section>""" if analyst else ""
+<p class="note">Internal addresses become internal devices{'' if admin else ' (admins only)'}; any other address gets a label shown next to it in connection tables and findings.</p></form></section>""" if analyst else ""
     bulk = f"""<section class="card" id="roles"><div class="card-h"><h2>Assign type and role</h2><span class="muted small">several addresses at once</span></div>
 <form method=post action="/netmon/settings/inventory/roles" class="stackform wide">{csrf_field(req)}
 <label>Addresses<textarea name=ips rows=2 required class="mono" placeholder="internal IPs or CIDRs, comma- or space-separated (e.g. 10.0.0.21, 10.0.0.30/30)"></textarea></label>
 <label>Type{type_select(name="kind", keep=True)}</label>
 <label>Role<input name=role maxlength=32 list=nm-roles placeholder="pick or type; leave blank to clear"></label>
 <label class="check"><input type=checkbox name=keep_role value=1> Keep each address's current role <span class="muted small">— set only the type</span></label>
-<label class="check"><input type=checkbox name=only_named value=1> Only servers already named <span class="muted small">— otherwise unnamed addresses are added, listed under their IP</span></label>
+<label class="check"><input type=checkbox name=only_named value=1> Only devices already in Inventory <span class="muted small">— otherwise unnamed addresses are added, listed under their IP</span></label>
 <div class="row"><button class="primary">Assign</button></div>
-<p class="note">Only type and role change; names, notes and other settings of named servers are kept. At most {BULK_MAX} addresses.</p></form></section>""" if admin else ""
+<p class="note">Only type and role change; names, notes and other settings of named devices are kept. At most {BULK_MAX} addresses.</p></form></section>""" if admin else ""
+    from . import discovery
+    ds, den = discovery.last(conn), discovery.enabled(conn)
+    arp = "".join(f"<li>{e(cfg.site(k)['name'] if cfg.site(k) else k)}: {e(v)}</li>" for k, v in (ds.get("arp") or {}).items())
+    when = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(ds["ts"])) if ds.get("ts") else ""
+    stats = (f"Last run {when} · {ds.get('traffic_ips', 0)} addresses in traffic · {ds.get('arp_ips', 0)} in ARP tables · "
+             f"{len(ds.get('added') or [])} added · {ds.get('filled', 0)} filled in") if when else "Not run yet."
+    ctl = (f"""<form method=post action="/netmon/settings/inventory/discovery" class="row">{csrf_field(req)}
+<label class="check"><input type=checkbox name=enabled value=1 {'checked' if den else ''}> Enabled</label>
+<button name=act value=save>Save</button><button name=act value=run class="primary">Run now</button></form>""" if admin else "")
+    disc = f"""<section class="card" id="discovery"><div class="card-h"><h2>Auto-discovery</h2><span class="muted small">{'on' if den else 'off'} · every {discovery.INTERVAL // 60} min</span></div>
+<p class="note">New internal addresses are added on their own: from traffic (any LAN address that received internet traffic in
+the last 24 h) and from each firewall's ARP table (MAC, vendor, hostname). A virtualization MAC prefix (Proxmox, VMware,
+Hyper-V, …) sets the type to virtual machine; other vendors set no type. Nothing you set is overwritten; only empty fields are filled.</p>
+<p class="small">{e(stats)} {f"<span class='warnline'>{e(ds['error'])}</span>" if ds.get('error') else ''}</p>{f"<ul class='small'>{arp}</ul>" if arp else ''}
+{ctl}</section>"""
     body = f"""{role_datalist()}{tabs(SETTINGS_TABS, back)}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}
-<section class="card"><div class="card-h"><h2>Internal servers</h2><span class="muted small">{len(assets)} named · stored in the netmon database</span></div>
-<div class="wrap"><table class="tbl"><thead><tr><th>Name</th><th>IP</th><th>Type</th><th>Role</th><th></th><th>Notes</th><th></th></tr></thead>
-<tbody>{srows or '<tr><td colspan=7 class="state empty">No servers named yet</td></tr>'}</tbody></table></div>
-<p class="note">Names appear across the dashboard, in finding titles and notifications. Before AI analysis, server names are replaced by pseudonyms just like internal IPs.
-A server's role tells AI analysis what is normal for it (inbound mail to a mail server, outbound connections from a crawler).</p></section>
-{bulk}
+<section class="card" id="devices"><div class="card-h"><h2>Internal devices</h2><span class="muted small">{len(assets)} · stored in the netmon database</span></div>
+<div class="chips">{chips}</div>
+{srows or '<p class="state empty">No internal devices yet</p>'}
+<p class="note">Categories follow each device's type (Servers, Virtual, Network, Endpoints, IoT &amp; peripherals, Other; no type = Unclassified).
+Names appear across the dashboard, in finding titles and notifications. Before AI analysis, names are replaced by pseudonyms just like internal IPs.
+A device's type and role tell AI analysis what is normal for it (inbound mail to a mail server, outbound connections from a crawler).</p></section>
+{bulk}{disc}
 <section class="card" id="labels"><div class="card-h"><h2>Public and external address labels</h2><span class="muted small">{len(labels)} labelled</span></div>{sync}
 <div class="wrap"><table class="tbl"><thead><tr><th>Label</th><th>IP</th><th>Source</th><th>Notes</th><th></th></tr></thead>
 <tbody>{lrows or '<tr><td colspan=5 class="state empty">No labels yet. Use ✎ next to any IP address, or the form below.</td></tr>'}</tbody></table></div>
@@ -421,3 +457,20 @@ def api_role_suggest(req: Request, ip: str):
         return {"ok": True, **suggest_role(ip)}
     except Exception as ex:   # ClickHouse unavailable: the editor just shows no suggestion
         return {"ok": False, "error": type(ex).__name__}
+
+
+@app.post("/netmon/settings/inventory/discovery")
+def post_discovery(req: Request, enabled: str = Form(""), act: str = Form("save"), csrf: str = Form("")):
+    from . import discovery
+    from .web import dash
+    u = need(req, "admin")
+    check_csrf(req, csrf)
+    on = enabled == "1"
+    if on != discovery.enabled(conn):
+        put_setting(conn, discovery.KEY, {**(get_setting(conn, discovery.KEY, {}) or {}), "enabled": on}, u)
+        audit(conn, u, "discovery_setting", {"enabled": on})
+    msg = f"Auto-discovery {'on' if on else 'off'}."
+    if act == "run":
+        s = discovery.run(cfg, conn, dash, u)
+        msg = f"Discovery ran: {len(s['added'])} added, {s['filled']} filled in." + (f" {s['error']}" if s.get("error") else "")
+    return back_to("/netmon/settings/inventory#discovery", msg)

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from .rdns import LIST_WAIT
 from .core import PROTO, expand_flow_sql, flow_predicates
+from .devtypes import category_of
 
 IPS = "replaceOne(IPv6NumToString({c}), '::ffff:', '')"
 REMOTE_IP = IPS.format(c="if(INB, SrcAddr, DstAddr)")
@@ -419,6 +420,8 @@ class Dash:
             a = self.cfg.asset(h["ip"])
             h["name"] = a["name"] if a["name"] != h["ip"] else ""
             h["role"], h["sensitive"] = a.get("role", "unknown"), bool(a.get("sensitive"))
+            h["kind"] = a.get("kind", "")
+            h["category"] = category_of(h["kind"])
             h["in_bps"], h["out_bps"] = h["rx"] * 8 / sc.span, h["tx"] * 8 / sc.span
         return {"servers": out, "unattributed_nat_tx": att["unattributed"], "nat_attribution": att}
 

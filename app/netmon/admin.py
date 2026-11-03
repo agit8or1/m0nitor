@@ -72,7 +72,7 @@ Quick ✓, your internal interfaces (LAN, VPN), direction in, destination <code>
 <li>Firewall → Rules → WAN: the block rule using <code>GeoIP_BLOCK</code> (sequence 51). The Countries page shows its live state; review the per-country preview before changing it.</li>
 <li>Rollback: disable the rule again. Existing states remain until they expire.</li></ol>
 <p class="sub">GeoIP is one signal, not a security boundary — VPNs and cloud providers defeat it. Check management, VPN and customer access before enabling.</p>"""),
-    "inventory": ("Server names (inventory)", """<ol>
+    "inventory": ("Internal devices (inventory)", """<ol>
 <li>Names come from <code>assets:</code> in <code>/opt/netmon/app/config.yaml</code>, seeded from OPNsense port-forward descriptions (Firewall → NAT → Port Forward → Description).</li>
 <li>Give port forwards clear descriptions, or add hosts to <code>assets:</code> (name, role, sensitive) and restart the app.</li>
 <li>Exposed services shown here mirror the port-forward list in <code>exposures:</code>; update it when you add or remove forwards on OPNsense.</li></ol>"""),

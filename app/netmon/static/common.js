@@ -60,7 +60,7 @@ const NM = (() => {
     const lv = $("live"); if (lv) { lv.textContent = paused ? "▶ Resume live" : "❚❚ Pause"; lv.setAttribute("aria-pressed", String(!paused)); lv.classList.toggle("paused", paused); }
     const chips = $("chips"); if (chips) {
       chips.replaceChildren();
-      const lab = { cc: "Country", host: "Server", asn: "AS", port: "Port", rip: "Remote IP" };
+      const lab = { cc: "Country", host: "Device", asn: "AS", port: "Port", rip: "Remote IP" };
       for (const k of ["cc", "host", "asn", "port", "rip"]) if (scope[k] && !(document.body.dataset.fixed || "").split(",").includes(k)) {
         const b = el("button", { class: "chip", title: "Remove filter" }, `${lab[k]}: ${scope[k]}`, el("span", { "aria-hidden": "true", text: " ×" }));
         b.addEventListener("click", () => setScope({ [k]: "" })); chips.append(b);

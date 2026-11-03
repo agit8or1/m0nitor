@@ -1,7 +1,7 @@
 services:
   netmon-app:
     build: .
-    image: netmon-app:1.34   # = netmon/__init__.py __version__ (tests/test_version.py)
+    image: netmon-app:1.36   # = netmon/__init__.py __version__ (tests/test_version.py)
     restart: unless-stopped
     read_only: true
     group_add: ["10001"]
@@ -19,6 +19,7 @@ services:
       - /var/log/netmon:/var/log/netmon:ro   # rsyslog-written OPNsense logs (group netmon, gid 10001)
       - akvorado-geoip:/usr/share/GeoIP:ro      # the IPinfo country database Akvorado enriches flows with (same source for block events)
       - zeek-logs:/var/log/zeek:ro              # optional Zeek sensor's JSON logs (empty until the zeek profile runs)
+      - /usr/share/ieee-data:/usr/share/ieee-data:ro   # IEEE MAC vendor registry (apt install ieee-data); optional
     ports:
       - 127.0.0.1:8090:8000   # only Caddy (host loopback) can reach it
     networks: [akvorado]

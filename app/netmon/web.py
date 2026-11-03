@@ -216,7 +216,7 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "same-origin",  # not no-referrer: browsers then send "Origin: null" on form POSTs, failing check_csrf
 }
 
-NAV = [("Overview", "/", "viewer"), ("Wallboards", "/netmon/wallboards", "viewer"), ("Servers", "/netmon/servers", "viewer"),
+NAV = [("Overview", "/", "viewer"), ("Wallboards", "/netmon/wallboards", "viewer"), ("Internal devices", "/netmon/servers", "viewer"),
        ("Connections", "/netmon/connections", "viewer"), ("Countries", "/netmon/countries", "viewer"),
        ("Security", "/netmon/security", "viewer"), ("Investigations", "/netmon/investigations", "viewer"),
        ("Settings", "/netmon/settings", "viewer")]
@@ -1295,8 +1295,15 @@ def responder_loop():
     r = Responder(cfg, rconn, Detector(cfg, ch, rconn, notifier), notifier)
     time.sleep(90)  # let the detector and ingest settle after boot
     from .inventory import sync_vips
-    last_vip = 0
+    from . import discovery
+    last_vip = last_disc = 0
     while True:
+        if time.time() - last_disc > discovery.INTERVAL and discovery.enabled(rconn):
+            last_disc = time.time()
+            try:
+                discovery.run(cfg, rconn, dash)
+            except Exception as ex:
+                print(f"inventory discovery failed: {ex}", flush=True)
         if time.time() - last_vip > 3600:
             last_vip = time.time()
             try:

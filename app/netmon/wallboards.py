@@ -14,7 +14,7 @@ WIDGETS = {
     "kpi_in": ("Inbound bandwidth", 3, 1, "Current WAN inbound (counters) with window average"),
     "kpi_out": ("Outbound bandwidth", 3, 1, "Current WAN outbound (counters) with window average"),
     "kpi_volume": ("Transferred", 3, 1, "Downloaded / uploaded volume in the window"),
-    "kpi_servers": ("Servers observed", 3, 1, "Internal servers receiving Internet traffic"),
+    "kpi_servers": ("Internal devices observed", 3, 1, "Internal devices receiving Internet traffic"),
     "kpi_alerts": ("Open security alerts", 3, 1, "By severity"),
     "kpi_health": ("Collection health", 3, 1, "Flow freshness, counters, logs, IDS"),
     "kpi_fw": ("Firewall blocks", 3, 1, "Blocked events (needs firewall logs)"),

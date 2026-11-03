@@ -39,7 +39,7 @@
         s: el("span", {}, el("span", { class: "sw", style: "background:var(--in)" }), ` ↓ ${fmtBytes(s.in_b)}  `, el("span", { class: "sw", style: "background:var(--out)" }), ` ↑ ${fmtBytes(s.out_b)}`),
         tip: `Downloaded ${fmtBytes(s.in_b)}, uploaded ${fmtBytes(s.out_b)} at the WAN boundary · ${fmtNum(s.flows)} flow records` },
       { k: "Servers observed", href: NM.href("/netmon/servers"), v: fmtNum(s.servers), s: `${fmtNum(s.peers)} remote addresses · ${fmtNum(s.countries)} countries`,
-        tip: "Internal servers that received Internet traffic in this window" },
+        tip: "Internal devices that received Internet traffic in this window" },
       { k: "Security alerts", v: String(hi + med + lo), href: "/netmon/security", cls: hi ? "bad" : "",
         s: el("span", {}, sev("high"), ` ${hi}  `, sev("medium"), ` ${med}  `, sev("low"), ` ${lo}`),
         tip: `Open security alerts. Also ${A.info} informational change(s) and ${A.health} monitoring-health item(s).` },

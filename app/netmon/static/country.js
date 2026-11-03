@@ -10,7 +10,7 @@
       NM.cards($("cards"), [
         { k: "Inbound (from this country)", sw: "--in", href: "#bw", v: fmtBytes(s.in_b), s: `avg ${fmtBps(s.in_avg_bps)} · flow-estimated` },
         { k: "Outbound (to this country)", sw: "--out", href: "#bw", v: fmtBytes(s.out_b), s: `avg ${fmtBps(s.out_avg_bps)}` },
-        { k: "Internal servers involved", href: "#t-servers", v: fmtNum(s.servers), s: `${fmtNum(s.peers)} remote addresses` },
+        { k: "Internal devices involved", href: "#t-servers", v: fmtNum(s.servers), s: `${fmtNum(s.peers)} remote addresses` },
         { k: "Findings", href: "#t-findings", v: String(d.findings.length), s: d.findings.length ? "linked by evidence" : "none — foreign traffic is not suspicious by itself" },
         { k: "GeoIP block", href: "#t-policy", v: d.policy.in.length && d.policy.out.length ? "In + out" : d.policy.in.length ? "Inbound" : d.policy.out.length ? "Outbound" : "Not blocked",
           s: d.policy.in.length || d.policy.out.length ? "by an enabled firewall rule" : d.policy.listed ? `listed in ${d.policy.alias}, but no enabled rule` : `not in ${d.policy.alias}`, cls: d.policy.listed && !d.policy.enforced ? "warn" : "" },

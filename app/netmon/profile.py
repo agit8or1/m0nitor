@@ -2,6 +2,7 @@
 actually seen serving and using over the last 7 days. Inbound SMTP is routine for a mail server and suspicious for a
 backup box; the model can only weigh that if it knows which one it is looking at."""
 from .core import PROTO, expected_devices, expected_match
+from .devtypes import category_of
 
 # (proto, port) -> function. Only well-known ones; anything else is reported as a bare port.
 FUNCTIONS = {
@@ -71,7 +72,10 @@ def observed(dash, ip, site="all"):
 def server_profile(cfg, conn, dash, ip):
     """Declared + observed function of an internal server. Never raises: the profile is context, not evidence."""
     a = cfg.get("assets", {}).get(ip) or {}
-    out = {"device_type": a.get("kind") or "not set", "declared_role": a.get("role") or "not set", "software": a.get("software", []),
+    out = {"device_type": a.get("kind") or "not set", "category": category_of(a.get("kind")),
+           **({"mac_vendor": a["vendor"]} if a.get("vendor") else {}),
+           **({"device_type_source": "auto: " + a["kind_source"]} if a.get("kind_source") else {}),
+           **({"entry": "auto-discovered, not reviewed by an admin"} if a.get("source") == "auto" else {}), "declared_role": a.get("role") or "not set", "software": a.get("software", []),
            "sensitive": bool(a.get("sensitive"))}
     if a.get("notes"):
         out["admin_notes"] = str(a["notes"])[:200]

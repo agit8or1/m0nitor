@@ -1,8 +1,8 @@
 "use strict";
 (() => {
   const { el, $, fmtBytes, fmtBps, fmtNum, fmtTime } = NM;
-  let page = 1, sort = "total";
-  const admin = (document.querySelector('meta[name="nm-role"]') || {}).content === "admin";   // naming servers needs admin
+  let page = 1, sort = "total", cat = "";
+  const admin = (document.querySelector('meta[name="nm-role"]') || {}).content === "admin";   // naming internal devices needs admin
   function editBtn(h) {
     if (!admin) return null;
     const b = el("button", { class: "namebtn", type: "button", title: `Edit name and aliases for ${h.ip}`, "aria-label": `Edit name and aliases for ${h.ip}` }, "✎");
@@ -12,11 +12,15 @@
   async function load() {
     const tb = document.querySelector("#srv tbody");
     try {
-      const d = await NM.get(`/netmon/api/servers?${NM.qs({ page, sort })}`);
+      const d = await NM.get(`/netmon/api/servers?${NM.qs({ page, sort, cat })}`);
       NM.scopeDesc(d.scope);
+      const total = d.categories.reduce((n, c) => n + c.n, 0);
+      const chip = (name, n, v) => { const a = el("a", { class: "chip" + (cat === v ? " on" : ""), href: "#", text: `${name} ` }, el("b", { text: fmtNum(n) }));
+        a.addEventListener("click", (ev) => { ev.preventDefault(); cat = v; page = 1; load(); }); return a; };
+      $("srvcats").replaceChildren(chip("All", total, ""), ...d.categories.map((c) => chip(c.name, c.n, c.name)));
       tb.replaceChildren(...d.rows.map((h) => el("tr", {},
         el("td", {}, el("a", { href: NM.href(`/netmon/servers/${h.ip}`), text: h.name || h.ip }), h.sensitive ? el("span", { class: "tag", text: "sensitive" }) : null,
-          editBtn(h), el("div", { class: "sub", text: h.role }),
+          editBtn(h), el("div", { class: "sub", text: [h.kind, h.role].filter((x) => x && x !== "unknown").join(" · ") }),
           h.aliases && h.aliases.length ? el("div", { class: "sub", title: "aliases", text: `aka ${h.aliases.join(", ")}` }) : null),
         el("td", {}, el("code", { text: h.ip }), NM.rdnsLine(h.rdns),
           ...(h.public || []).map((x) => el("div", { class: "sub", title: "public address (1:1 NAT)" }, `${x.fw || "1:1 NAT"} `, el("code", { text: x.ip }),
@@ -29,7 +33,7 @@
         el("td", { class: "num", text: fmtNum(h.countries) }),
         el("td", { class: "num" }, h.alerts ? el("a", { href: "/netmon/security", class: "sev s-serious", text: `◆ ${h.alerts}` }) : "0"),
         el("td", { class: "num", text: h.last ? fmtTime(h.last, true) : "—" }))));
-      if (!d.rows.length) tb.replaceChildren(el("tr", {}, el("td", { colspan: 9, class: "state empty", text: "No servers in this scope" })));
+      if (!d.rows.length) tb.replaceChildren(el("tr", {}, el("td", { colspan: 9, class: "state empty", text: cat ? `No ${cat.toLowerCase()} devices in this scope` : "No internal devices in this scope" })));
       NM.pager($("pager"), d.page, d.per, d.total, (p) => { page = p; load(); });
       $("srvnote").textContent = d.unattributed_nat_tx ? `${fmtBytes(d.unattributed_nat_tx)} uploaded via shared NAT (unattributed)` : "";
     } catch (e) { tb.replaceChildren(el("tr", {}, el("td", { colspan: 9, class: "state error", text: e.message }))); }

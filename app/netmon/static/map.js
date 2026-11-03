@@ -177,7 +177,7 @@ const NMMap = (() => {
         row("Top organization", c.top_asname || (c.top_asn ? `AS${c.top_asn}` : "—")),
         row(sw("in", "Inbound"), `${fmtBytes(c.in_b)} · avg ${fmtBps(c.in_b * 8 / span)}`),
         row(sw("out", "Outbound"), `${fmtBytes(c.out_b)} · avg ${fmtBps(c.out_b * 8 / span)}`),
-        row("Flows", fmtNum(c.flows)), row("Internal servers", fmtNum(c.servers)), row("Window", win()),
+        row("Flows", fmtNum(c.flows)), row("Internal devices", fmtNum(c.servers)), row("Window", win()),
         row("Location", "country-level GeoIP (approximate)"), row("Security", secLine(cc)), blkRow(cc),
         hint()] : [blkRow(cc), el("div", { class: "muted small", text: "No observed traffic in this scope" })])];
     }

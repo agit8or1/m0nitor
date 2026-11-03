@@ -3,6 +3,36 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.36 — 2026-11-03
+
+### Changed
+- **"Servers" is now "Internal devices"** (navigation, page titles, Inventory, search results, filters, map tooltips,
+  wallboard KPI). Addresses (`/netmon/servers/...`) are unchanged, so bookmarks keep working.
+
+### Added
+- **Device categories.** Every type belongs to a category: Servers, Virtual, Network, Endpoints, IoT & peripherals,
+  Other, and Unclassified (no type yet). The Internal devices page has category filter chips with counts; Settings →
+  Inventory groups the devices by category with jump links. AI analysis receives the category too.
+- **MAC vendor lookup** from the IEEE registry (MA-L, MA-M and MA-S prefixes, longest match wins; the `ieee-data`
+  package, mounted read-only). Randomized (private) MACs are recognized. Vendors that make essentially one kind of
+  device (camera, printer, VoIP phone, NAS, network and firewall makers) set that type automatically; general
+  vendors (Dell, HP, Cisco, Apple, Intel, …) set none. Vendors are also filled in for MACs recorded earlier, and
+  passed to AI analysis.
+
+## v1.35 — 2026-11-03
+
+### Added
+- **Inventory fills itself.** Every 15 minutes, auto-discovery adds internal addresses it has not seen before: any LAN
+  address that received internet traffic in the last 24 hours, and every entry in each OPNsense firewall's ARP table
+  (MAC address, vendor and hostname; needs the API privilege "Diagnostics: ARP Table"). A virtualization MAC prefix
+  (Proxmox, VMware, Hyper-V, Xen, KVM, VirtualBox, …) sets the type to virtual machine; any other vendor sets no type,
+  since one vendor makes servers, switches and management cards alike. New entries are tagged **auto-discovered**;
+  on existing entries only empty fields (type, MAC, vendor) are filled, so nothing a person set is overwritten.
+  Editing an entry makes it yours (MAC and vendor are kept).
+- Settings → Inventory has an **Auto-discovery** card: on/off, **Run now**, the last run, and per-firewall ARP status
+  (including the missing-privilege hint). MAC and vendor are shown under each name.
+- AI analysis is told when a device type came from discovery and when an entry was not reviewed by an admin.
+
 ## v1.34 — 2026-11-03
 
 ### Added
