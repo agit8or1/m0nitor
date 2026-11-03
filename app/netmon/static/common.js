@@ -337,6 +337,8 @@ const NM = (() => {
       el("h2", { text: d.internal ? `Name server ${d.ip}` : `Label ${d.ip}` }),
       el("label", {}, "Name", inp("name", d.name, d.internal ? "server name" : "e.g. Office VPN, Backup provider", { autofocus: true })),
       el("label", {}, "Aliases", inp("aliases", (d.aliases || []).join(", "), "other names, comma-separated (e.g. ns1, cp.example.com)", { maxlength: 400 })),
+      d.internal ? el("label", {}, "Type", el("select", { name: "kind" }, el("option", { value: "__none", text: "not set" }),
+        ...(d.kind_options || []).map((t) => el("option", { value: t, text: t, selected: t === d.kind })))) : null,
       d.internal ? el("datalist", { id: "nm-roles-dlg" }, ...(d.role_options || []).map((r) => el("option", { value: r }))) : null,
       d.internal ? el("label", {}, "Role", inp("role", d.role, "pick or type: web, mail, backup…", { list: "nm-roles-dlg", maxlength: 32 })) : null,
       d.internal ? hint : null,

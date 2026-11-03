@@ -3,6 +3,18 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.34 — 2026-11-03
+
+### Added
+- **Device type for every internal address.** Pick what an address *is* from a fixed list: physical server, virtual
+  machine, container, hypervisor host, workstation / laptop, mobile device, printer, IoT / camera, VoIP phone, network
+  device (switch / AP), firewall / router, storage / NAS, other. (Role stays what it *does*.) It is in the ✎ editor, the
+  server page, Settings → Inventory (new **Type** column), and the bulk card, now **Assign type and role**, which can
+  set only the type and keep each address's role.
+- AI analysis receives the device type and weighs it: a workstation, printer, phone or IoT device accepting
+  connections from the internet, or a printer/IoT device reaching many remotes, counts as stronger evidence than the
+  same pattern on a server.
+
 ## v1.33 — 2026-11-03
 
 ### Added

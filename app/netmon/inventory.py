@@ -17,6 +17,24 @@ ROLE_RE = re.compile(r"^[\w .,/+&-]{0,32}$")
 STANDARD_ROLES = ("web", "mail", "dns", "mail+dns", "web+dns", "reverse-proxy", "database", "file server", "storage", "backup",
                   "hypervisor", "firewall", "vpn", "remote-access", "management", "monitoring", "workstation", "marketing crawler")
 BULK_MAX = 256
+# what an internal address IS (role = what it does); a fixed list so filters and AI analysis can rely on it
+DEVICE_TYPES = ("physical server", "virtual machine", "container", "hypervisor host", "workstation / laptop", "mobile device",
+                "printer", "IoT / camera", "VoIP phone", "network device (switch / AP)", "firewall / router", "storage / NAS", "other")
+
+
+def clean_type(v):
+    v = (v or "").strip()
+    if v == "__none":   # the "not set" option (an empty form value would arrive as "field not sent")
+        return ""
+    if v and v not in DEVICE_TYPES:
+        raise ValueError(f"Type must be one of: {', '.join(DEVICE_TYPES)}")
+    return v
+
+
+def type_select(current="", name="kind", keep=False):
+    first = ("<option value='__keep'>keep unchanged</option>" if keep else "") + f"<option value='__none'{'' if current or keep else ' selected'}>not set</option>"
+    return f"<select name={name}>{first}" + "".join(
+        f"<option{' selected' if t == current else ''}>{e(t)}</option>" for t in DEVICE_TYPES) + "</select>"
 
 apply_assets(cfg, conn)
 
@@ -85,32 +103,37 @@ def bulk_targets(text):
     return out
 
 
-def assign_role(text, role, user, role_of_user, only_named=False):
+def assign_role(text, role, user, role_of_user, only_named=False, kind="__keep", keep_role=False):
     """Set the role of several internal servers at once. Unnamed addresses are added under their IP as the name
     (unless only_named). Name, notes and other fields of named servers are kept."""
     if ROLES[role_of_user] < ROLES["admin"]:
         raise PermissionError("assigning server roles requires role admin")
     role = clean(role, ROLE_RE, "Role", 32)
+    kind = kind if kind == "__keep" else clean_type(kind)
     ips = bulk_targets(text)
     db = get_setting(conn, "assets:db", {}) or {}
     changed, added = [], []
     for ip in ips:
+        new = {**({} if keep_role else {"role": role}), **({} if kind == "__keep" else {"kind": kind})}
         if ip in db:
-            if db[ip].get("role") != role:
-                changed.append({"ip": ip, "old": db[ip].get("role", "")})
-                db[ip] = {**db[ip], "role": role}
+            upd = {k: v for k, v in new.items() if db[ip].get(k, "") != v}
+            if upd:
+                changed.append({"ip": ip, "old": {k: db[ip].get(k, "") for k in upd}})
+                db[ip] = {**db[ip], **upd}
+                db[ip] = {k: v for k, v in db[ip].items() if not (k == "kind" and not v)}
         elif not only_named:
-            db[ip] = {"name": ip, "role": role, "sensitive": False, "notes": ""}
+            db[ip] = {"name": ip, "role": "" if keep_role else role, "sensitive": False, "notes": "", **({"kind": new["kind"]} if new.get("kind") else {})}
             added.append(ip)
     put_setting(conn, "assets:db", db, user)
     apply_assets(cfg, conn)
-    audit(conn, user, "asset_role_bulk", {"role": role, "changed": changed, "added": added})
+    audit(conn, user, "asset_role_bulk", {"role": None if keep_role else role, "kind": kind, "changed": changed, "added": added})
     skipped = len(ips) - len(changed) - len(added)
-    return (f"Role {role or '(none)'}: {len(changed)} server(s) updated, {len(added)} added"
+    what = "; ".join(x for x in ("" if keep_role else f"role {role or '(none)'}", "" if kind == "__keep" else f"type {kind or '(none)'}") if x)
+    return (f"{what[:1].upper() + what[1:] or 'Nothing to change'}: {len(changed)} address(es) updated, {len(added)} added"
             + (f", {skipped} unchanged or skipped" if skipped else "") + ".")
 
 
-def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", software=""):
+def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", software="", kind=None):
     """Set or clear the name (and aliases) for `ip`. Internal addresses (servers) need admin: `sensitive` changes detection
     severity. External labels need analyst. Returns a status message."""
     try:
@@ -122,7 +145,8 @@ def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", softw
     if ROLES[role_of_user] < ROLES[need_role]:
         raise PermissionError(f"naming {'servers' if internal else 'external addresses'} requires role {need_role}")
     name = clean(name, NAME_RE, "Name", 64)
-    if not name and internal and (role or software):   # a role alone is enough; the server is listed under its IP
+    kind = clean_type(kind) if kind is not None and internal else kind
+    if not name and internal and (role or software or kind):   # a role alone is enough; the server is listed under its IP
         name = ip
     notes = " ".join((notes or "").split())[:300].replace("<", "‹").replace(">", "›")
     alias_list = clean_list(aliases, "Aliases", name) if name else []
@@ -136,6 +160,9 @@ def save(ip, name, role, sensitive, notes, user, role_of_user, aliases="", softw
     elif internal:
         db[ip] = {"name": name, "role": clean(role, ROLE_RE, "Role", 32), "sensitive": bool(sensitive), "notes": notes,
                   **({"aliases": alias_list} if alias_list else {}), **({"software": sw} if sw else {})}
+        k = (old or {}).get("kind", "") if kind is None else kind   # None = caller did not offer the field: keep it
+        if k:
+            db[ip]["kind"] = k
         msg = f"Saved {name} ({ip})."
     else:
         db[ip] = {"name": name, "notes": notes, **({"aliases": alias_list} if alias_list else {})}   # no "source": a person's label, never replaced by a sync
@@ -249,13 +276,14 @@ def back_to(url, msg):
 
 @app.post("/netmon/names")
 def post_name(req: Request, ip: str = Form(...), name: str = Form(""), role: str = Form(""), sensitive: str = Form(""),
-              notes: str = Form(""), aliases: str = Form(""), software: str = Form(""), clear: str = Form(""), back: str = Form(""), csrf: str = Form("")):
+              notes: str = Form(""), aliases: str = Form(""), software: str = Form(""), kind: str | None = Form(None), clear: str = Form(""),
+              back: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
     _, r = user_of(req)
     js = req.headers.get("x-nm-fetch") == "1"   # the in-page ✎ editor wants JSON, plain forms get a redirect
     try:
-        msg = save(ip, "" if clear else name, role, sensitive == "1", notes, u, r, aliases, software)
+        msg = save(ip, "" if clear else name, role, sensitive == "1", notes, u, r, aliases, software, kind)
     except PermissionError as ex:
         if js:
             return JSONResponse({"ok": False, "error": str(ex)}, 403)
@@ -274,9 +302,9 @@ def name_json(ip, role):
     internal = cfg.is_internal(ip)
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
     return {"ip": ip, "internal": internal, "name": a.get("name", ""), "role": a.get("role", ""), "sensitive": bool(a.get("sensitive")),
-            "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "software": a.get("software", []), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
+            "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "software": a.get("software", []), "kind": a.get("kind", ""), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
             "needs": "admin" if internal else "analyst",
-            **({"role_options": role_options()} if internal else {})}
+            **({"role_options": role_options(), "kind_options": list(DEVICE_TYPES)} if internal else {})}
 
 
 @app.get("/netmon/api/name")
@@ -292,7 +320,8 @@ def name_form(req, ip, back, compact=False):
     """Edit form for one address (server or external), pre-filled from the DB."""
     internal = cfg.is_internal(ip)
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
-    extra = (f"""<label>Role<input name=role value="{e(a.get('role', ''))}" maxlength=32 list=nm-roles placeholder="pick or type: web, mail, backup…"></label>
+    extra = (f"""<label>Type{type_select(a.get('kind', ''))}</label>
+<label>Role<input name=role value="{e(a.get('role', ''))}" maxlength=32 list=nm-roles placeholder="pick or type: web, mail, backup…"></label>
 <p class="muted small rolehint" data-ip="{e(ip)}"></p>
 <label class="check"><input type=checkbox name=sensitive value=1 {'checked' if a.get('sensitive') else ''}> Sensitive
 <span class="muted small">— new outbound destinations from this server are raised one severity level</span></label>
@@ -320,7 +349,7 @@ def inventory_page(req: Request, msg: str = ""):
     def edit(ip, ok):
         return f"<details class='tech'><summary>Edit</summary>{name_form(req, ip, back + '#n-' + ip.replace(':', '-'), True)}</details>" if ok else ""
     srows = "".join(f"""<tr id="n-{e(ip.replace(':', '-'))}"><td><a href="/netmon/servers/{e(ip)}">{e(a['name'])}</a>{aka(a)}</td><td class="mono">{e(ip)}</td>
-<td>{e(a.get('role') or '—')}</td><td>{'<span class="tag">sensitive</span>' if a.get('sensitive') else ''}</td><td class="small">{e(a.get('notes', ''))}</td>
+<td>{e(a.get('kind') or '—')}</td><td>{e(a.get('role') or '—')}</td><td>{'<span class="tag">sensitive</span>' if a.get('sensitive') else ''}</td><td class="small">{e(a.get('notes', ''))}</td>
 <td>{edit(ip, admin)}</td></tr>""" for ip, a in assets)
     def src(a):
         s = a.get("source", "")
@@ -338,20 +367,22 @@ def inventory_page(req: Request, msg: str = ""):
 <form method=post action="/netmon/names" class="stackform wide">{csrf_field(req)}<input type=hidden name=back value="{back}">
 <label>IP address<input name=ip required placeholder="10.0.0.50 or 203.0.113.7" class="mono"></label>
 <label>Name<input name=name required maxlength=64></label>
-{'<label>Role <span class="muted small">(internal servers only)</span><input name=role maxlength=32 list=nm-roles></label><label class="check"><input type=checkbox name=sensitive value=1> Sensitive <span class="muted small">(internal servers only)</span></label>' if admin else ''}
+{'<label>Type <span class="muted small">(internal only)</span>' + type_select() + '</label><label>Role <span class="muted small">(internal servers only)</span><input name=role maxlength=32 list=nm-roles></label><label class="check"><input type=checkbox name=sensitive value=1> Sensitive <span class="muted small">(internal servers only)</span></label>' if admin else ''}
 <label>Notes<input name=notes maxlength=300></label><div class="row"><button class="primary">Save</button></div>
 <p class="note">Internal addresses become named servers{'' if admin else ' (admins only)'}; any other address gets a label shown next to it in connection tables and findings.</p></form></section>""" if analyst else ""
-    bulk = f"""<section class="card" id="roles"><div class="card-h"><h2>Assign a role</h2><span class="muted small">several servers at once</span></div>
+    bulk = f"""<section class="card" id="roles"><div class="card-h"><h2>Assign type and role</h2><span class="muted small">several addresses at once</span></div>
 <form method=post action="/netmon/settings/inventory/roles" class="stackform wide">{csrf_field(req)}
-<label>Servers<textarea name=ips rows=2 required class="mono" placeholder="internal IPs or CIDRs, comma- or space-separated (e.g. 10.0.0.21, 10.0.0.30/30)"></textarea></label>
+<label>Addresses<textarea name=ips rows=2 required class="mono" placeholder="internal IPs or CIDRs, comma- or space-separated (e.g. 10.0.0.21, 10.0.0.30/30)"></textarea></label>
+<label>Type{type_select(name="kind", keep=True)}</label>
 <label>Role<input name=role maxlength=32 list=nm-roles placeholder="pick or type; leave blank to clear"></label>
+<label class="check"><input type=checkbox name=keep_role value=1> Keep each address's current role <span class="muted small">— set only the type</span></label>
 <label class="check"><input type=checkbox name=only_named value=1> Only servers already named <span class="muted small">— otherwise unnamed addresses are added, listed under their IP</span></label>
-<div class="row"><button class="primary">Assign role</button></div>
-<p class="note">Only the role changes; names, notes and other settings of named servers are kept. At most {BULK_MAX} addresses.</p></form></section>""" if admin else ""
+<div class="row"><button class="primary">Assign</button></div>
+<p class="note">Only type and role change; names, notes and other settings of named servers are kept. At most {BULK_MAX} addresses.</p></form></section>""" if admin else ""
     body = f"""{role_datalist()}{tabs(SETTINGS_TABS, back)}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}
 <section class="card"><div class="card-h"><h2>Internal servers</h2><span class="muted small">{len(assets)} named · stored in the netmon database</span></div>
-<div class="wrap"><table class="tbl"><thead><tr><th>Name</th><th>IP</th><th>Role</th><th></th><th>Notes</th><th></th></tr></thead>
-<tbody>{srows or '<tr><td colspan=6 class="state empty">No servers named yet</td></tr>'}</tbody></table></div>
+<div class="wrap"><table class="tbl"><thead><tr><th>Name</th><th>IP</th><th>Type</th><th>Role</th><th></th><th>Notes</th><th></th></tr></thead>
+<tbody>{srows or '<tr><td colspan=7 class="state empty">No servers named yet</td></tr>'}</tbody></table></div>
 <p class="note">Names appear across the dashboard, in finding titles and notifications. Before AI analysis, server names are replaced by pseudonyms just like internal IPs.
 A server's role tells AI analysis what is normal for it (inbound mail to a mail server, outbound connections from a crawler).</p></section>
 {bulk}
@@ -363,12 +394,13 @@ A server's role tells AI analysis what is normal for it (inbound mail to a mail 
 
 
 @app.post("/netmon/settings/inventory/roles")
-def post_roles(req: Request, ips: str = Form(...), role: str = Form(""), only_named: str = Form(""), csrf: str = Form("")):
+def post_roles(req: Request, ips: str = Form(...), role: str = Form(""), only_named: str = Form(""), kind: str = Form("__keep"),
+               keep_role: str = Form(""), csrf: str = Form("")):
     u = need(req, "admin")
     check_csrf(req, csrf)
     _, r = user_of(req)
     try:
-        msg = assign_role(ips, role, u, r, only_named == "1")
+        msg = assign_role(ips, role, u, r, only_named == "1", kind, keep_role == "1")
     except PermissionError as ex:
         raise HTTPException(403, str(ex))
     except ValueError as ex:

@@ -51,7 +51,8 @@ SYSTEM = (
     "it is still happening and how often it recurred, and 'asset_context': a shared outbound NAT address aggregates many "
     "hosts, so volume or fan-out from it is weaker evidence than the same pattern from one server) and explain it in "
     "score_rationale with evidence_id citations. "
-    "Calibrate against what the server does. asset_context gives declared_role (set by the administrator), software, "
+    "Calibrate against what the server does. asset_context gives device_type (what the address is: virtual machine, "
+    "workstation, printer, IoT / camera...), declared_role (what it does; both set by the administrator), software, "
     "admin_notes, expected_device (an admin marked this traffic as known and legitimate) and observed_role / "
     "observed_serves / observed_uses (services remote clients connected to, and remote services it connected to, over the "
     "last 7 days). Activity that matches the server's function is weaker evidence: inbound SMTP/IMAP to a mail server, "
@@ -59,7 +60,9 @@ SYSTEM = (
     "reverse proxy to its backends. The same activity on a server whose function does not include it is stronger evidence: "
     "outbound SMTP from a web, backup or storage server, new listening ports, SSH or admin panels reached from many "
     "remotes on a server not declared for remote access. A mismatch between declared_role and observed_role is itself "
-    "worth noting. Say in score_rationale how the server's function moved the score. Name the function in plain words "
+    "worth noting. Weigh the device type too: a workstation, printer, phone or IoT device accepting connections from the "
+    "internet, or an IoT device or printer opening connections to many remotes, is stronger evidence than the same "
+    "pattern on a server. Say in score_rationale how the server's function moved the score. Name the function in plain words "
     "(for example 'mail server') in the summary."
 )
 

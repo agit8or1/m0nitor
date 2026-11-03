@@ -71,7 +71,7 @@ def observed(dash, ip, site="all"):
 def server_profile(cfg, conn, dash, ip):
     """Declared + observed function of an internal server. Never raises: the profile is context, not evidence."""
     a = cfg.get("assets", {}).get(ip) or {}
-    out = {"declared_role": a.get("role") or "not set", "software": a.get("software", []),
+    out = {"device_type": a.get("kind") or "not set", "declared_role": a.get("role") or "not set", "software": a.get("software", []),
            "sensitive": bool(a.get("sensitive"))}
     if a.get("notes"):
         out["admin_notes"] = str(a["notes"])[:200]
