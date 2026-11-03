@@ -22,6 +22,7 @@ SETTINGS_TABS = [("Health", "/netmon/settings", "Status", False), ("Coverage", "
                  ("Devices", "/netmon/settings/devices", "Data", False),
                  ("Data sources", "/netmon/settings/integrations", "Data", False),
                  ("Inventory", "/netmon/settings/inventory", "Data", False),
+                 ("Firewall permissions", "/netmon/settings/permissions", "Data", False),
                  ("Alert rules", "/netmon/settings/rules", "Detection & response", False),
                  ("Notifications", "/netmon/settings/notifications", "Detection & response", False),
                  ("Auto-response", "/netmon/settings/response", "Detection & response", False),
@@ -63,7 +64,8 @@ TIPS = {
 <li>Firewall → Aliases → +: name <code>netmon_block</code>, type <b>Host(s)</b>, empty content. Apply.</li>
 <li>Firewall → Rules → Floating, at the top: <b>Block</b>, Quick ✓, interface <code>WAN</code>, direction in, source <code>netmon_block</code>, Log ✓; and <b>Block</b>,
 Quick ✓, your internal interfaces (LAN, VPN), direction in, destination <code>netmon_block</code>, Log ✓. Apply (an empty alias matches nothing).</li>
-<li>System → Access → Users → + <code>netmon-block</code> (no shell, not admin) with only the privilege <i>Diagnostics: PF Table IP addresses</i> → API keys → + (downloads <code>apikey.txt</code>).</li>
+<li>System → Access → Users → + <code>netmon</code> (no shell, not admin, never "All pages"). Effective Privileges: <i>Diagnostics: PF Table IP addresses</i> is the minimum for blocking;
+add the others listed on <a href="/netmon/settings/permissions">Settings → Firewall permissions</a> for the features you want (creating netmon's rules, dropping states, 1:1 NAT and virtual IP sync, inventory discovery). API keys → + (downloads <code>apikey.txt</code>).</li>
 <li>On the monitor: <code>sudo install -o 10001 -g 10001 -m 600 apikey.txt /opt/netmon/secrets/opnsense_block.key &amp;&amp; shred -u apikey.txt</code>, then restart the app.</li></ol>
 <p class="sub">Rollback: remove the entry here, or disable the two floating rules. Existing connections continue until they close.</p>"""),
     "geoip": ("Country (GeoIP) blocking on OPNsense", """<ol>
@@ -977,7 +979,7 @@ Destination <code>{mon}:2055</code> · active timeout <code>120</code> s. Read i
 <li><b>Firewall logs</b> — System → Settings → Logging → Remote → +: Transport <code>TCP(4)</code> · Applications <code>filterlog</code>, <code>suricata</code> ·
 Hostname <code>{mon}</code> · Port <code>5514</code> · RFC 5424 ✓.</li>
 <li><b>Bandwidth counters (optional)</b> — Plugins: <code>os-net-snmp</code>; Services → Net-SNMP: read-only community on the LAN address; WAN ifIndex = Link#N.</li>
-<li><b>Blocking (optional)</b> — API key for a user with only <i>Diagnostics: PF Table IP addresses</i>; alias <code>{e((x.get('block') or {}).get('block_alias', 'netmon_block'))}</code>; rules per docs/BLOCKING.md.</li>
+<li><b>Firewall API (optional)</b> — API key for a dedicated, non-admin user with the privileges on <a href="/netmon/settings/permissions">Firewall permissions</a> (minimum for blocking: <i>Diagnostics: PF Table IP addresses</i>); alias <code>{e((x.get('block') or {}).get('block_alias', 'netmon_block'))}</code>; rules per docs/BLOCKING.md.</li>
 <li><b>Path to the monitor</b> — remote firewalls reach <code>{mon}</code> through a site-to-site VPN; enter the source addresses the monitor sees.</li></ol>"""
 
 
@@ -1013,7 +1015,7 @@ def conn_form(req, x=None):
 <label>SNMP host<input name=snmp_host value="{e(sn.get('host', ''))}" placeholder="firewall LAN address"></label>
 <label>WAN ifIndex (SNMP)<input name=snmp_idx type=number min=1 max=65535 value="{e(snidx)}"></label>
 <label>Read-only community<input name=snmp_comm type=password autocomplete=off placeholder="{'stored — leave blank to keep' if sn.get('community_file') else ''}"></label></div></fieldset>
-<fieldset><legend>Blocking (optional)</legend><div class="formgrid">
+<fieldset><legend>Firewall API (optional: blocking, name sync, discovery) · <a href="/netmon/settings/permissions">required privileges</a></legend><div class="formgrid">
 <label>API base URL (https)<input name=block_url value="{e(b.get('base_url', ''))}" placeholder="https://10.20.0.1"></label>
 <label>TLS name (if the cert is for a hostname)<input name=block_tls value="{e(b.get('tls_server_name', ''))}" placeholder="fw.example.net"></label>
 <label>Alias<input name=block_alias value="{e(b.get('block_alias', 'netmon_block'))}" pattern="[A-Za-z0-9_]{{1,31}}"></label>
@@ -1338,3 +1340,7 @@ def delete_site(req: Request, sid: str, csrf: str = Form("")):
     audit(conn, u, "site_deleted", {"site": sid})
     return RedirectResponse("/netmon/settings/sites?msg=" + quote(f"Deleted {sid}. Its senders are removed from the host access lists; "
                                                                   "past alerts and data stay."), 303)
+
+
+from . import fwperms  # noqa: E402
+fwperms.register(app, cfg, need, page, e, tabs, SETTINGS_TABS)

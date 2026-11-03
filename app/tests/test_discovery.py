@@ -87,3 +87,25 @@ def test_inventory_and_devices_page_show_categories():
     page = a.get("/netmon/settings/inventory").text
     assert "<h2>Internal devices</h2>" in page and 'class="catgroup"' in page and "Unclassified" in page
     assert ">Internal devices<" in a.get("/netmon/servers").text
+
+
+def test_arp_uses_search_arp_and_falls_back(cfg, monkeypatch):
+    from netmon import block as blk
+    calls = []
+
+    def fake(self, method, path, data=None, json_=None, params=None):
+        calls.append(path)
+        if path.endswith("search_arp") and self.base_url == "old":
+            raise blk.BlockError("OPNsense HTTP 404")
+        return {"rows": [{"ip": "10.40.0.90", "mac": "52:54:00:aa:bb:cc", "manufacturer": "", "hostname": "vm-90", "permanent": False},
+                         {"ip": "198.51.100.1", "mac": "00:11:22:33:44:55"}]} if path.endswith("search_arp") else \
+            [{"ip": "10.40.0.91", "mac": "52:54:00:aa:bb:cd"}]
+    monkeypatch.setattr(blk.OPNsense, "_call", fake)
+    monkeypatch.setattr(blk.OPNsense, "enabled", property(lambda self: True))
+    site = cfg.sites[0]
+    monkeypatch.setattr(type(cfg), "sites", property(lambda self: [{**site, "vendor": "opnsense", "block": {"base_url": "new"}}]))
+    rows, st = discovery.arp_rows(cfg)
+    assert set(rows) == {"10.40.0.90"} and rows["10.40.0.90"]["hostname"] == "vm-90" and st[site["id"]].startswith("ok")
+    monkeypatch.setattr(type(cfg), "sites", property(lambda self: [{**site, "vendor": "opnsense", "block": {"base_url": "old"}}]))
+    rows, _ = discovery.arp_rows(cfg)
+    assert set(rows) == {"10.40.0.91"} and calls[-1].endswith("getArp")

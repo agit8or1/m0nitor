@@ -129,7 +129,7 @@ installation needs. See [hardware sizing](docs/hardware-sizing.md), [capacity pl
 | | |
 |---|---|
 | [Demo](docs/demo.md) · [Install, upgrade, backup, rollback](docs/install.md) · [Configuration](docs/configuration.md) | getting started |
-| [Devices](docs/devices.md) · [Compatibility matrix](docs/vendors.md) · [OPNsense / pfSense setup](docs/opnsense-setup.md) · [Blocking](docs/BLOCKING.md) · [GeoIP](docs/geoip.md) | device side |
+| [Devices](docs/devices.md) · [Compatibility matrix](docs/vendors.md) · [OPNsense / pfSense setup](docs/opnsense-setup.md) · [Blocking](docs/BLOCKING.md) · [Firewall API permissions](docs/opnsense-permissions.md) · [GeoIP](docs/geoip.md) | device side |
 | [Maps](docs/maps.md) · [Findings and alerting](docs/alerting.md) · [NAT attribution](docs/nat-attribution.md) · [Threat intel](docs/threat-intel.md) | using m0nitor |
 | [Hardware sizing](docs/hardware-sizing.md) · [Capacity planning](docs/capacity-planning.md) · [Firewall resource requirements](docs/firewall-resource-requirements.md) · [Benchmarks](docs/performance-benchmarks.md) | sizing |
 | [Architecture](docs/architecture.md) · [API and storage](docs/api.md) · [Security and privacy](docs/privacy-hardening.md) | internals |

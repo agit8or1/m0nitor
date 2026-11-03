@@ -55,6 +55,18 @@ def _usable(cfg, ip):
     return True
 
 
+def _arp_call(fw):
+    """Current OPNsense: search_arp (grid endpoint, all rows). Older releases only have getArp; the same privilege
+    ("Diagnostics: ARP Table") may cover only one of them, so try the current one first."""
+    try:
+        return fw._call("GET", "/api/diagnostics/interface/search_arp", params={"rowCount": "-1", "current": "1"})
+    except Exception as first:
+        try:
+            return fw._call("GET", "/api/diagnostics/interface/getArp")
+        except Exception:
+            raise first
+
+
 def arp_rows(cfg):
     """({ip: {mac, vendor, hostname, site}}, {site: "ok (N)" | error}) from every OPNsense site's ARP table."""
     from . import block as blk
@@ -64,7 +76,7 @@ def arp_rows(cfg):
         if not isinstance(fw, blk.OPNsense) or not fw.enabled:
             continue
         try:
-            rows = fw._call("GET", "/api/diagnostics/interface/getArp")
+            rows = _arp_call(fw)
         except Exception as ex:
             msg = str(ex)
             status[site["id"]] = ("no permission: give the netmon API user the privilege \"Diagnostics: ARP Table\""

@@ -11,9 +11,10 @@ objects, and only when you enable those features — see [BLOCKING.md](BLOCKING.
    filterlog, suricata, dpinger, wireguard, openvpn, audit, configd.py (and unbound for DNS context, optional).
 3. **SNMP (optional)** — plugin os-net-snmp, read-only community, LAN address only. Community goes in `secrets/snmp_community`.
 4. **Suricata (optional)** — Services → Intrusion Detection: IPS mode **off**, syslog alerts + eve syslog output on.
-5. **API user (optional; needed for the live GeoIP policy, inventory sync and blocking)** — a dedicated user with only:
-   Firewall: Alias: Edit (alias_util), Firewall: Rules (read), Virtual IPs, 1:1 NAT pages (read in practice). Store the
-   key as `secrets/opnsense_block.key` or per firewall in Settings → Firewalls. See [BLOCKING.md](BLOCKING.md) for the alias and rules.
+5. **API user (optional; needed for blocking, the live GeoIP policy, name sync and inventory discovery)** — a
+   dedicated, non-admin user with only the privileges for the features you want. The full list, per feature, is in
+   [opnsense-permissions.md](opnsense-permissions.md); Settings → Firewall permissions checks the account live. Enter
+   the key per firewall in Settings → Firewalls & sites. See [BLOCKING.md](BLOCKING.md) for the alias and rules.
 
 ## Unbound query logging (optional, for DNS context)
 Services → Unbound DNS → Advanced: Log queries / Log replies. Volume can be large; DNS retention is separately

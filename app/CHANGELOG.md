@@ -3,6 +3,27 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.38 — 2026-11-03
+
+### Added
+- **Settings → Firewall permissions**: every OPNsense API privilege netmon uses, what needs it (blocking, blocking
+  setup, name sync, discovery, dropping states) and the endpoints behind it, plus **Check this account now**, which
+  makes one read-only call per privilege and shows ✓ granted / ✗ missing for each firewall. pfSense REST API
+  privileges are listed for pfSense sites. Privilege names are taken from OPNsense's own ACL definitions.
+- New guide `docs/opnsense-permissions.md` with the same list, how to create the API user and how to remove access.
+
+### Fixed
+- The setup tips and the firewall connection form said a user with only "Diagnostics: PF Table IP addresses" was
+  enough; that covers blocking only. They now point to the full list. The firewall setup guide named privileges that
+  do not match OPNsense's; corrected.
+
+## v1.37 — 2026-11-03
+
+### Fixed
+- **Auto-discovery read no ARP table on current OPNsense.** It called the legacy `getArp` endpoint, which current
+  releases refuse even with the "Diagnostics: ARP Table" privilege. It now uses `search_arp` (all rows) and falls
+  back to `getArp` on older firewalls.
+
 ## v1.36 — 2026-11-03
 
 ### Changed

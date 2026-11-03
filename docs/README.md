@@ -8,6 +8,7 @@
 | **Devices** — add routers, switches and other vendors' firewalls; what is actually arriving | [devices.md](devices.md) |
 | **Device compatibility** — VERIFIED / PARTIAL / GENERIC per vendor, protocols, test coverage | [vendors.md](vendors.md) |
 | **Firewall setup** — OPNsense and pfSense: NetFlow, syslog, SNMP, Suricata, API user, Unbound | [opnsense-setup.md](opnsense-setup.md) |
+| **Firewall API permissions** — the privileges the API user needs, per feature, and the live check | [opnsense-permissions.md](opnsense-permissions.md) |
 | **Blocking** — one-time alias and rules per firewall | [BLOCKING.md](BLOCKING.md) |
 | **Maps and traffic views** — arcs, tooltips, WAN aliases, reverse DNS | [maps.md](maps.md) |
 | **Findings and alerting** — rules, notifications, suppressions, auto-response | [alerting.md](alerting.md) |

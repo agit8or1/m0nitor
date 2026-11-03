@@ -30,9 +30,11 @@ Kill them manually if needed (Firewall → Diagnostics → States, filter by add
 ## 3. Enforcement API user (separate from the read-only SSH key)
 System → Access → Users → +
 - Username `netmon-block`, scrambled random password, no shell, not in admins group
-- Effective privileges: **only** `Diagnostics: PF Table IP addresses`
+- Effective privileges: `Diagnostics: PF Table IP addresses` is the minimum for blocking
   (grants api/firewall/alias_util/*; verified in Core ACL.xml on 26.7.7).
   This privilege can modify any alias via alias_util; netmon hard-codes `netmon_block`.
+  For letting netmon create its aliases, category and rules itself, dropping states, name sync and inventory
+  discovery, see the full per-feature list in [opnsense-permissions.md](opnsense-permissions.md).
 - API keys → + → downloads `apikey.txt`
 
 On the monitor VM:
