@@ -3,6 +3,14 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.39 — 2026-11-03
+
+### Added
+- **Device type "management controller (iDRAC / iLO / IPMI)"** in a new **Management** category, for out-of-band
+  management cards. Auto-discovery sets it when the firewall's hostname for the address names one (`idrac-…`,
+  `ilo-…`, `ipmi`, `bmc`, `imm`, `xcc`, `irmc`). AI analysis treats internet connections to a management controller
+  as a serious exposure, while NTP, DNS, alert e-mail and vendor update traffic from it is normal.
+
 ## v1.38 — 2026-11-03
 
 ### Added

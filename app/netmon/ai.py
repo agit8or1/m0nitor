@@ -62,7 +62,9 @@ SYSTEM = (
     "remotes on a server not declared for remote access. A mismatch between declared_role and observed_role is itself "
     "worth noting. Weigh the device type too: a workstation, printer, phone or IoT device accepting connections from the "
     "internet, or an IoT device or printer opening connections to many remotes, is stronger evidence than the same "
-    "pattern on a server. Say in score_rationale how the server's function moved the score. Name the function in plain words "
+    "pattern on a server. A management controller (iDRAC / iLO / IPMI) normally talks only to admins, NTP, DNS, mail "
+    "(alert e-mails) and its vendor's update servers; inbound connections to it from the internet are a serious exposure. "
+    "Say in score_rationale how the server's function moved the score. Name the function in plain words "
     "(for example 'mail server') in the summary."
 )
 

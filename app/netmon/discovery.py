@@ -16,7 +16,7 @@ import re
 import time
 
 from .core import audit, get_setting, get_state, put_setting, set_state
-from .devtypes import type_from_mac, vendor_of
+from .devtypes import type_from_hostname, type_from_mac, vendor_of
 
 KEY = "discovery"           # setting: {"enabled": bool}
 STATE = "discovery"         # state: last run summary
@@ -101,6 +101,8 @@ def merge(db, seen, arp, now):
     for ip in sorted(set(seen) | set(arp), key=ipaddress.ip_address):
         a = arp.get(ip, {})
         kind, why = type_from_mac(a.get("mac"), a.get("vendor", ""))
+        if not kind:
+            kind, why = type_from_hostname(a.get("hostname"))
         cur = db.get(ip)
         if cur is None:
             host = a.get("hostname", "")

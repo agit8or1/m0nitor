@@ -8,12 +8,14 @@ import re
 import threading
 
 DEVICE_TYPES = ("physical server", "virtual machine", "container", "hypervisor host", "workstation / laptop", "mobile device",
-                "printer", "IoT / camera", "VoIP phone", "network device (switch / AP)", "firewall / router", "storage / NAS", "other")
+                "printer", "IoT / camera", "VoIP phone", "network device (switch / AP)", "firewall / router", "storage / NAS",
+                "management controller (iDRAC / iLO / IPMI)", "other")
 
 CATEGORIES = (   # (category, types) in display order; an address without a type is "Unclassified"
     ("Servers", ("physical server", "hypervisor host", "storage / NAS")),
     ("Virtual", ("virtual machine", "container")),
     ("Network", ("firewall / router", "network device (switch / AP)")),
+    ("Management", ("management controller (iDRAC / iLO / IPMI)",)),
     ("Endpoints", ("workstation / laptop", "mobile device", "VoIP phone")),
     ("IoT & peripherals", ("printer", "IoT / camera")),
     ("Other", ("other",)),
@@ -95,6 +97,19 @@ def vendor_of(mac):
         if org and org.lower() != "private":
             return org
     return ""
+
+
+# hostnames that name an out-of-band management controller (the firewall's ARP/DHCP hostname)
+HOSTNAME_TYPES = ((r"(^|[^a-z])(idrac|ilo|ipmi|bmc|imm|xcc|irmc)([^a-z]|$)", "management controller (iDRAC / iLO / IPMI)"),)
+
+
+def type_from_hostname(host):
+    """(type, reason) when the hostname names the device type, else (None, None)."""
+    h = (host or "").lower()
+    for rx, t in HOSTNAME_TYPES:
+        if re.search(rx, h):
+            return t, f"hostname ({host})"
+    return None, None
 
 
 def type_from_mac(mac, vendor=""):

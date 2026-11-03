@@ -7,13 +7,13 @@ def test_merge_adds_new_fills_empty_and_never_overwrites():
     seen = {"10.40.0.240": 100, "10.40.0.50": 200}
     arp = {"10.40.0.240": {"mac": "bc:24:11:5a:b7:d9", "vendor": "Proxmox Server Solutions", "hostname": "", "site": "site-a"},
            "10.40.0.8": {"mac": "bc:24:11:00:00:08", "vendor": "", "hostname": "", "site": "site-a"},
-           "10.40.0.60": {"mac": "e4:43:4b:8a:e0:aa", "vendor": "Dell Inc.", "hostname": "idrac-1.lan", "site": "site-a"},
+           "10.40.0.60": {"mac": "e4:43:4b:8a:e0:aa", "vendor": "Dell Inc.", "hostname": "rack-60.lan", "site": "site-a"},
            "10.40.0.61": {"mac": "00:50:56:01:02:03", "vendor": "VMware", "hostname": "bad name <x>", "site": "site-a"}}
     db, added, filled = discovery.merge(db, seen, arp, 1000)
     assert added == ["10.40.0.50", "10.40.0.60", "10.40.0.61"]
     assert db["10.40.0.50"] == {"name": "10.40.0.50", "role": "", "sensitive": False, "source": "auto", "discovered": 1000,
                                 "notes": "auto-discovered from traffic", "last_seen": 200}
-    assert db["10.40.0.60"]["name"] == "idrac-1.lan" and "kind" not in db["10.40.0.60"] and db["10.40.0.60"]["vendor"] == "Dell Inc."
+    assert db["10.40.0.60"]["name"] == "rack-60.lan" and "kind" not in db["10.40.0.60"] and db["10.40.0.60"]["vendor"] == "Dell Inc."
     assert db["10.40.0.61"]["name"] == "10.40.0.61" and db["10.40.0.61"]["kind"] == "virtual machine"
     # existing: empty type filled from a virtual MAC, a person's type kept, name/role untouched
     assert db["10.40.0.240"]["kind"] == "virtual machine" and db["10.40.0.240"]["name"] == "mail-1" and "source" not in db["10.40.0.240"]
@@ -109,3 +109,14 @@ def test_arp_uses_search_arp_and_falls_back(cfg, monkeypatch):
     monkeypatch.setattr(type(cfg), "sites", property(lambda self: [{**site, "vendor": "opnsense", "block": {"base_url": "old"}}]))
     rows, _ = discovery.arp_rows(cfg)
     assert set(rows) == {"10.40.0.91"} and calls[-1].endswith("getArp")
+
+
+def test_management_controller_type_from_hostname():
+    from netmon import devtypes
+    t = "management controller (iDRAC / iLO / IPMI)"
+    assert t in devtypes.DEVICE_TYPES and devtypes.category_of(t) == "Management"
+    assert devtypes.type_from_hostname("idrac-pve05")[0] == t and devtypes.type_from_hostname("srv1-ilo.lan")[0] == t
+    assert devtypes.type_from_hostname("bmc")[0] == t
+    assert devtypes.type_from_hostname("mobile-phone") == (None, None) and devtypes.type_from_hostname("") == (None, None)
+    db, added, _ = discovery.merge({}, {}, {"10.40.0.80": {"mac": "4c:d9:8f:80:84:22", "vendor": "Dell Inc.", "hostname": "idrac-x1"}}, 1)
+    assert db["10.40.0.80"]["kind"] == t and db["10.40.0.80"]["kind_source"] == "hostname (idrac-x1)"
