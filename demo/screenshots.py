@@ -47,6 +47,37 @@ def hover_arc(pg, sel="#map path.arc.in"):
     pg.wait_for_timeout(500)
 
 
+def investigation(pg):
+    """Investigation pages (docs/investigation.md). Creates one demo application through the UI if none exists."""
+    shot(pg, "/netmon/incidents", "incidents", 2000)
+    pg.goto(B + "/netmon/incidents")
+    link = pg.locator("a.ft").first
+    if link.count():
+        link.click()
+        pg.wait_for_load_state("networkidle")
+        pg.wait_for_timeout(1500)
+        save(pg, "incident-detail")
+    shot(pg, "/netmon/changes", "what-changed", 3000)
+    shot(pg, "/netmon/search/flows?q=" + "Which devices talked to Russia in the last 3 days?".replace(" ", "+"), "search", 3000)
+    pg.goto(B + "/netmon/apps")
+    if not pg.locator("a[href^='/netmon/apps/']").count():
+        pg.fill("form[action='/netmon/apps/new'] input[name=name]", "Web shop")
+        pg.fill("form[action='/netmon/apps/new'] input[name=members]", "10.40.0.250 10.40.0.74")
+        pg.click("form[action='/netmon/apps/new'] button")
+        pg.wait_for_load_state("networkidle")
+    pg.goto(B + "/netmon/apps")
+    pg.locator("a[href^='/netmon/apps/']").first.click()
+    pg.wait_for_load_state("networkidle")
+    pg.wait_for_timeout(2500)
+    save(pg, "app-dependencies")
+    pg.goto(B + "/netmon/detections/test")
+    pg.wait_for_load_state("networkidle")
+    pg.click("button[name=all]")
+    pg.wait_for_load_state("networkidle")
+    pg.wait_for_timeout(1500)
+    save(pg, "detection-test")
+
+
 with sync_playwright() as p:
     b = p.chromium.launch()
     fan = os.environ.get("FANOUT_ID", "")
@@ -73,6 +104,7 @@ with sync_playwright() as p:
             shot(pg, "/netmon/settings", "settings", 2000)
             shot(pg, "/netmon/settings/devices", "devices", 2500)
             shot(pg, "/netmon/settings/devices/fgt-branch", "device-detail", 2500)
+            investigation(pg)
     m = login(b.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, device_scale_factor=2))
     shot(m, "/", "mobile-overview", 4000)
     print("mobile scrollWidth", m.evaluate("document.documentElement.scrollWidth"))

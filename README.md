@@ -40,6 +40,12 @@ the forwarding path: if it stops, your traffic is unaffected.
   → [Findings and alerting](docs/alerting.md)
 - **NAT attribution** — traffic behind a shared outbound NAT address is attributed to LAN hosts from the return path,
   with an explicit confidence tier. → [NAT attribution](docs/nat-attribution.md)
+- **Investigation** — devices keep one identity across address changes; *What changed?* compares two periods;
+  related findings are grouped into **incidents** you assign, resolve or dismiss; learned baselines with reviewed
+  exceptions; retrospective threat hunts against indicator lists; segmentation policies checked against observed
+  traffic; application dependency maps with outage impact; opt-in WAN / VPN quality probes that separate facts from
+  the suspected cause; plain-English, read-only search; and detection tests on synthetic data plus rule-change replay.
+  → [Investigation](docs/investigation.md)
 - **Firewall context** — logged blocks by country, the live GeoIP policy (policy vs. enforcement), configuration and
   authentication events from syslog.
 - **Coverage** — which telemetry is actually arriving and what each view can and cannot see.
@@ -64,6 +70,9 @@ All screenshots come from the isolated [demo](docs/demo.md): synthetic data and 
 | ![Connections table with direction, country, organization and service](docs/screenshots/connections.png) **Connections** | ![Server page with addresses and bandwidth history](docs/screenshots/server-detail.png) **Server bandwidth** |
 | ![Countries map shaded by the configured GeoIP policy](docs/screenshots/countries-light.png) **Countries and GeoIP policy** | ![Coverage page with per-source health](docs/screenshots/coverage.png) **Coverage and source health** |
 | ![Servers list](docs/screenshots/servers.png) **Servers** | ![Settings health page with grouped settings menu](docs/screenshots/settings.png) **Settings** |
+| ![Incidents list with grouped findings, status, assignment and a Dismiss button](docs/screenshots/incidents.png) **Incidents** | ![Incident page: what happened, affected devices, why it matters, confidence and next steps](docs/screenshots/incident-detail.png) **Incident detail** |
+| ![What changed: today vs yesterday, ranked changes with confidence and evidence links](docs/screenshots/what-changed.png) **What changed?** | ![Plain-English search: the question, the filters it became, and read-only results](docs/screenshots/search.png) **Plain-English search** |
+| ![Application dependencies with service, evidence, first seen and confirm buttons](docs/screenshots/app-dependencies.png) **Application dependencies** | ![Detection tests: synthetic scenarios with expected vs actual and the rule's explanation](docs/screenshots/detection-test.png) **Detection tests** |
 | ![Devices list: site firewall and additional devices with profile status and live telemetry per protocol](docs/screenshots/devices.png) **Devices — multi-vendor onboarding** | ![Device page: supported, configured and receiving per protocol with evidence](docs/screenshots/device-detail.png) **Device detail — evidence per protocol** |
 
 <p align="center"><img src="docs/screenshots/mobile-overview.png" alt="Overview on a phone" width="260"><br><b>Mobile</b></p>
@@ -130,7 +139,7 @@ installation needs. See [hardware sizing](docs/hardware-sizing.md), [capacity pl
 |---|---|
 | [Demo](docs/demo.md) · [Install, upgrade, backup, rollback](docs/install.md) · [Configuration](docs/configuration.md) | getting started |
 | [Devices](docs/devices.md) · [Compatibility matrix](docs/vendors.md) · [OPNsense / pfSense setup](docs/opnsense-setup.md) · [Blocking](docs/BLOCKING.md) · [Firewall API permissions](docs/opnsense-permissions.md) · [GeoIP](docs/geoip.md) | device side |
-| [Maps](docs/maps.md) · [Findings and alerting](docs/alerting.md) · [NAT attribution](docs/nat-attribution.md) · [Threat intel](docs/threat-intel.md) | using m0nitor |
+| [Investigation](docs/investigation.md) · [Maps](docs/maps.md) · [Findings and alerting](docs/alerting.md) · [NAT attribution](docs/nat-attribution.md) · [Threat intel](docs/threat-intel.md) | using m0nitor |
 | [Hardware sizing](docs/hardware-sizing.md) · [Capacity planning](docs/capacity-planning.md) · [Firewall resource requirements](docs/firewall-resource-requirements.md) · [Benchmarks](docs/performance-benchmarks.md) | sizing |
 | [Architecture](docs/architecture.md) · [API and storage](docs/api.md) · [Security and privacy](docs/privacy-hardening.md) | internals |
 | [Troubleshooting](docs/troubleshooting.md) · [Roadmap](docs/ROADMAP.md) · [All docs](docs/README.md) | more |

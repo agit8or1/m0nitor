@@ -2,7 +2,9 @@
 
 Not commitments; ordered roughly by value.
 
-- Configuration-change history page from OPNsense audit events; authentication events view.
+- Authentication events view. (Configuration changes now appear on *What changed?* with their own evidence page.)
+- Per-user firewall (site) restrictions, enforced on every page and API rather than in one view.
+- Detection-test scenarios for IDS and firewall-log rules (traffic rules are covered today).
 - Server page DNS card (transport + names with correlation confidence).
 - Optional adapters: LibreNMS (interface counters), NetBox (inventory and prefixes).
 - External exposure checks (certificate expiry for published services) — only against your own addresses, opt-in.

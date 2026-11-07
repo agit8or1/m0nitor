@@ -178,3 +178,35 @@ def test_detector_record_correlates_before_notifying():
     assert d.record({**base, "rule": "beaconing", "subject": "198.51.100.81", "title": "t1"}, now) == 1
     assert d.record({**base, "rule": "fanout", "subject": "*", "title": "t2"}, now) == 1
     assert calls[0][1] is None and calls[1][1] is not None
+
+
+def test_dismiss_button_per_incident_keeps_findings_and_can_reopen():
+    a = alert(asset="10.50.8.1", subject="198.51.100.81")
+    b = alert(rule="fanout", asset="10.50.8.1", subject="*")
+    corr(a)
+    iid = corr(b)
+    v = client("viewer1", VIEWPW)
+    assert f"/netmon/incidents/{iid}/dismiss" not in v.get("/netmon/incidents").text      # viewers see no button
+    assert v.post(f"/netmon/incidents/{iid}/dismiss", data={"csrf": web.csrf_token(sid(v))}).status_code == 403
+    an = client("analyst1", ANALYSTPW)
+    tok = web.csrf_token(sid(an))
+    lst = an.get("/netmon/incidents?status=open").text
+    assert f"/netmon/incidents/{iid}/dismiss" in lst and "data-confirm" in lst
+    assert f"/netmon/incidents/{iid}/dismiss" in an.get(f"/netmon/incidents/{iid}").text
+    assert an.post(f"/netmon/incidents/{iid}/dismiss", data={"csrf": "bad"}).status_code in (400, 403)
+    r = an.post(f"/netmon/incidents/{iid}/dismiss", data={"back": "/netmon/incidents?status=open", "csrf": tok}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/netmon/incidents?status=open&msg=")
+    row = web.conn.execute("SELECT status, resolution FROM incidents WHERE id=?", (iid,)).fetchone()
+    assert tuple(row) == ("resolved", "dismissed")
+    st = {x[0] for x in web.conn.execute("SELECT status FROM alerts WHERE id IN (?,?)", (a, b))}
+    assert "closed" not in st                                                         # findings untouched
+    assert web.conn.execute("SELECT count(*) FROM incident_events WHERE incident_id=? AND user='analyst1'", (iid,)).fetchone()[0] >= 1
+    assert "Dismissed" in an.get(f"/netmon/incidents/{iid}").text
+    assert f"/netmon/incidents/{iid}/dismiss" not in an.get("/netmon/incidents?status=open").text
+    # off-site back is ignored; an already-resolved incident keeps its reason
+    r = an.post(f"/netmon/incidents/{iid}/dismiss", data={"back": "https://evil.example/", "csrf": tok}, follow_redirects=False)
+    assert r.headers["location"].startswith(f"/netmon/incidents/{iid}?msg=")
+    assert f"/netmon/incidents/{iid}/reopen" in an.get("/netmon/incidents?status=resolved").text
+    an.post(f"/netmon/incidents/{iid}/reopen", data={"csrf": tok})
+    assert web.conn.execute("SELECT status, resolution FROM incidents WHERE id=?", (iid,)).fetchone()[0] == "open"
+    assert an.post("/netmon/incidents/999999/dismiss", data={"csrf": tok}).status_code == 404

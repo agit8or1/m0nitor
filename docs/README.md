@@ -10,6 +10,7 @@
 | **Firewall setup** — OPNsense and pfSense: NetFlow, syslog, SNMP, Suricata, API user, Unbound | [opnsense-setup.md](opnsense-setup.md) |
 | **Firewall API permissions** — the privileges the API user needs, per feature, and the live check | [opnsense-permissions.md](opnsense-permissions.md) |
 | **Blocking** — one-time alias and rules per firewall | [BLOCKING.md](BLOCKING.md) |
+| **Investigation** — device identity, what changed, incidents, baselines, threat hunting, segmentation, applications, WAN / VPN quality, search, detection tests | [investigation.md](investigation.md) |
 | **Maps and traffic views** — arcs, tooltips, WAN aliases, reverse DNS | [maps.md](maps.md) |
 | **Findings and alerting** — rules, notifications, suppressions, auto-response | [alerting.md](alerting.md) |
 | **NAT attribution** — LAN hosts behind a shared outbound NAT address | [nat-attribution.md](nat-attribution.md) |
@@ -24,7 +25,7 @@
 | **Architecture** — components, data flow, trust boundaries | [architecture.md](architecture.md) |
 | **API and storage** — HTTP API, ClickHouse and SQLite schema | [api.md](api.md) |
 | **Troubleshooting** | [troubleshooting.md](troubleshooting.md) |
-| **Roadmap** | [ROADMAP.md](ROADMAP.md) |
+| **Roadmap** — and the record of the investigation and usability program | [ROADMAP.md](ROADMAP.md), [improvement-plan.md](improvement-plan.md) |
 | **Changelog** | [../CHANGELOG.md](../CHANGELOG.md) |
 | **Contributing** | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 

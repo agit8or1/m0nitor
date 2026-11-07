@@ -108,7 +108,9 @@ under *All changes by type*.
 
 **Handling an incident (analyst):** assign it, add notes, set the status (open → investigating → resolved; resolving
 needs a reason and can close the findings too), split a finding out (it is never re-added automatically), add a
-finding by number, merge incidents. Everything goes into the incident's timeline and the audit log. **Export evidence
+finding by number, merge incidents. **Dismiss** (on each open incident in the list and on its page) resolves it
+as "Dismissed (no action needed)" in one click and leaves its findings as they are; **Reopen** on the Resolved tab undoes
+it. Everything goes into the incident's timeline and the audit log. **Export evidence
 (JSON)** downloads the incident, its findings with evidence and queries, and the history; each export is audited.
 
 **Notifications:** if a channel already received a finding from an incident in the last 6 hours, it does not get

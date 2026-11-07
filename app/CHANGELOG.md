@@ -3,6 +3,14 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.51 — 2026-11-07
+
+### Added
+- **Dismiss** button on every open incident (Incidents list and the incident page, analyst or admin): resolves it as
+  "Dismissed (no action needed)" after a confirmation, returns to the same list, and records who did it in the
+  incident's history and the audit log. Its findings are left as they are. A dismissed incident shows **Reopen** on the
+  Resolved tab. An incident that is already resolved keeps the reason it was given.
+
 ## v1.50 — 2026-11-07
 
 ### Added

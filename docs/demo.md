@@ -23,6 +23,9 @@ many new countries), a beaconing workstation, a 3 GB upload, a blocked port scan
 guessing on web-1.
 
 Screenshots in `docs/screenshots/` are taken from this demo with `demo/screenshots.py`, running Playwright inside
-the demo app's network namespace (the exact command is at the top of the script). Regenerate them after UI changes.
+the demo app's network namespace (the exact command is at the top of the script). It also creates one demo application
+("Web shop") through the UI and runs the detection tests, for the investigation screenshots. Regenerate them after UI
+changes; reseed first (`down -v`, then `up -d --build`) if the demo has been stopped for more than a day or two,
+since its history covers only the last four days.
 
 Reset: `docker compose -f demo/docker-compose.yml down -v`.

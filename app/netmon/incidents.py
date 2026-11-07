@@ -26,7 +26,8 @@ MAX_SPAN = 24 * 3600        # an incident covers at most a day of activity; late
 NOTIFY_DEDUP = 6 * 3600
 STATUSES = ("open", "investigating", "resolved")
 RESOLUTIONS = {"fixed": "Fixed / contained", "expected": "Expected or authorized activity", "false_positive": "False positive",
-               "duplicate": "Duplicate of another incident", "undetermined": "Could not be determined"}
+               "duplicate": "Duplicate of another incident", "undetermined": "Could not be determined",
+               "dismissed": "Dismissed (no action needed)"}
 SEV = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 STARTERS = {"security", "response"}
 LOCAL_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7")]

@@ -25,7 +25,26 @@ def _msg(msg):
 
 
 def _back(path, msg):
-    return RedirectResponse(f"{path}?msg={quote(msg)}", 303)
+    return RedirectResponse(f"{path}{'&' if '?' in path else '?'}msg={quote(msg)}", 303)
+
+
+def _safe_back(back, iid):
+    """Only return to the incidents list or this incident (never an arbitrary URL)."""
+    if back.startswith("/netmon/incidents?") and all(c.isalnum() or c in "/?=&_" for c in back):
+        return back
+    return f"/netmon/incidents/{iid}"
+
+
+def _quick_form(req, i, back):
+    """One-click Dismiss for an unresolved incident, or Reopen for a dismissed one. Findings are left as they are."""
+    if i["status"] != "resolved":
+        return (f"<form method=post action='/netmon/incidents/{i['id']}/dismiss' class='inline' data-confirm='Dismiss incident #{i['id']}? "
+                f"Its findings stay as they are.'>{csrf_field(req)}<input type=hidden name=back value='{e(back)}'>"
+                f"<button class='sm' title='Resolve as dismissed (no action needed). Recorded in the history; can be reopened.'>Dismiss</button></form>")
+    if i["resolution"] == "dismissed":
+        return (f"<form method=post action='/netmon/incidents/{i['id']}/reopen' class='inline'>{csrf_field(req)}"
+                f"<input type=hidden name=back value='{e(back)}'><button class='sm'>Reopen</button></form>")
+    return ""
 
 
 def _dev(asset, site):
@@ -60,6 +79,8 @@ def incidents_page(req: Request, status: str = "active", mine: int = 0, msg: str
                                ("resolved", "Resolved"), ("all", "All")))
     mine_link = (f"<a href='/netmon/incidents?status={status}'>Everyone's</a>" if mine else
                  f"<a href='/netmon/incidents?status={status}&mine=1'>Assigned to me</a>")
+    can = ROLES[r] >= ROLES["analyst"]
+    back = f"/netmon/incidents?status={status}" + ("&mine=1" if mine else "")
     cards = ""
     for i in rows:
         reasons = sorted({x[0] for x in conn.execute("SELECT reason FROM incident_alerts WHERE incident_id=? AND removed=0 AND reason "
@@ -69,7 +90,7 @@ def incidents_page(req: Request, status: str = "active", mine: int = 0, msg: str
  last activity {e(fmt_local(i['last_seen'], cfg.site(i['site'])))}</span><span class="tag">{e(STATUS_LABEL.get(i['status'], i['status']))}</span>
  {f"<span class='tag'>assigned to {e(i['assignee'])}</span>" if i['assignee'] else "<span class='tag muted'>unassigned</span>"}</div>
 <a class="ft" href="/netmon/incidents/{i['id']}">#{i['id']} · {e(i['title'])}</a>
-<div class="small muted">Grouped because: {e('; '.join(reasons) or 'grouped by a person')}</div></article>"""
+<div class="small muted">Grouped because: {e('; '.join(reasons) or 'grouped by a person')}</div>{_quick_form(req, i, back) if can else ''}</article>"""
     ungrouped = conn.execute("SELECT count(*) FROM alerts WHERE status='open' AND test=0 AND severity IN ('high','critical') AND id NOT IN "
                              "(SELECT alert_id FROM incident_alerts WHERE removed=0)").fetchone()[0]
     if not cards:
@@ -207,7 +228,7 @@ def incident_page(req: Request, iid: int, msg: str = ""):
 <input name=reason maxlength=200 placeholder="why it belongs here"><button>Add</button></form>
 <form method=post action="/netmon/incidents/{iid}/merge" class="row">{csrf_field(req)}<label>Merge incident #<input name=other inputmode=numeric required class="short"> into this one</label>
 <button>Merge</button></form><p class="muted small">Added or split-out findings are never moved back automatically.</p></details>
-<p><a class="btn" href="/netmon/incidents/{iid}/export.json">Export evidence (JSON)</a> <span class="muted small">recorded in the audit log</span></p></section>"""
+<p>{_quick_form(req, i, f"/netmon/incidents/{iid}") if can else ''}<a class="btn" href="/netmon/incidents/{iid}/export.json">Export evidence (JSON)</a> <span class="muted small">recorded in the audit log</span></p></section>"""
     status_line = (f"{e(STATUS_LABEL.get(i['status'], i['status']))}" + (f" · {e(inc.RESOLUTIONS.get(i['resolution'], i['resolution'] or ''))}" if i["resolution"] else "")
                    + (f" · assigned to {e(i['assignee'])}" if i["assignee"] else " · unassigned"))
     body = f"""{tabs(INVESTIGATE_TABS, '/netmon/incidents')}{_msg(msg)}
@@ -248,6 +269,29 @@ def incident_update(req: Request, iid: int, status: str = Form(""), assignee: st
     except ValueError as ex:
         raise HTTPException(400, str(ex))
     return _back(f"/netmon/incidents/{iid}", "Saved." if ch_ or note.strip() else "Nothing changed.")
+
+
+@app.post("/netmon/incidents/{iid}/dismiss")
+def incident_dismiss(req: Request, iid: int, back: str = Form(""), csrf: str = Form("")):
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    i = conn.execute("SELECT status FROM incidents WHERE id=?", (iid,)).fetchone()
+    if not i:
+        raise HTTPException(404)
+    if i["status"] == "resolved":      # never overwrite the reason someone already gave
+        return _back(_safe_back(back, iid), f"Incident #{iid} was already resolved.")
+    inc.update(conn, iid, u, status="resolved", resolution="dismissed")
+    return _back(_safe_back(back, iid), f"Incident #{iid} dismissed.")
+
+
+@app.post("/netmon/incidents/{iid}/reopen")
+def incident_reopen(req: Request, iid: int, back: str = Form(""), csrf: str = Form("")):
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    if not conn.execute("SELECT 1 FROM incidents WHERE id=?", (iid,)).fetchone():
+        raise HTTPException(404)
+    inc.update(conn, iid, u, status="open")
+    return _back(_safe_back(back, iid), f"Incident #{iid} reopened.")
 
 
 @app.post("/netmon/incidents/{iid}/add")
