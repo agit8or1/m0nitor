@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
 import struct
 import time
 from urllib.parse import quote
@@ -28,14 +29,18 @@ CREATE TABLE IF NOT EXISTS mfa_pending (token_hash TEXT PRIMARY KEY, username TE
 """
 USER_COLS = {"totp_secret": "TEXT", "totp_enabled": "INTEGER NOT NULL DEFAULT 0", "totp_last": "INTEGER NOT NULL DEFAULT 0",
              "recovery": "TEXT", "email": "TEXT"}
+# a pending second-factor challenge is claimed by exactly one request at a time (claim_mfa); see complete_mfa
+PENDING_COLS = {"claim": "TEXT", "claimed_at": "REAL"}
+CLAIM_TTL = 30          # seconds; a claim left behind by a crashed request can be taken over after this
 
 
 def init(conn):
     conn.executescript(AUTH_SCHEMA)
-    have = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
-    for col, typ in USER_COLS.items():
-        if col not in have:
-            conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+    for table, cols in (("users", USER_COLS), ("mfa_pending", PENDING_COLS)):
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, typ in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     conn.commit()
 
 
@@ -82,34 +87,57 @@ def new_recovery_codes(n=10):
 
 
 def use_recovery(conn, username: str, code: str) -> bool:
-    row = conn.execute("SELECT recovery FROM users WHERE username=?", (username,)).fetchone()
-    hashes = json.loads(row["recovery"] or "[]") if row else []
+    """Consume one recovery code. Success means *this* call removed the code: the update is a compare-and-swap on the
+    stored list, so two concurrent uses of the same code cannot both succeed. A lost race against the use of a
+    *different* code is retried with the fresh list; a lost race against the same code fails."""
     h = hashlib.sha256(code.strip().lower().encode()).hexdigest()
-    if h not in hashes:
+    for _ in range(8):
+        row = conn.execute("SELECT recovery FROM users WHERE username=? AND totp_enabled=1", (username,)).fetchone()
+        if not row:
+            return False
+        stored = row["recovery"]
+        hashes = json.loads(stored or "[]")
+        if h not in hashes:
+            return False
+        hashes.remove(h)
+        cur = conn.execute("UPDATE users SET recovery=? WHERE username=? AND totp_enabled=1 AND recovery IS ?",
+                           (json.dumps(hashes), username, stored))
+        conn.commit()
+        if cur.rowcount == 1:
+            return True
+    return False   # persistent contention: refuse rather than guess; nothing was consumed by this call
+
+
+def use_totp(conn, username: str, code: str, now=None) -> bool:
+    """Accept a TOTP code only if its timestep is newer than the last accepted one, advancing the stored counter in the
+    same statement (compare-and-swap), so one timestep can be used exactly once even under concurrent requests."""
+    u = conn.execute("SELECT totp_secret, totp_last FROM users WHERE username=? AND totp_enabled=1", (username,)).fetchone()
+    if not u:
         return False
-    hashes.remove(h)
-    conn.execute("UPDATE users SET recovery=? WHERE username=?", (json.dumps(hashes), username))
+    c = totp_check(totp_secret_of(u["totp_secret"], username), code, u["totp_last"] or 0, now=now)
+    if c is None:
+        return False
+    cur = conn.execute("UPDATE users SET totp_last=? WHERE username=? AND totp_enabled=1 AND totp_last < ?", (c, username, c))
     conn.commit()
-    return True
+    return cur.rowcount == 1
 
 
 def verify_second_factor(conn, username: str, code: str) -> str | None:
-    """Return 'totp' or 'recovery' on success."""
-    u = conn.execute("SELECT totp_secret, totp_last FROM users WHERE username=? AND totp_enabled=1", (username,)).fetchone()
-    if not u:
+    """Return 'totp' or 'recovery' on success. Each successful return consumed the factor (single use)."""
+    try:
+        if use_totp(conn, username, code):
+            return "totp"
+        return "recovery" if use_recovery(conn, username, code) else None
+    except sqlite3.OperationalError:   # database locked beyond the busy timeout: fail closed, nothing granted
+        conn.rollback()
         return None
-    c = totp_check(totp_secret_of(u["totp_secret"], username), code, u["totp_last"] or 0)
-    if c is not None:
-        conn.execute("UPDATE users SET totp_last=? WHERE username=?", (c, username))
-        conn.commit()
-        return "totp"
-    return "recovery" if use_recovery(conn, username, code) else None
 
 
 def start_mfa(conn, username: str, ip: str, nxt: str) -> str:
     token = secrets.token_urlsafe(32)
     conn.execute("DELETE FROM mfa_pending WHERE expires_at < ?", (time.time(),))
-    conn.execute("INSERT INTO mfa_pending VALUES (?,?,?,?,?)", (_th(token), username, time.time() + 300, ip, nxt))
+    conn.execute("INSERT INTO mfa_pending(token_hash,username,expires_at,ip,next) VALUES (?,?,?,?,?)",
+                 (_th(token), username, time.time() + 300, ip, nxt))
     conn.commit()
     return token
 
@@ -124,6 +152,57 @@ def pending_mfa(conn, token: str | None):
 def finish_mfa(conn, token: str):
     conn.execute("DELETE FROM mfa_pending WHERE token_hash=?", (_th(token),))
     conn.commit()
+
+
+def claim_mfa(conn, token: str | None):
+    """Atomically claim a live pending challenge for this request. Returns (row, claim) or (None, reason) where reason
+    is 'busy' (another request holds it) or 'invalid' (unknown or expired)."""
+    if not token:
+        return None, "invalid"
+    now, claim = time.time(), secrets.token_hex(16)
+    cur = conn.execute("UPDATE mfa_pending SET claim=?, claimed_at=? WHERE token_hash=? AND expires_at > ? "
+                       "AND (claim IS NULL OR claimed_at < ?)", (claim, now, _th(token), now, now - CLAIM_TTL))
+    conn.commit()
+    if cur.rowcount != 1:
+        return None, ("busy" if pending_mfa(conn, token) else "invalid")
+    r = conn.execute("SELECT * FROM mfa_pending WHERE token_hash=? AND claim=?", (_th(token), claim)).fetchone()
+    return (dict(r), claim) if r else (None, "invalid")
+
+
+def release_mfa(conn, token: str, claim: str):
+    """Give a claimed challenge back after a wrong code (the user may try again until it expires)."""
+    conn.execute("UPDATE mfa_pending SET claim=NULL, claimed_at=NULL WHERE token_hash=? AND claim=?", (_th(token), claim))
+    conn.commit()
+
+
+def consume_mfa(conn, token: str, claim: str) -> bool:
+    """Delete the challenge only if this request still holds the claim; True means no other request can use it."""
+    cur = conn.execute("DELETE FROM mfa_pending WHERE token_hash=? AND claim=?", (_th(token), claim))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def complete_mfa(conn, token: str | None, code: str, ip: str, ua: str):
+    """Second login step: claim the challenge, verify (and consume) the factor, consume the challenge, then issue the
+    session. Returns (status, info): ('ok', {token, username, next, method}) | ('invalid'|'busy'|'bad'|'expired', {...}).
+
+    Exactly one session per challenge: only the request holding the claim may delete the challenge, and the session is
+    created only after that delete succeeded. A consumed factor is never restored."""
+    p, claim = claim_mfa(conn, token)
+    if not p:
+        return claim, {}
+    try:
+        method = verify_second_factor(conn, p["username"], code)
+    except Exception:
+        release_mfa(conn, token, claim)
+        raise
+    if not method:
+        release_mfa(conn, token, claim)
+        return "bad", {"username": p["username"]}
+    if not consume_mfa(conn, token, claim):   # claim taken over after CLAIM_TTL: no session from this request
+        return "expired", {"username": p["username"], "method": method}
+    sess = create_session(conn, p["username"], ip, ua)
+    return "ok", {"token": sess, "username": p["username"], "next": p["next"], "method": method}
 
 
 def hash_pw(pw: str) -> str:

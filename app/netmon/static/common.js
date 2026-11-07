@@ -55,6 +55,12 @@ const NM = (() => {
 
   function syncToolbar() {
     const site = $("site"); if (site) site.value = scope.site || "all";
+    const pick = $("sitepick");
+    if (pick) { const want = new Set((scope.site || "all").split(",")); const all = want.has("all");
+      const boxes = [...pick.querySelectorAll("input[type=checkbox]")];
+      boxes.forEach((b) => { b.checked = b.dataset.all != null ? all : !all && want.has(b.value); });
+      const names = boxes.filter((b) => b.checked && b.dataset.all == null).map((b) => b.parentNode.textContent.trim());
+      pick.querySelector("summary").textContent = all || !names.length ? "All firewalls" : names.length === 1 ? names[0] : `${names.length} firewalls`; }
     const rg = $("range"); if (rg) rg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.range === scope.range));
     const cu = $("custom"); if (cu) cu.hidden = scope.range !== "custom";
     const lv = $("live"); if (lv) { lv.textContent = paused ? "▶ Resume live" : "❚❚ Pause"; lv.setAttribute("aria-pressed", String(!paused)); lv.classList.toggle("paused", paused); }
@@ -71,6 +77,12 @@ const NM = (() => {
   const toLocalInput = (t) => { const d = new Date(t * 1000 - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
   function bindToolbar() {
     const site = $("site"); if (site) site.addEventListener("change", () => setScope({ site: site.value }));
+    const pick = $("sitepick");
+    if (pick) pick.addEventListener("change", (ev) => { const t = ev.target; const boxes = [...pick.querySelectorAll("input[type=checkbox]")];
+      if (t.dataset.all != null) { boxes.forEach((b) => { b.checked = b === t ? t.checked : false; }); }
+      else { const allBox = boxes.find((b) => b.dataset.all != null); if (allBox) allBox.checked = false; }
+      const ids = boxes.filter((b) => b.checked && b.dataset.all == null).map((b) => b.value);
+      setScope({ site: ids.length && ids.length < boxes.length - 1 ? ids.join(",") : "all" }); });
     const rg = $("range"); if (rg) rg.addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return;
       if (b.dataset.range === "custom") { scope.range = "custom"; const now = Date.now() / 1000;
         $("from").value = toLocalInput(+scope.from || now - 3600); $("to").value = toLocalInput(+scope.to || now); syncToolbar(); return; }

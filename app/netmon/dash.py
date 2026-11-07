@@ -119,7 +119,9 @@ class Dash:
 
     # ---- scope -------------------------------------------------------------
     def scope(self, site="all", range_key="15m", start=None, end=None, cc="", host="", asn="", port="", rip=""):
-        sites = [s for s in self.cfg["sites"] if site in ("all", "", s["id"])] or self.cfg["sites"]
+        # one firewall, several (comma-separated ids) or all; unknown ids are ignored, nothing valid = all
+        want = {x.strip() for x in str(site or "all").split(",") if x.strip()}
+        sites = [s for s in self.cfg["sites"] if not want or "all" in want or s["id"] in want] or self.cfg["sites"]
         step = QUANTUM.get(range_key, 10)
         now = int(time.time()) // step * step   # quantized so concurrent viewers share the query cache
         if range_key == "custom" and start and end:

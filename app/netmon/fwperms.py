@@ -25,7 +25,59 @@ OPNSENSE = [
     ("Diagnostics: ARP Table", "Inventory auto-discovery: MAC address, vendor and hostname of internal devices (every 15 min)",
      "api/diagnostics/interface/search_arp (the legacy getArp is not covered by this privilege)",
      ("GET", "/api/diagnostics/interface/search_arp", {"rowCount": "1"}), "recommended"),
+    ("Diagnostics: NDP Table", "Device identity for IPv6: which MAC address uses which IPv6 address (every 15 min)",
+     "api/diagnostics/interface/search_ndp", ("GET", "/api/diagnostics/interface/search_ndp", {"rowCount": "1"}), "optional"),
+    ("Services: ISC DHCPv4: Leases", "Device identity: DHCP leases (address, MAC, hostname, lease times) from the ISC DHCP server. "
+     "The privilege also allows deleting leases; netmon only reads them",
+     "api/dhcpv4/leases/search_lease", ("GET", "/api/dhcpv4/leases/search_lease", {"rowCount": "1"}), "optional"),
+    ("Services: DHCP: Kea(v4)", "Device identity: DHCP leases from the Kea DHCP server (only if you use Kea). The privilege also covers "
+     "Kea's settings; netmon only reads leases",
+     "api/kea/leases4/search", ("GET", "/api/kea/leases4/search", {"rowCount": "1"}), "optional"),
 ]
+
+# URL patterns each privilege covers (OPNsense ACL.xml), to name the missing privilege when a call is refused (HTTP 403)
+PATTERNS = [
+    ("Diagnostics: PF Table IP addresses", ("/api/firewall/alias_util/",)),
+    ("Firewall: Alias: Edit", ("/api/firewall/alias/",)),
+    ("Firewall: Categories", ("/api/firewall/category/",)),
+    ("Firewall: Rules [new]", ("/api/firewall/filter/",)),
+    ("Diagnostics: Show States", ("/api/diagnostics/firewall/query_states", "/api/diagnostics/firewall/del_state")),
+    ("Firewall: NAT: 1:1", ("/api/firewall/one_to_one/",)),
+    ("Interfaces: Virtual IPs: Settings", ("/api/interfaces/vip_settings/",)),
+    ("Diagnostics: ARP Table", ("/api/diagnostics/interface/search_arp", "/api/diagnostics/interface/get_arp",
+                                "/api/diagnostics/interface/getArp")),
+    ("Diagnostics: NDP Table", ("/api/diagnostics/interface/search_ndp", "/api/diagnostics/interface/get_ndp")),
+    ("Services: ISC DHCPv4: Leases", ("/api/dhcpv4/leases/",)),
+    ("Services: DHCP: Kea(v4)", ("/api/kea/leases4/", "/api/kea/dhcpv4/")),
+]
+
+
+def privilege_for(path):
+    """The OPNsense privilege that covers an API path, or ''."""
+    path = "/" + str(path or "").lstrip("/")
+    for name, prefixes in PATTERNS:
+        if path.startswith(prefixes):
+            return name
+    return ""
+
+
+def missing_text(path):
+    """Plain-language 403 explanation naming the privilege to grant."""
+    p = privilege_for(path)
+    return (f"the firewall's API user is missing the privilege \"{p}\". Grant it in OPNsense System → Access → Users → (API user) → "
+            f"Effective Privileges (all privileges netmon uses: Settings → Firewall permissions)" if p else
+            "the firewall's API user is not allowed to call this endpoint (Settings → Firewall permissions lists what netmon needs)")
+
+
+def missing_html(e, msg):
+    """Render an error string; when it names a missing privilege, add the fix and a link to the permissions page."""
+    msg = str(msg or "")
+    p = next((n for n, _ in PATTERNS if f'"{n}"' in msg), "")
+    if not p:
+        return f"<span class='warnline'>{e(msg)}</span>"
+    return (f"<span class='warnline'>Missing firewall permission: <b>{e(p)}</b>.</span> <span class='small'>Grant it to the API user in "
+            f"OPNsense <i>System → Access → Users → (API user) → Effective Privileges</i>. "
+            f"<a href='/netmon/settings/permissions?check=1'>Check all permissions →</a></span>")
 
 PFSENSE = [   # pfSense-pkg-RESTAPI v2 privileges
     ("api-v2-firewall-aliases-get", "Find the netmon_block alias"),

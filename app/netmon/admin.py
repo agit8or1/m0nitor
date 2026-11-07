@@ -18,6 +18,7 @@ from .web import (ROLES, app, cfg, check_csrf, conn, csrf_field, current, dash, 
 
 # (name, href, group, admin-only): grouped in this order; admin-only entries are hidden from other roles
 SETTINGS_TABS = [("Health", "/netmon/settings", "Status", False), ("Coverage", "/netmon/coverage", "Status", False),
+                 ("WAN / VPN quality", "/netmon/quality", "Status", False),
                  ("Firewalls & sites", "/netmon/settings/sites", "Data", False),
                  ("Devices", "/netmon/settings/devices", "Data", False),
                  ("Data sources", "/netmon/settings/integrations", "Data", False),
@@ -530,6 +531,10 @@ DETECTOR_KEYS = [("interval_seconds", "Run detector every (s)", 60, 3600), ("win
                  ("cooldown_minutes", "Repeat cooldown (min)", 5, 10080)]
 
 
+TEST_SCENARIO = {"new_dest_country": "new_country", "outbound_volume": "large_upload", "unexpected_inbound": "exposed_port",
+                 "fanout": "port_scan", "beaconing": "beaconing"}   # rule -> synthetic scenario (Investigate → Test detections)
+
+
 @app.get("/netmon/settings/rules", response_class=HTMLResponse)
 def rules_page(req: Request, msg: str = ""):
     u, r = user_of(req)
@@ -546,7 +551,9 @@ def rules_page(req: Request, msg: str = ""):
             elif isinstance(v, list):
                 fields += f"<label class='inl'>{e(k.replace('_', ' '))}<input name='{e(name)}.{e(k)}' value='{e(','.join(map(str, v)))}' {'disabled' if not admin else ''}></label>"
         rows += (f"<tr><td><label class='cb'><input type=checkbox name='{e(name)}.enabled' value=1 {'checked' if rc.get('enabled') else ''} {'disabled' if not admin else ''}> "
-                 f"<b>{e(name)}</b></label><div class='sub'>{e(RULE_DOCS.get(name, ''))}</div></td><td class='fields'>{fields}</td></tr>")
+                 f"<b>{e(name)}</b></label><div class='sub'>{e(RULE_DOCS.get(name, ''))}</div>"
+                 + (f"<a class='small' href='/netmon/detections/test?scenario={TEST_SCENARIO[name]}'>Test detection</a>" if name in TEST_SCENARIO else "")
+                 + f"</td><td class='fields'>{fields}</td></tr>")
     det = "".join(f"<label>{e(lbl)}<input name='detector.{k}' type=number value='{e(cfg['detector'][k])}' min={lo} max={hi} {'disabled' if not admin else ''}></label>"
                   for k, lbl, lo, hi in DETECTOR_KEYS)
     ov = get_setting(conn, "override:rules", {}) or {}
@@ -555,17 +562,15 @@ def rules_page(req: Request, msg: str = ""):
 <section class="card"><div class="card-h"><h2>Detector</h2><span class="muted small">baseline = observed history, never automatic approval</span></div><div class="formgrid">{det}</div></section>
 <section class="card"><div class="card-h"><h2>Detection rules</h2><span class="muted small">{len(ov)} rule(s) changed from config.yaml defaults</span></div>
 <div class="wrap"><table class="tbl rules"><thead><tr><th>Rule</th><th>Thresholds</th></tr></thead><tbody>{rows}</tbody></table></div>
-{'<div class="row"><button class="primary">Save rules</button></div>' if admin else '<p class="muted">Only admins can change rules.</p>'}</section></form>
+{'<div class="row"><button class="primary">Save rules</button> <button name="preview" value="1" class="ghost">Preview rule changes</button><span class="muted small">Preview tests the changed rules with synthetic scenarios and on your retained data; nothing is saved.</span></div>' if admin else '<p class="muted">Only admins can change rules.</p>'}</section></form>
+<p class="small"><a href="/netmon/detections/test">Test detections</a>: check what each rule does with a synthetic scenario.</p>
 {f'''<form method=post action="/netmon/settings/rules/reset" class="row">{csrf_field(req)}<button>Reset all to config.yaml defaults</button></form>''' if admin else ''}
 <p class="note">Changes apply on the next detector run. Use Suppressions for specific known-good traffic and Maintenance windows for planned work.</p>"""
     return page(req, "Settings · Alert rules", body, "/netmon/settings", scoped=False)
 
 
-@app.post("/netmon/settings/rules")
-async def save_rules(req: Request):
-    u = need(req, "admin")
-    form = await req.form()
-    check_csrf(req, form.get("csrf", ""))
+def parse_rules_form(form):
+    """Alert rules form -> (rule overrides, detector overrides) relative to config.yaml. Used by Save and Preview."""
     base = cfg._base if hasattr(cfg, "_base") else {"rules": cfg["rules"], "detector": cfg["detector"]}
     rules_ov, det_ov = {}, {}
     for name, rc in base["rules"].items():
@@ -602,6 +607,18 @@ async def save_rules(req: Request):
         val = max(lo, min(hi, val))
         if val != base["detector"][k]:
             det_ov[k] = val
+    return rules_ov, det_ov
+
+
+@app.post("/netmon/settings/rules")
+async def save_rules(req: Request):
+    u = need(req, "admin")
+    form = await req.form()
+    check_csrf(req, form.get("csrf", ""))
+    if form.get("preview"):
+        from .dtest_views import preview_from_form
+        return await preview_from_form(req, form)
+    rules_ov, det_ov = parse_rules_form(form)
     put_setting(conn, "override:rules", rules_ov, u)
     put_setting(conn, "override:detector", det_ov, u)
     apply_overrides(cfg, conn)
@@ -1082,10 +1099,12 @@ def sites_page(req: Request, msg: str = ""):
 <label>Longitude (−180…180)<input name=lon type=number step=any min=-180 max=180 value="{'' if loc.get('lon') is None else loc['lon']}" placeholder="exact site longitude" {dis}></label>
 <label>Country (fallback when lat/lon empty)<select name=country {dis}><option value="">— none —</option>{copts}</select></label>
 <label>WAN download capacity, Mb/s<input name=down type=number min=1 max=1000000 value="{e(s.get('wan_down_mbps') or '')}" placeholder="contracted — not port speed" {dis}></label>
-<label>WAN upload capacity, Mb/s<input name=up type=number min=1 max=1000000 value="{e(s.get('wan_up_mbps') or '')}" placeholder="contracted — not port speed" {dis}></label></div>
+<label>WAN upload capacity, Mb/s<input name=up type=number min=1 max=1000000 value="{e(s.get('wan_up_mbps') or '')}" placeholder="contracted — not port speed" {dis}></label>
+<label>Time zone (schedules, baselines, local times)<input name=tz value="{e(s.get('tz') or 'UTC')}" list=nm-tz maxlength=64 placeholder="e.g. America/New_York" {dis}></label></div>
 <p class="muted small">Map position now: {e(f"{cur['lat']:.4f}, {cur['lon']:.4f} — {cur['source']}") if cur else 'not set (no marker or arcs)'}.
 Look up sends only the address you type to OpenStreetMap Nominatim, and only when you click it.</p>
 {'<div class="row"><button class="primary">Save</button></div>' if admin else ''}</form>
+{monitor_form(req, s, admin)}
 {f"<details><summary>Connection settings</summary>{conn_form(req, s)}" + (f"<form method=post action='/netmon/settings/sites/{e(s['id'])}/delete' class='row confirm'>{csrf_field(req)}<button>Delete</button></form>" if len(cfg.sites) > 1 else "") + "</details>" if admin else ''}
 {dns_card(req, s, admin)}
 <details><summary>Setup steps on the {e(VENDORS.get(s['vendor'], {}).get('label', ''))} firewall</summary>{site_setup(s)}</details></section>"""
@@ -1095,7 +1114,8 @@ Look up sends only the address you type to OpenStreetMap Nominatim, and only whe
 {conn_form(req)}<p class="muted small">Saving lets this firewall's NetFlow (UDP 2055) and syslog (5514 TCP+UDP) source through the monitor's host firewall,
 registers it with Akvorado (collector restarts for a few seconds) and starts per-site detection, dashboards, logs and blocking.
 Asset names and expected exposures are global: if two sites use the same private range, give their hosts distinct names.</p></section>""" if admin else "")
-    body = f"""{tabs(SETTINGS_TABS, '/netmon/settings/sites')}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}{hostbox}{monitor_card(req, admin)}{cards}{add}"""
+    tzl = "<datalist id=nm-tz>" + "".join(f"<option value='{z}'>" for z in sorted(__import__('zoneinfo').available_timezones()) if "/" in z) + "</datalist>"
+    body = f"""{tabs(SETTINGS_TABS, '/netmon/settings/sites')}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}{hostbox}{monitor_card(req, admin)}{cards}{add}{tzl}"""
     return page(req, "Settings · Firewalls & sites", body, "/netmon/settings", ("settings.js",), scoped=False)
 
 
@@ -1151,9 +1171,40 @@ def put_sites(sites, user):
     sync_sites()
 
 
+def monitor_form(req, s, admin):
+    """Per-firewall monitoring choices (ux.MONITOR_OPTIONS): what netmon checks and alerts on for this firewall."""
+    from .ux import MONITOR_OPTIONS, monitored
+    off = [k for k in MONITOR_OPTIONS if not monitored(s, k)]
+    boxes = "".join(f"<label class='check' title='{e(why)}'><input type=checkbox name=on value='{k}' {'checked' if monitored(s, k) else ''} "
+                    f"{'' if admin else 'disabled'}> {e(label)}<span class='muted small'> — {e(why)}</span></label>"
+                    for k, (label, why) in MONITOR_OPTIONS.items())
+    return f"""<details id="mon-{e(s['id'])}"><summary>What to monitor on this firewall <span class="muted small">{'everything' if not off else f'{len(MONITOR_OPTIONS) - len(off)} of {len(MONITOR_OPTIONS)} checks on'}</span></summary>
+<form method=post action="/netmon/settings/sites/{e(s['id'])}/monitor" class="stackform">{csrf_field(req)}<div class="chkgrid">{boxes}</div>
+<p class="muted small">Switching a check off makes netmon stop analysing, alerting on and warning about that source for this firewall: it shows as
+“not monitored (your choice)”, never as missing data. It does not change the firewall: data it still sends is kept as usual.</p>
+{'<div class="row"><button class="primary">Save</button></div>' if admin else ''}</form></details>"""
+
+
+@app.post("/netmon/settings/sites/{sid}/monitor")
+async def save_site_monitor(req: Request, sid: str):
+    from .ux import MONITOR_OPTIONS
+    u = need(req, "admin")
+    form = await req.form()
+    check_csrf(req, str(form.get("csrf", "")))
+    sites = db_sites()
+    x = next((s for s in sites if s["id"] == sid), None)
+    if not x:
+        raise HTTPException(404)
+    on = set(form.getlist("on"))
+    x["monitor"] = {k: k in on for k in MONITOR_OPTIONS}
+    put_sites(sites, u)
+    audit(conn, u, "site_monitoring", {"site": sid, "off": sorted(k for k, v in x["monitor"].items() if not v)})
+    return RedirectResponse("/netmon/settings/sites?msg=" + quote(f"Monitoring choices for {x.get('name', sid)} saved.") + f"#site-{sid}", 303)
+
+
 @app.post("/netmon/settings/sites/{sid}")
 def save_site(req: Request, sid: str, name: str = Form(...), label: str = Form(""), lat: str = Form(""), lon: str = Form(""),
-              country: str = Form(""), down: str = Form(""), up: str = Form(""), csrf: str = Form("")):
+              country: str = Form(""), down: str = Form(""), up: str = Form(""), tz: str = Form(""), csrf: str = Form("")):
     from .dash import META
     u = need(req, "admin")
     check_csrf(req, csrf)
@@ -1167,8 +1218,13 @@ def save_site(req: Request, sid: str, name: str = Form(...), label: str = Form("
     if country and country not in META:
         raise HTTPException(400, "unknown country")
     dn, upv = _num(down, 1, 1_000_000, "capacity"), _num(up, 1, 1_000_000, "capacity")
+    tz = tz.strip() or x.get("tz") or "UTC"
+    try:
+        __import__("zoneinfo").ZoneInfo(tz)
+    except Exception:
+        raise HTTPException(400, "unknown time zone (use an IANA name such as Europe/Berlin)")
     x.update(name=name.strip()[:60] or sid, location={"lat": la, "lon": lo_, "country": country or None, "label": label.strip()[:60]},
-             wan_down_mbps=int(dn) if dn else None, wan_up_mbps=int(upv) if upv else None)
+             wan_down_mbps=int(dn) if dn else None, wan_up_mbps=int(upv) if upv else None, tz=tz)
     x.pop("wan_capacity_mbps", None)
     put_sites(sites, u)
     audit(conn, u, "site_updated", {"site": sid, "name": x["name"], "location": x["location"],

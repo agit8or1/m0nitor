@@ -125,12 +125,27 @@ class Health:
         s = settings(self.conn)
         out = []
         for fn in (self.c_netflow, self.c_collector, self.c_syslog, self.c_suricata, self.c_clickhouse, self.c_storage,
-                   self.c_geoip, self.c_secrets, self.c_notifications, self.c_detector, self.c_snmp, self.c_clock, self.c_optional):
+                   self.c_geoip, self.c_secrets, self.c_notifications, self.c_detector, self.c_snmp, self.c_clock, self.c_probes, self.c_optional):
             try:
                 out += fn(s)
             except Exception as ex:
                 out.append(check(f"internal:{fn.__name__}", "Monitor", fn.__name__, "unknown", "check failed", evidence=str(ex)[:200]))
-        return out
+        return self.apply_choices(out)
+
+    # check id prefix -> per-firewall monitoring choice (ux.MONITOR_OPTIONS)
+    CHOICE = {"netflow": "flows", "templates": "flows", "syslog": "syslog", "ids": "ids", "snmp": "snmp", "fwres": "snmp", "dns": "dns", "probes": "probes"}
+
+    def apply_choices(self, checks):
+        """A source the user switched off for a firewall is 'not monitored (your choice)': never failing, never alerted."""
+        from .ux import monitored
+        for c in checks:
+            pre, _, rest = c["id"].partition(":")
+            site = self.cfg.site(rest.split(":")[0]) if rest else None
+            key = self.CHOICE.get(pre)
+            if key and site and not monitored(site, key):
+                c.update(state="not_configured", value="not monitored on this firewall (your choice)", off=True, evidence="",
+                         action="Settings → Firewalls & sites → What to monitor")
+        return checks
 
     def c_netflow(self, s):
         rows = {r["e"]: r for r in self.ch.query(
@@ -421,6 +436,10 @@ class Health:
                                  ts, sy.get("error", "")))
         return out
 
+    def c_probes(self, s):
+        from .quality import health_checks
+        return health_checks(self.conn, self.cfg)
+
     def c_clock(self, s):
         out = []
         r = self.ch.query("SELECT toUnixTimestamp(now()) AS n", {})[0]["n"]
@@ -460,6 +479,13 @@ class Health:
         if not s["enabled"] or now - self.started < s["grace_seconds"]:
             return res
         for c in res:
+            if c.get("off"):   # switched off by the user: close a health finding it had raised
+                key = f"monitor|source_health|{c['id']}|{c['id']}"
+                n = self.conn.execute("UPDATE alerts SET status='closed', acked_by='health', acked_at=?, title=title || ' — monitoring turned off' "
+                                      "WHERE key=? AND status IN ('open','acked')", (now, key)).rowcount
+                if n:
+                    self.conn.commit()
+                continue
             bad = c["state"] in ("warn", "fail")
             prev_state, n = self.streak.get(c["id"], (None, 0))
             n = n + 1 if (prev_state in ("warn", "fail")) == bad else 1

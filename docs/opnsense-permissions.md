@@ -35,6 +35,12 @@ Privilege names and the endpoints they cover are taken from OPNsense Core's `ACL
 | **Firewall: NAT: 1:1** | recommended | Attribute outbound traffic of servers that have their own public address (hourly sync) | `api/firewall/one_to_one/search_rule` |
 | **Interfaces: Virtual IPs: Settings** | recommended | Name the firewall's public addresses (virtual IP labels, hourly sync) | `api/interfaces/vip_settings/search_item` |
 | **Diagnostics: ARP Table** | recommended | Inventory auto-discovery: MAC address, vendor and hostname of internal devices (every 15 minutes) | `api/diagnostics/interface/search_arp` |
+| **Diagnostics: NDP Table** | optional | Device identity for IPv6: which MAC address uses which IPv6 address (every 15 minutes) | `api/diagnostics/interface/search_ndp` |
+| **Services: ISC DHCPv4: Leases** | optional | Device identity from DHCP leases (address, MAC, hostname, lease start/end). The privilege also allows deleting leases; m0nitor only reads them | `api/dhcpv4/leases/search_lease` |
+| **Services: DHCP: Kea(v4)** | optional (Kea only) | The same from the Kea DHCP server. The privilege also covers Kea's settings; m0nitor only reads leases. Grant it only if you use Kea | `api/kea/leases4/search` |
+
+When a call is refused (HTTP 403), m0nitor names the missing privilege wherever the feature reports its status (for
+example Settings → Inventory → Auto-discovery) and links to the live check.
 
 Notes:
 

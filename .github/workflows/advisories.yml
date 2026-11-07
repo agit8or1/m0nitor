@@ -1,0 +1,38 @@
+name: dependency advisories
+# Scheduled check of the pinned Python dependencies (runtime + development lockfiles) against the PyPI / OSV advisory
+# databases. Runs weekly, on changes to the lockfiles, and on demand. A new advisory fails the run (GitHub notifies the
+# repository's watchers); it never changes the lockfiles itself.
+on:
+  schedule:
+    - cron: "23 6 * * 1"      # Mondays 06:23 UTC
+  workflow_dispatch:
+  pull_request:
+    paths: ["app/requirements*.lock", "app/requirements*.txt"]
+  push:
+    branches: [main]
+    paths: ["app/requirements*.lock", "app/requirements*.txt"]
+permissions:
+  contents: read
+concurrency:
+  group: advisories-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  pip-audit:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lockfile: [app/requirements.lock, app/requirements-dev.lock]
+        service: [pypi, osv]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install pip-audit (pinned)
+        run: |
+          python3 -m venv /tmp/pa
+          /tmp/pa/bin/pip install --quiet pip-audit==2.9.0
+      - name: audit ${{ matrix.lockfile }} (${{ matrix.service }})
+        run: |
+          /tmp/pa/bin/pip-audit -r "${{ matrix.lockfile }}" --require-hashes --disable-pip \
+            --service "${{ matrix.service }}" --progress-spinner off --desc on

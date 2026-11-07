@@ -88,6 +88,9 @@ class Enforcer:
             ext, hdr = {"sni_hostname": self.bc["tls_server_name"]}, {"Host": self.bc["tls_server_name"]}
         with self._client() as c:
             r = c.request(method, path, data=data, json=json_, params=params, extensions=ext, headers=hdr)
+        if r.status_code == 403 and self.vendor == "OPNsense":
+            from .fwperms import missing_text
+            raise BlockError(f"{self.vendor} HTTP 403: {missing_text(path)}")
         if r.status_code != 200:
             raise BlockError(f"{self.vendor} HTTP {r.status_code}: {r.text[:200]}")
         return r.json()

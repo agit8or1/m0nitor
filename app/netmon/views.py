@@ -877,7 +877,10 @@ def overview(req: Request):
     info = lambda nid, label: (f'<details class="info"><summary aria-label="{label}" title="{label}">i</summary>'  # noqa: E731
                                f'<div class="pop" id="{nid}"></div></details>')
     body = f"""
+<section class="attn" id="attn" aria-live="polite" aria-label="Needs attention"></section>
 <section class="cards" id="cards" aria-live="polite"></section>
+<section class="card" id="chgcard"><div class="card-h"><h2>Important changes today</h2><a href="/netmon/changes" class="small">What changed? →</a></div>
+ <div id="chgtop" aria-live="polite"><p class="muted small">Comparing today with yesterday…</p></div></section>
 <section class="mainrow">
  <div class="card map-card"><div class="card-h"><h2>Where traffic goes</h2>
   <div class="panelctl"><div class="seg" id="mapdir" role="group" aria-label="Direction"><button data-v="both">Both</button><button data-v="in">Inbound</button><button data-v="out">Outbound</button></div>
@@ -903,7 +906,8 @@ def overview(req: Request):
 @app.get("/netmon/servers", response_class=HTMLResponse)
 def servers_page(req: Request):
     from .admin import tip_box
-    body = f"""<section class="card"><div class="card-h"><h2>Internal devices</h2><span class="muted small" id="srvnote"></span></div>
+    from .ux import DEVICE_TABS, tabs as _tabs
+    body = f"""{_tabs(DEVICE_TABS, "/netmon/servers")}<section class="card"><div class="card-h"><h2>Internal devices</h2><span class="muted small" id="srvnote"></span></div>
 <div class="chips" id="srvcats"></div>
 <div class="wrap"><table class="tbl sortable" id="srv"><thead><tr><th data-sort="name">Name</th><th>Internal IP</th><th data-sort="in" class="num">Inbound rate</th>
 <th data-sort="out" class="num">Outbound rate</th><th data-sort="total" class="num">Total transfer</th><th>Top remote</th><th data-sort="countries" class="num">Countries</th>
@@ -916,6 +920,7 @@ traffic a device sends through the shared NAT address is shown separately and ca
 
 @app.get("/netmon/servers/{ip}", response_class=HTMLResponse)
 def server_page(req: Request, ip: str, msg: str = ""):
+    from .identity_views import address_history_card
     ip = internal_ip(ip)
     a = cfg.asset(ip)
     title = f"{a['name']}" if a["name"] != ip else ip
@@ -930,6 +935,7 @@ def server_page(req: Request, ip: str, msg: str = ""):
 <section class="grid2"><div class="card"><div class="card-h"><h2>Related alerts</h2></div><div id="t-alerts"></div></div>
 <div class="card"><div class="card-h"><h2>Exposure &amp; AI</h2></div><div id="t-exposure"></div></div></section>
 <section class="card"><div class="card-h"><h2>Connections</h2><a class="small" href="/netmon/connections?host={e(ip)}" data-keep>All for this server →</a></div><div id="t-conv"></div></section>
+{address_history_card(ip, req.query_params.get("site", "").split(",")[0])}
 {name_card(req, ip, f"/netmon/servers/{ip}#srvname", msg)}"""
     aka = (cfg.get("assets", {}).get(ip) or {}).get("aliases", [])
     return page(req, title, body, "/netmon/servers", ("d3.min.js", "server.js"), subtitle=f"{ip} · {a.get('role') or 'unknown'}" + (f" · aka {', '.join(aka)}" if aka else ""))
@@ -1011,7 +1017,9 @@ def country_page(req: Request, cc: str):
 
 @app.get("/netmon/search", response_class=HTMLResponse)
 def search_page(req: Request, q: str = ""):
-    body = f"""<section class="card"><div class="card-h"><h2>Results for “{e(q)}”</h2></div><div id="results" data-q="{e(q)}"></div></section>"""
+    body = (f"""<section class="card"><div class="card-h"><h2>Results for “{e(q)}”</h2></div><div id="results" data-q="{e(q)}"></div>"""
+            f"""<p class="muted small">Looking for traffic, DNS lookups or findings? <a href="/netmon/search/flows?q={quote(q)}">Ask it as a question</a>
+(Investigate → Search).</p></section>""")
     return page(req, "Search", body, "", ("search.js",))
 
 
@@ -1140,7 +1148,8 @@ You can still build and review evidence previews.</div>""")
 {f"<form method=post action='/netmon/settings/ai/remove-key' class='row confirm'>{csrf_field(req)}<button>Delete</button> <span class='muted small'>removes the stored key and disables AI analysis</span></form>" if ai.enabled else ''}</section>"""
     kinds = "".join(f"<option value='{k}' {'selected' if k == kind else ''}>{v}</option>" for k, v in
                     (("server", "A server"), ("alert", "A security finding"), ("country", "A country"), ("window", "The selected time window")))
-    body = f"""{state}<section class="card"><div class="card-h"><h2>New analysis</h2><span class="muted small">uses the time range/site selected above</span></div>
+    from .ux import INVESTIGATE_TABS, tabs as _tabs
+    body = f"""{_tabs(INVESTIGATE_TABS, "/netmon/investigations")}{state}<section class="card"><div class="card-h"><h2>New analysis</h2><span class="muted small">uses the time range/site selected above</span></div>
 <form id="aiform" class="row"><select name="kind" id="aikind">{kinds}</select>
 <input name="target" id="aitarget" value="{e(target)}" placeholder="server IP, finding #, or country code" size="28">
 <button type="submit">Preview evidence</button></form>
@@ -1148,7 +1157,7 @@ You can still build and review evidence previews.</div>""")
 <section class="card"><div class="card-h"><h2>Previous analyses</h2></div><table class="tbl"><tr><th>Time</th><th>By</th><th>Type</th><th>Target</th><th></th></tr>
 {rows or '<tr><td colspan=5 class=muted>None yet</td></tr>'}</table></section>
 <input type="hidden" id="csrf" value="{e(csrf_token(req))}"><input type="hidden" id="aienabled" value="{'1' if ai.enabled else '0'}">"""
-    return page(req, "Investigations", body, "/netmon/investigations", ("investigations.js",),
+    return page(req, "AI analysis", body, "/netmon/investigate", ("investigations.js",),
                 subtitle="Manual, preview-first AI analysis. AI never changes the firewall.")
 
 
@@ -1203,7 +1212,7 @@ def investigation_view(req: Request, iid: int):
 <h3>Summary</h3><p>{e(res.get('summary'))}</p><h3>Evidence cited</h3><ul>{ev}</ul><h3>Hypotheses</h3><ul>{hy}</ul>
 <h3>Uncertainty</h3><p>{e(res.get('uncertainty'))}</p><h3>Recommended next steps</h3><ul>{rec}</ul>
 <p class="note">AI output is advisory. It cannot change the firewall; blocks require the separate reviewed workflow.</p></div>"""
-    return page(req, f"Investigation #{iid}", body, "/netmon/investigations", scoped=False)
+    return page(req, f"Investigation #{iid}", body, "/netmon/investigate", scoped=False)
 
 
 # ---- settings -----------------------------------------------------------------------------

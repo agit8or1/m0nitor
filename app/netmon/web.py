@@ -25,7 +25,7 @@ from . import block as blk
 from .core import (DATA_DIR, EXPECTED_KEY, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
                    load_config, put_setting, set_state)
 from .dash import Dash
-from .detect import Detector, exception_matches, fmt_ts, human_bytes
+from .detect import Detector, fmt_ts, human_bytes
 from .notify import Notifier
 from .counters import Poller, init as counters_init
 
@@ -218,15 +218,21 @@ SECURITY_HEADERS = {
 
 NAV = [("Overview", "/", "viewer"), ("Wallboards", "/netmon/wallboards", "viewer"), ("Internal devices", "/netmon/servers", "viewer"),
        ("Connections", "/netmon/connections", "viewer"), ("Countries", "/netmon/countries", "viewer"),
-       ("Security", "/netmon/security", "viewer"), ("Investigations", "/netmon/investigations", "viewer"),
+       ("Security", "/netmon/security", "viewer"), ("Investigate", "/netmon/investigate", "viewer"),
        ("Settings", "/netmon/settings", "viewer")]
 
 
 def scopebar():
     sites = "".join(f'<option value="{e(x["id"])}">{e(x["name"])}</option>' for x in cfg["sites"])
+    # several firewalls: a checkbox picker (one, several or all); the select stays as the single-firewall fallback
+    pick = ("" if len(cfg["sites"]) < 2 else
+            '<details class="sitepick" id="sitepick"><summary aria-label="Firewalls shown">All firewalls</summary><div class="pop">'
+            '<label class="check"><input type="checkbox" value="all" data-all> All firewalls</label>'
+            + "".join(f'<label class="check"><input type="checkbox" value="{e(x["id"])}"> {e(x["name"])}</label>' for x in cfg["sites"])
+            + '</div></details>')
     ranges = "".join(f'<button data-range="{k}">{k}</button>' for k in ("15m", "1h", "6h", "24h", "7d", "custom"))
     return f"""<div class="scopebar" id="scopebar">
-<select id="site" aria-label="Site"><option value="all">All sites</option>{sites}</select>
+{pick or f'<select id="site" aria-label="Site"><option value="all">All sites</option>{sites}</select>'}
 <div class="seg" id="range" role="group" aria-label="Time range">{ranges}</div>
 <span id="custom" class="custom" hidden><input type="datetime-local" id="from" aria-label="From"> – <input type="datetime-local" id="to" aria-label="To"> <button id="apply">Apply</button></span>
 <button id="live" class="live" aria-pressed="true">❚❚ Pause</button>
@@ -327,8 +333,9 @@ def login_page(next: str = "/", error: str = ""):
                         headers=SECURITY_HEADERS)
 
 
-def _issue_session(req, username, nxt, method):
-    token = auth.create_session(conn, username, client_ip(req), req.headers.get("user-agent", ""))
+def _issue_session(req, username, nxt, method, token=None):
+    """Set the session cookie; creates the session unless the caller already did (second-factor step)."""
+    token = token or auth.create_session(conn, username, client_ip(req), req.headers.get("user-agent", ""))
     audit(conn, username, "login", {"ip": client_ip(req), "method": method})
     r = RedirectResponse(nxt, 303)
     r.set_cookie(auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL, httponly=True, secure=True, samesite="lax", path="/")
@@ -370,7 +377,8 @@ def mfa_page(req: Request, error: str = ""):
     p = auth.pending_mfa(conn, req.cookies.get("netmon_mfa"))
     if not p:
         return RedirectResponse("/login", 303)
-    msg = {"bad": "That code is not valid.", "slow": "Too many attempts. Start over in 15 minutes."}.get(error, "")
+    msg = {"bad": "That code is not valid.", "slow": "Too many attempts. Start over in 15 minutes.",
+           "busy": "This sign-in is already being checked (submitted twice?). Wait a moment and try again."}.get(error, "")
     return HTMLResponse(MFA_HTML.format(ASSET_V=ASSET_V, version=VERSION, brand=e(BRAND), user=e(p["username"]), error=f'<div class="err">{e(msg)}</div>' if msg else ""),
                         headers=SECURITY_HEADERS)
 
@@ -385,15 +393,21 @@ def mfa_post(req: Request, code: str = Form(...)):
     if auth.throttled(conn, ip, p["username"]):
         auth.finish_mfa(conn, tok)
         return RedirectResponse("/login?error=slow", 303)
-    method = auth.verify_second_factor(conn, p["username"], code)
-    if not method:
+    # claim challenge -> consume factor -> consume challenge -> session, atomically per step (auth.complete_mfa)
+    status, info = auth.complete_mfa(conn, tok, code, ip, req.headers.get("user-agent", ""))
+    if status == "bad":
         auth.record_failure(conn, ip, p["username"])
         audit(conn, p["username"], "mfa_failed", {"ip": ip})
         return RedirectResponse("/login/2fa?error=bad", 303)
-    auth.finish_mfa(conn, tok)
-    if method == "recovery":
+    if status == "busy":     # a concurrent submission of the same challenge is being checked: no code was evaluated
+        audit(conn, p["username"], "mfa_concurrent", {"ip": ip})
+        return RedirectResponse("/login/2fa?error=busy", 303)
+    if status != "ok":       # gone or expired meanwhile (another request completed it): start over, no session
+        audit(conn, p["username"], "mfa_challenge_unavailable", {"ip": ip, "status": status})
+        return RedirectResponse("/login", 303)
+    if info["method"] == "recovery":
         audit(conn, p["username"], "recovery_code_used", {"ip": ip})
-    return _issue_session(req, p["username"], p["next"] or "/", f"password+{method}")
+    return _issue_session(req, p["username"], info["next"] or "/", f"password+{info['method']}", token=info["token"])
 
 
 @app.post("/logout")
@@ -459,7 +473,7 @@ CATEGORY = {"new_dest_country": "info", "new_dest_asn": "info", "fw_blocked_scan
             "exporter_silence": "health", "disk_usage": "health", "detector_error": "health", "source_health": "health", "dns_bypass": "info", "dns_anomaly": "security", "test": "test",
             "auto_block": "response", "vpn_tunnel_down": "health", "interface_down": "health", "routing_neighbor_down": "health",
             "ha_failover": "health", "config_change": "info", "device_auth_failures": "security", "device_silence": "health"}
-RULE_LABEL = {"new_dest_country": "New country", "new_dest_asn": "New network (ASN)",
+RULE_LABEL = {"search_detection": "Saved search detection", "indicator_match": "Indicator match (threat hunt)", "segmentation": "Unexpected internal communication", "new_dest_country": "New country", "new_dest_asn": "New network (ASN)",
               "unexpected_inbound": "Unexpected inbound service", "outbound_volume": "Outbound volume above baseline",
               "fanout": "Scanning / fan-out", "beaconing": "Periodic connections (beacon-like)",
               "source_health": "Monitoring source health", "dns_bypass": "Uses external DNS resolvers", "dns_anomaly": "DNS anomaly", "exporter_silence": "Telemetry stopped", "disk_usage": "Disk space", "detector_error": "Detector error",
@@ -600,11 +614,16 @@ def finding_card(a, ack=""):
     link = f"/netmon/servers/{quote(a['asset'])}" if a["asset"] and _is_internal_safe(a["asset"]) else ""
     return f"""<article class="finding f-{SEV_STATUS.get(a['severity'], 'muted')}">
 <div class="fh">{sev(a['severity'])}{direction_badge(a)}<span class="muted small">{(e(site_name(a['site'])) + ' · ') if len(cfg.sites) > 1 and 'site' in a.keys() else ''}confidence {e(a['confidence'])} · {e(RULE_LABEL.get(a['rule'], a['rule']))}
- · {e(a['count'])}× · last {e(fmt_ts(a['last_seen']))}</span>{score_chip(sc[-1]['score']) if (sc := ai_scores(a['id'])) else ''}<span class="tag">{e(ongoing(a)['state'] if a['status'] != 'closed' else 'closed')}</span><span class="tag">{e(a['status'])}</span>{ack}</div>
+ · {e(a['count'])}× · last {e(fmt_ts(a['last_seen']))}</span>{score_chip(sc[-1]['score']) if (sc := ai_scores(a['id'])) else ''}<span class="tag">{e(ongoing(a)['state'] if a['status'] != 'closed' else 'closed')}</span><span class="tag">{e(a['status'])}</span>{incident_tag(a)}{ack}</div>
 <a class="ft" href="/netmon/alert/{a['id']}">{e(a['title'])}</a>
 <div class="fg"><div><span class="k">Server</span>{f'<a href="{link}">{e(asset)}</a>' if link else e(asset)}{f'<div class="small">{e(lh)}</div>' if (lh := lan_hosts_text(a)) else ''}</div>
 <div><span class="k">Why it differs from normal</span>{e(a['baseline'])}</div>
 <div><span class="k">Next step</span>{e(nxt)}</div></div></article>"""
+
+
+def incident_tag(a):
+    r = conn.execute("SELECT incident_id FROM incident_alerts WHERE alert_id=? AND removed=0 LIMIT 1", (a["id"],)).fetchone()
+    return f"<a class='tag' href='/netmon/incidents/{r[0]}' title='Part of an incident'>incident #{r[0]}</a>" if r else ""
 
 
 @app.get("/netmon/security", response_class=HTMLResponse)
@@ -785,11 +804,12 @@ def alert_view(req: Request, aid: int, back: str = ""):
 <button id="aigo" class="{'' if last else 'primary'}">{'Re-analyze' if last else 'Analyze with AI'}</button></div></div>
 <p class="muted small">Builds minimized, pseudonymized evidence for this finding. You review it before anything is sent; AI never changes the firewall.</p>
 <div id="aipreview"></div><div id="airesult"></div>{f'<script type="application/json" id="aisaved">{saved}</script>' if saved else ''}<input type="hidden" id="csrf" value="{e(csrf_token(req))}"></div>""" if can_ai else "")
-    body = f"""<div class="card"><div class="fh">{sev(a['severity'])} <span class="muted">confidence {e(a['confidence'])} ·
+    from .incident_views import finding_incident_box
+    body = f"""{finding_incident_box(req, a, r)}<div class="card"><div class="fh">{sev(a['severity'])} <span class="muted">confidence {e(a['confidence'])} ·
 {e(RULE_LABEL.get(a['rule'], a['rule']))} · {e(CATEGORY.get(a['rule'], 'security'))} · status {e(a['status'])}{(' · acked by ' + e(a['acked_by'])) if a['acked_by'] else ''}</span></div>
 <h2 class="title">{e(a['title'])}</h2>
 <dl class="facts"><dt>Firewall</dt><dd>{e(site_name(a['site']))}</dd><dt>Direction</dt><dd>{direction_badge(a) or '—'} <span class="muted small">{e(a['direction_basis'] or 'not applicable')}</span></dd>
-<dt>Affected server</dt><dd>{f'<a href="{link}">{e(cfg.asset_label(a["asset"]))}</a>' if link else e(cfg.asset_label(a['asset']) if a['asset'] else '—')}{lan_hosts_dd(a, req, ROLES[r] >= ROLES["analyst"])}</dd>
+<dt>Affected server</dt><dd>{f'<a href="{link}">{e(cfg.asset_label(a["asset"]))}</a>' if link else e(cfg.asset_label(a['asset']) if a['asset'] else '—')}{identity_note(a)}{lan_hosts_dd(a, req, ROLES[r] >= ROLES["analyst"])}</dd>
 <dt>Time window</dt><dd>{e(fmt_ts(a['window_start']))} → {e(fmt_ts(a['window_end']))}</dd>
 <dt>Seen</dt><dd>{e(a['count'])}× ({e(fmt_ts(a['first_seen']))} → {e(fmt_ts(a['last_seen']))})</dd>
 <dt>Ongoing?</dt><dd><span class="tag og-{e(og['state'])}">{e(og['state'])}</span> {e(og['label'])}
@@ -817,6 +837,25 @@ def alert_view(req: Request, aid: int, back: str = ""):
     return page(req, f"Finding #{aid}", body, "/netmon/security", ("d3.min.js", "topojson-client.min.js", "map.js", "finding.js"), scoped=False)
 
 
+def identity_note(a):
+    """Who had the finding's address when it happened, and whether that is still the same device now (identity.py)."""
+    if not a["asset"] or not _is_internal_safe(a["asset"]) or not a["site"]:
+        return ""
+    from . import identity as idn
+    from .ux import conf_badge
+    then = idn.owner_at(conn, a["site"], a["asset"], a["window_start"] or a["first_seen"])
+    iid = (a["identity_id"] if "identity_id" in a.keys() else None) or then["identity"]
+    if not iid:
+        return f"<div class='small muted'>Device at the time: {e(then['explain'] or 'not identified')}.</div>" if then["explain"] else ""
+    iid = idn.resolve(conn, iid)
+    now = idn.owner_at(conn, a["site"], a["asset"], time.time())
+    moved = (f" <span class='warnline'>This address now belongs to a different device "
+             f"(<a href='/netmon/identities/{now['identity']}'>{e(idn.name_of(conn, cfg, now['identity']))}</a>).</span>"
+             if now["identity"] and now["identity"] != iid else "")
+    return (f"<div class='small'>Device at the time: <a href='/netmon/identities/{iid}'>{e(idn.name_of(conn, cfg, iid))}</a> "
+            f"{conf_badge(then['confidence'] if then['identity'] else 'medium', then['explain'])}{moved}</div>")
+
+
 def _is_internal_safe(ip):
     try:
         return cfg.is_internal(ip)
@@ -825,27 +864,48 @@ def _is_internal_safe(ip):
 
 
 def normal_card(req, a, back="/netmon/security"):
-    """'This is normal' on a finding: stop it (or everything for the address) from triggering again, and close the
-    matching findings already raised. Suppression only: the traffic is not marked trusted anywhere else."""
+    """'This is normal' on a finding: a precise exception (this behaviour, this device to one destination/service,
+    optionally only during a schedule, until a date), previewed before it is saved. Suppression only: the traffic is
+    not marked trusted anywhere else."""
+    from .baselines import DAY_NAMES, MANY_PEERS, finding_peers, finding_service
     label = cfg.asset_label(a["asset"]) if a["asset"] else ""
     shared = a["asset"] in cfg.get("outbound_nat_ips", [])
     rule = e(RULE_LABEL.get(a["rule"], a["rule"]))
-    opt = lambda v, text, checked=False: (f"<label class='check'><input type=radio name=scope value={v} {'checked' if checked else ''}> {text}</label>")  # noqa: E731
-    scopes = (opt("rule", f"Any <b>{rule}</b> finding for <b>{e(label or a['asset'])}</b>", True)
-              + (opt("exact", f"Only this exact finding (<span class='mono'>{e(a['subject'])}</span>)") if a["subject"] not in ("", "*") else "")
+    peers = finding_peers(dict(a))
+    peer0 = peers[0] if len(peers) == 1 else ""
+    svc0 = finding_service(dict(a)) or ""
+    opt = lambda v, text, checked=False, note="": (f"<label class='check'><input type=radio name=scope value={v} {'checked' if checked else ''}> {text}"  # noqa: E731
+                                                   f"{f' <span class=muted small>{note}</span>' if note else ''}</label>")
+    exact = a["subject"] not in ("", "*")
+    scopes = ((opt("exact", f"Only this behaviour: <b>{rule}</b> for <b>{e(label or a['asset'])}</b> about <span class='mono'>{e(a['subject'])}</span>", True)
+               if exact else "")
+              + ("" if a["rule"] in MANY_PEERS - {"outbound_volume"} else
+                 opt("dest", f"<b>{rule}</b> for <b>{e(label or a['asset'])}</b> to one destination and/or service", not exact,
+                     "traffic to this destination is not counted; the rest is still checked" if a["rule"] == "outbound_volume" else
+                     "only findings that name exactly this destination/service are hidden"))
+              + "<details class='tech'><summary>Broader options</summary>"
+              + opt("rule", f"Any <b>{rule}</b> finding for <b>{e(label or a['asset'])}</b>", note="hides this kind of finding to any destination")
               + ("" if shared or not a["asset"] else
-                 opt("device", f"Every finding for <span class='mono'>{e(a['asset'])}</span> (expected device)")))
-    note = ("<p class='muted small'>This is the shared NAT address, used by every LAN host: suppress the finding type here, or mark the "
-            "individual LAN hosts expected in the attribution above.</p>" if shared else "")
+                 opt("device", f"Every finding for <span class='mono'>{e(a['asset'])}</span> (expected device)", note="hides all findings for the device"))
+              + "</details>")
+    note = ("<p class='muted small'>This is the shared NAT address, used by every LAN host: limit the exception to a destination or service, or "
+            "mark the individual LAN hosts expected in the attribution above.</p>" if shared else "")
+    days = "".join(f"<label class='chk'><input type=checkbox name=days value={i}> {d}</label>" for i, d in enumerate(DAY_NAMES))
+    default_until = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 90 * 86400))
     return f"""<div class="card" id="normal"><div class="card-h"><h2>This is normal</h2></div>
 <form method=post action="/netmon/alert/{a['id']}/normal" class="stackform">{csrf_field(req)}{back_field(back)}
-<p class="muted small">Stops future triggers and closes the matching findings already raised. It only suppresses findings: the traffic is not
-marked trusted anywhere else, and you can undo it under Security → Suppressions.</p>{note}
+<p class="muted small">Stops matching findings from being raised. It only suppresses findings: the traffic is not marked trusted anywhere else.
+You see what it would hide before it is saved, and can undo it under Security → Suppressions.</p>{note}
 <fieldset><legend>Don't alert again for</legend>{scopes}</fieldset>
-<label>Reason<input name=reason required maxlength=200 placeholder="e.g. crawler: fan-out is what this server does"></label>
-<label>Expires after (days)<input name=expires_days inputmode=numeric maxlength=5 placeholder="never" class="short"></label>
+<div class="row"><label>Destination (IP or CIDR)<input name=peer value="{e(peer0)}" class="mono" placeholder="any"></label>
+<label>Service<input name=service value="{e(svc0)}" class="mono short" placeholder="tcp/443"></label></div>
+<fieldset><legend>Only during a schedule (optional, firewall's local time)</legend><div class="chkgrid">{days}</div>
+<div class="row"><label>From<input type=time name=start></label><label>To<input type=time name=end></label></div></fieldset>
+<div class="row"><label>Until<input type=date name=until value="{default_until}"></label>
+<span class="muted small">leave empty for no expiry (not recommended)</span></div>
+<label>Reason<input name=reason required maxlength=200 placeholder="e.g. nightly backup to the offsite NAS"></label>
 <label class="check"><input type=checkbox name=close value=1 checked> Close matching open findings now</label>
-<div class="row"><button class="primary">Don't alert again</button></div></form>
+<div class="row"><button class="primary" name=preview value=1>Preview what this hides</button></div></form>
 <details class="tech"><summary>Advanced exception (any rule / asset / subject pattern)</summary>
 <form method=post action="/netmon/exceptions" class="row">{csrf_field(req)}
 <input name=rule value="{e(a['rule'])}" size=18> <input name=asset value="{e(a['asset'])}" size=16>
@@ -854,29 +914,47 @@ marked trusted anywhere else, and you can undo it under Security → Suppression
 <button>Add exception</button></form></details></div>"""
 
 
+def _expiry(until="", expires_days=""):
+    if until.strip():
+        try:
+            return time.mktime(time.strptime(until.strip(), "%Y-%m-%d")) + 86400 - 1   # end of that day
+        except ValueError:
+            raise HTTPException(400, "the expiry date must be YYYY-MM-DD")
+    if expires_days.strip():
+        try:
+            return time.time() + float(expires_days) * 86400
+        except ValueError:
+            raise HTTPException(400, "expires must be a number of days")
+    return None
+
+
 @app.post("/netmon/alert/{aid}/normal")
-def alert_normal(req: Request, aid: int, scope: str = Form(...), reason: str = Form(...), expires_days: str = Form(""),
-                 close: str = Form(""), back: str = Form(""), csrf: str = Form("")):
+async def alert_normal(req: Request, aid: int):
+    from . import baselines as bl
     u = need(req, "analyst")
-    check_csrf(req, csrf)
+    form = await req.form()
+    g = lambda k, d="": str(form.get(k, d) or d)  # noqa: E731
+    check_csrf(req, g("csrf"))
     a = conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()
     if not a:
         raise HTTPException(404)
-    reason = " ".join(reason.split())[:200]
+    scope, back = g("scope"), g("back")
+    reason = " ".join(g("reason").split())[:200]
     if not reason:
         raise HTTPException(400, "reason required")
+    exp = _expiry(g("until"), g("expires_days"))
     try:
-        exp = time.time() + float(expires_days) * 86400 if expires_days.strip() else None
-    except ValueError:
-        raise HTTPException(400, "expires must be a number of days")
+        sched = bl.parse_schedule(form.getlist("days"), g("start"), g("end"))
+        peer = bl.norm_peer(g("peer")) if scope == "dest" else "*"
+        svc = bl.norm_service(g("service")) if scope == "dest" else "*"
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    if scope == "dest" and peer == "*" and svc == "*":
+        raise HTTPException(400, "enter a destination or a service (or choose a broader option)")
     now = time.time()
-    if scope in ("rule", "exact"):
-        exc = {"rule": a["rule"], "asset": a["asset"], "subject": "*" if scope == "rule" else a["subject"],
-               "enabled": 1, "expires_at": exp}
-        conn.execute("INSERT INTO exceptions(rule,asset,subject,owner,reason,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)",
-                     (exc["rule"], exc["asset"], exc["subject"], u, f"{reason} (from finding #{aid})", u, now, exp))
-        audit(conn, u, "exception_added", {"rule": exc["rule"], "asset": exc["asset"], "subject": exc["subject"], "expires": exp, "alert": aid})
-        hit = lambda x: exception_matches(exc, x["rule"], x["asset"], x["subject"], now)  # noqa: E731
+    if scope in ("rule", "exact", "dest"):
+        exc = {"rule": a["rule"], "asset": a["asset"], "subject": a["subject"] if scope == "exact" else "*", "peer": peer, "service": svc,
+               "schedule": json.dumps(sched) if sched else None, "site": None, "enabled": 1, "expires_at": exp}
     elif scope == "device":
         try:
             ip = str(ipaddress.ip_address(a["asset"]))
@@ -884,16 +962,28 @@ def alert_normal(req: Request, aid: int, scope: str = Form(...), reason: str = F
             raise HTTPException(400, "this finding has no single address to mark expected")
         if ip in cfg.get("outbound_nat_ips", []):
             raise HTTPException(400, "that is the shared NAT address (every LAN host) — mark the individual devices instead")
-        d = get_setting(conn, EXPECTED_KEY, {}) or {}
-        d[ip] = {"reason": f"{reason} (from finding #{aid})", "by": u, "ts": now, "expires_at": exp}
-        put_setting(conn, EXPECTED_KEY, d, u)
-        audit(conn, u, "expected_device_added", {"target": ip, "reason": d[ip]["reason"], "expires": exp, "alert": aid})
-        hit = lambda x: x["asset"] == ip  # noqa: E731
+        exc = {"rule": "*", "asset": ip, "subject": "*", "peer": "*", "service": "*", "schedule": None, "site": None, "enabled": 1, "expires_at": exp}
     else:
         raise HTTPException(400, "unknown scope")
+    if g("preview"):
+        return _normal_preview(req, a, exc, scope, form)
+    if scope == "device":
+        d = get_setting(conn, EXPECTED_KEY, {}) or {}
+        d[exc["asset"]] = {"reason": f"{reason} (from finding #{aid})", "by": u, "ts": now, "expires_at": exp}
+        put_setting(conn, EXPECTED_KEY, d, u)
+        audit(conn, u, "expected_device_added", {"target": exc["asset"], "reason": d[exc["asset"]]["reason"], "expires": exp, "alert": aid})
+        hit = lambda x: x["asset"] == exc["asset"]  # noqa: E731
+    else:
+        conn.execute("INSERT INTO exceptions(rule,asset,subject,owner,reason,created_by,created_at,expires_at,peer,service,schedule,site) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (exc["rule"], exc["asset"], exc["subject"], u, f"{reason} (from finding #{aid})", u, now,
+                                                         exp, peer, svc, exc["schedule"], None))
+        audit(conn, u, "exception_added", {"rule": exc["rule"], "asset": exc["asset"], "subject": exc["subject"], "peer": peer, "service": svc,
+                                           "schedule": sched, "expires": exp, "alert": aid})
+        hit = lambda x: bl.exception_applies(exc, dict(x) | {"window": (x["window_start"], x["window_end"])}, now,  # noqa: E731
+                                             cfg.site(x["site"]) if x["site"] else None)
     closed = []
-    if close:
-        for x in conn.execute("SELECT id, rule, asset, subject FROM alerts WHERE status IN ('open','acked') AND test=0").fetchall():
+    if g("close"):
+        for x in conn.execute("SELECT * FROM alerts WHERE status IN ('open','acked') AND test=0").fetchall():
             if x["id"] == aid or hit(x):
                 conn.execute("UPDATE alerts SET status='closed', acked_by=?, acked_at=? WHERE id=?", (u, now, x["id"]))
                 closed.append(x["id"])
@@ -902,6 +992,39 @@ def alert_normal(req: Request, aid: int, scope: str = Form(...), reason: str = F
     conn.commit()
     # closed: back to the list it came from (it is gone from there now); otherwise stay on the finding
     return RedirectResponse(safe_next(back) if closed and back else f"/netmon/alert/{aid}", 303)
+
+
+def _normal_preview(req, a, exc, scope, form):
+    """Before saving: one sentence on what is hidden, how many recent findings it would have hidden (with examples),
+    and how many findings for the same device would still be raised."""
+    from . import baselines as bl
+    if scope == "device":
+        n = conn.execute("SELECT count(*) FROM alerts WHERE asset=? AND test=0 AND last_seen>=?", (exc["asset"], time.time() - 30 * 86400)).fetchone()[0]
+        pv = {"matches": n, "examples": [dict(x) for x in conn.execute("SELECT id, title, last_seen, status FROM alerts WHERE asset=? AND test=0 "
+                                                                        "ORDER BY last_seen DESC LIMIT 5", (exc["asset"],))],
+              "same_device_not_hidden": 0, "days": 30}
+        what = f"every finding for {cfg.asset_label(exc['asset'])} (expected device)"
+    else:
+        pv = bl.preview(conn, exc, cfg)
+        what = bl.describe(exc, cfg, RULE_LABEL)
+    until = (" until " + time.strftime("%Y-%m-%d", time.localtime(exc["expires_at"]))) if exc["expires_at"] else " with no expiry"
+    ex = "".join(f"<li><a href='/netmon/alert/{x['id']}'>#{x['id']} {e(x['title'])}</a> <span class='muted small'>{e(fmt_ts(x['last_seen']))} · {e(x['status'])}</span></li>"
+                 for x in pv["examples"])
+    hidden = "".join(f"<input type=hidden name='{e(k)}' value='{e(v)}'>" for k, v in form.multi_items() if k not in ("preview",))
+    keep = (f"<p>{pv['same_device_not_hidden']} other finding(s) for this device in the last {pv['days']} days would <b>still be raised</b>: "
+            "this exception does not cover them.</p>" if pv["same_device_not_hidden"] else "")
+    if exc.get("peer", "*") != "*" and a["rule"] == "outbound_volume":
+        keep = ("<p>Volume findings are not hidden as a whole: traffic to this destination is <b>left out of the count</b>, and the rest is "
+                "still compared with the baseline. Earlier findings are not re-evaluated, so the count above can be 0.</p>") + keep
+    broad = ("<div class='banner warn'>This is a broad exception. A narrower one (a destination, a service, or a schedule) keeps unrelated "
+             "activity on this device visible.</div>" if scope in ("rule", "device") else "")
+    body = f"""<section class="card"><div class="card-h"><h2>Check before saving</h2></div>{broad}
+<p>This will stop findings for: <b>{e(what)}</b>{e(until)}.</p>
+<p>In the last {pv['days']} days it would have hidden <b>{pv['matches']}</b> finding(s){':' if ex else '.'}</p>{f'<ul>{ex}</ul>' if ex else ''}
+{keep}<p class="muted small">Findings are still recorded as traffic; only the alert is suppressed. You can disable it at any time under Security → Suppressions.</p>
+<form method=post action="/netmon/alert/{a['id']}/normal" class="row">{hidden}<button class="primary">Save exception</button>
+<a class="btn" href="/netmon/alert/{a['id']}#normal">Change it</a></form></section>"""
+    return page(req, "Check exception", body, "/netmon/security", scoped=False)
 
 
 @app.post("/netmon/alert/{aid}/status")
@@ -971,13 +1094,41 @@ def test_alert(req: Request, csrf: str = Form("")):
 @app.get("/netmon/exceptions", response_class=HTMLResponse)
 def exceptions(req: Request):
     u, r = user_of(req)
-    rows = conn.execute("SELECT * FROM exceptions ORDER BY id DESC").fetchall()
+    from . import baselines as bl
+    rows = conn.execute("SELECT * FROM exceptions ORDER BY enabled DESC, id DESC").fetchall()
+    now0 = time.time()
+
+    def xstate(x):
+        if not x["enabled"]:
+            return "<span class='tag'>removed</span>"
+        if x["expires_at"] and x["expires_at"] < now0:
+            return "<span class='tag'>expired</span>"
+        if x["expires_at"] and x["expires_at"] - now0 < 7 * 86400:
+            return f"<span class='tag warn'>expires {e(fmt_ts(x['expires_at'])[:10])}</span>"
+        return f"<span class='tag'>{'until ' + e(fmt_ts(x['expires_at'])[:10]) if x['expires_at'] else 'no expiry'}</span>"
     trs = "".join(
-        f"<tr><td>{x['id']}</td><td><code>{e(x['rule'])}</code></td><td>{e(x['asset'])}</td><td>{e(x['subject'])}</td><td>{e(x['owner'])}</td>"
-        f"<td>{e(x['reason'])}</td><td>{e(x['created_by'])}</td><td>{e(fmt_ts(x['expires_at'])) if x['expires_at'] else 'never'}</td>"
-        f"<td>{'yes' if x['enabled'] else 'no'}</td><td>"
-        + (f"<form method=post action='/netmon/exceptions/{x['id']}/disable'>{csrf_field(req)}<button>Disable</button></form>"
+        f"<tr><td>{x['id']}</td><td>{e(bl.describe(x, cfg, RULE_LABEL))}<div class='muted small'>{e(x['reason'])} · by {e(x['created_by'])} "
+        f"{e(fmt_ts(x['created_at'])[:10])}</div></td><td class='num'>{x['hits']:,}</td><td>{e(fmt_ts(x['last_hit'])) if x['last_hit'] else 'never'}</td>"
+        f"<td>{xstate(x)}</td><td>"
+        + ((f"<form method=post action='/netmon/exceptions/{x['id']}/extend' class='inline'>{csrf_field(req)}<button class='sm'>Extend 30 days</button></form> "
+            if x["expires_at"] else "")
+           + f"<form method=post action='/netmon/exceptions/{x['id']}/disable' class='inline'>{csrf_field(req)}<button class='sm'>Remove</button></form>"
            if x["enabled"] and ROLES[r] >= 1 else "") + "</td></tr>" for x in rows)
+    soon = sum(1 for x in rows if x["enabled"] and x["expires_at"] and 0 < x["expires_at"] - now0 < 7 * 86400)
+    never = sum(1 for x in rows if x["enabled"] and not x["expires_at"])
+    lp = bl.learning_progress(conn, cfg, get_state(conn, "detector")[0])
+    learn_card = ("<section class='card'><div class='card-h'><h2>Baselines</h2><span class='muted small'>what “usual” is based on</span></div><ul>"
+                  + "".join(f"<li><b>{e(x['name'])}</b>: {x['days']:.1f} of {x['need']} days of history ({x['pct']}%) — "
+                            f"{'complete' if x['state'] == 'complete' else 'still learning: findings are low confidence' if x['state'] == 'learning' else 'starting: new-destination checks begin at day ' + str(x['min'])}"
+                            f" · time zone {e(x['tz'])}<div class='jobbar' role='progressbar' aria-valuenow='{x['pct']}' aria-valuemin='0' aria-valuemax='100'>"
+                            f"<i style='width:{x['pct']}%'></i></div></li>" for x in lp)
+                  + "</ul><details class='tech'><summary>How baselines work</summary><ul class='small'>"
+                  "<li>Volume is compared with the same local hour (firewall's time zone, daylight saving included) on earlier days, "
+                  "weekdays with weekdays and weekends with weekends once at least three of each exist.</li>"
+                  "<li>Hours without traffic records from the firewall are left out; they are never counted as zero.</li>"
+                  "<li>Hours with unresolved volume findings for the same address are not learned as normal.</li>"
+                  "<li>Traffic to destinations covered by an exception is subtracted before the check, so an expected backup cannot "
+                  "hide other uploads.</li></ul></details></section>")
     from .admin import SECURITY_TABS, tabs
     exp = get_setting(conn, EXPECTED_KEY, {}) or {}
     now = time.time()
@@ -998,10 +1149,15 @@ counted towards fan-out, and other findings are dropped when every named peer re
 attributed and still count. Traffic is still recorded and shown on every page. Changes are audited.</p>
 <div class="wrap"><table class="tbl"><tr><th>Address</th><th>Name</th><th>Reason</th><th>By</th><th>Added</th><th>Expires</th><th></th></tr>
 {etr or '<tr><td colspan=7 class=muted>No expected devices</td></tr>'}</table></div>{add}</section>""")
-    return page(req, "Suppressions", tabs(SECURITY_TABS, "/netmon/exceptions") + expected_card + "<h2 class='grp'>Alert suppressions</h2><p class='muted'>Exceptions suppress alerts; they do not make traffic trusted. "
-                "Use * for any rule/asset/subject; subject may be a CIDR. Add them from an alert.</p><div class='card wrap'><table class='tbl'><tr><th>#</th><th>Rule</th>"
-                "<th>Asset</th><th>Subject</th><th>Owner</th><th>Reason</th><th>By</th><th>Expires</th><th>Active</th><th></th></tr>"
-                f"{trs or '<tr><td colspan=10 class=muted>No exceptions</td></tr>'}</table></div>", "/netmon/security", scoped=False)
+    warn = "".join(f"<div class='banner warn'>{t}</div>" for t in (
+        f"{soon} exception(s) expire within 7 days. Extend them if they are still needed." if soon else "",
+        f"{never} exception(s) never expire. Review them from time to time." if never else "") if t)
+    return page(req, "Suppressions", tabs(SECURITY_TABS, "/netmon/exceptions") + learn_card + expected_card
+                + "<h2 class='grp'>Alert suppressions</h2><p class='muted'>Exceptions suppress alerts; they do not make traffic trusted. "
+                "Add them from a finding (This is normal), where you see what they would hide before saving.</p>" + warn
+                + "<div class='card wrap'><table class='tbl'><tr><th>#</th><th>What it hides</th><th class='num'>Hidden</th><th>Last hidden</th>"
+                "<th>Status</th><th></th></tr>"
+                f"{trs or '<tr><td colspan=6 class=muted>No exceptions</td></tr>'}</table></div>", "/netmon/security", scoped=False)
 
 
 @app.post("/netmon/exceptions")
@@ -1058,6 +1214,20 @@ def remove_expected(req: Request, target: str = Form(...), csrf: str = Form(""))
     if d.pop(target, None) is not None:
         put_setting(conn, EXPECTED_KEY, d, u)
         audit(conn, u, "expected_device_removed", {"target": target})
+    return RedirectResponse("/netmon/exceptions", 303)
+
+
+@app.post("/netmon/exceptions/{xid}/extend")
+def extend_exception(req: Request, xid: int, csrf: str = Form("")):
+    u = need(req, "analyst")
+    check_csrf(req, csrf)
+    x = conn.execute("SELECT expires_at FROM exceptions WHERE id=? AND enabled=1", (xid,)).fetchone()
+    if not x:
+        raise HTTPException(404)
+    new = max(time.time(), x["expires_at"] or time.time()) + 30 * 86400
+    conn.execute("UPDATE exceptions SET expires_at=? WHERE id=?", (new, xid))
+    conn.commit()
+    audit(conn, u, "exception_extended", {"id": xid, "expires": new})
     return RedirectResponse("/netmon/exceptions", 303)
 
 
@@ -1373,6 +1543,10 @@ def health_loop():
 def start():
     if os.environ.get("NETMON_DETECTOR", "1") == "1":  # noqa: SIM102
         _schema_migrate()   # before the detector: rules use the new columns
+        from .incidents import backfill
+        threading.Thread(target=backfill, args=(cfg,), daemon=True).start()   # once: group findings raised before incidents existed
+        from .hunt import feed_loop
+        threading.Thread(target=feed_loop, daemon=True).start()   # indicator feeds an admin added (none by default)
         from .logingest import Ingest
         notifier.start()
         threading.Thread(target=detector_loop, daemon=True).start()
@@ -1385,6 +1559,8 @@ def start():
         from .dnsresolve import NameResolver
         NameResolver(cfg, ch, cfg["clickhouse_url"]).start()   # FQDNs for remote addresses from the DNS query log
         threading.Thread(target=health_loop, daemon=True).start()
+        from .quality import Runner as ProbeRunner
+        ProbeRunner(cfg, db_connect).start()   # WAN / VPN quality probes an admin added (none by default)
         from .views import warm_loop
         threading.Thread(target=warm_loop, daemon=True).start()
         from .zeek import ZEEK_DIR, ZeekIngest
@@ -1400,5 +1576,22 @@ from . import autoresp  # noqa: E402,F401  (auto-response settings, firewall set
 from . import coverage  # noqa: E402,F401  (coverage & source health)
 from . import intel  # noqa: E402,F401  (threat intel: ExploitHound Threat Radar)
 from . import capacity_views  # noqa: E402,F401  (capacity planner, resources & capacity, device hardware)
+from . import identity_views  # noqa: E402,F401  (device identity: address history, identity review)
+from . import changes_views  # noqa: E402,F401  (Investigate -> What changed)
+from . import incident_views  # noqa: E402,F401  (Investigate -> Incidents)
+from . import hunt_views  # noqa: E402,F401  (Investigate -> Threat hunt)
+from . import segments_views  # noqa: E402,F401  (Internal devices -> Segmentation)
+from . import apps_views  # noqa: E402,F401  (Internal devices -> Applications)
+from . import quality_views  # noqa: E402,F401  (Settings -> Status -> WAN / VPN quality)
+from . import search_views  # noqa: E402,F401  (Investigate -> Search)
+from . import dtest_views  # noqa: E402,F401  (Investigate -> Test detections)
+
+
+@app.get("/netmon/investigate")
+def investigate_hub():
+    """Main-nav entry: the first Investigate section this version has."""
+    from .ux import INVESTIGATE_TABS, _routes
+    known = _routes()
+    return RedirectResponse(next((h for _, h in INVESTIGATE_TABS if h in known), "/netmon/investigations"), 303)
 from . import devices as _devices  # noqa: E402
 _devices.register(app)  # Settings -> Devices (multi-vendor onboarding, capability and telemetry status)

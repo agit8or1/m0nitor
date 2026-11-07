@@ -36,10 +36,27 @@ def norm_mac(m):
 
 def traffic_ips(cfg, dash):
     """{ip: last_seen} for internal addresses that received internet traffic in the last 24 h."""
+    out = {}
+    for ips in traffic_by_site(cfg, dash).values():
+        for ip, t in ips.items():
+            out[ip] = max(t, out.get(ip, 0))
+    return out
+
+
+def traffic_by_site(cfg, dash):
+    """{site: {ip: last_seen}}: the same, per site (the exporter tells which firewall saw it, so overlapping private
+    ranges at two sites stay apart)."""
     sc = dash.scope(range_key="24h")
-    rows = dash.q(sc, f"""SELECT replaceOne(IPv6NumToString(DstAddr), '::ffff:', '') AS ip, toUnixTimestamp(max(TimeReceived)) AS last
-        FROM flows WHERE {dash.where(sc)} AND INB AND TOLAN GROUP BY ip ORDER BY ip LIMIT 5000""", ttl=600)
-    return {r["ip"]: int(r["last"]) for r in rows if _usable(cfg, r["ip"])}
+    rows = dash.q(sc, f"""SELECT ExporterName AS exp, replaceOne(IPv6NumToString(DstAddr), '::ffff:', '') AS ip,
+        toUnixTimestamp(max(TimeReceived)) AS last
+        FROM flows WHERE {dash.where(sc)} AND INB AND TOLAN GROUP BY exp, ip ORDER BY ip LIMIT 10000""", ttl=600)
+    site_of = {s["exporter"]: s for s in cfg.sites}
+    out = {}
+    for r in rows:
+        s = site_of.get(r["exp"])
+        if s and _usable(cfg, r["ip"]):
+            out.setdefault(s["id"], {})[r["ip"]] = int(r["last"])
+    return out
 
 
 def _usable(cfg, ip):
@@ -67,20 +84,30 @@ def _arp_call(fw):
             raise first
 
 
-def arp_rows(cfg):
-    """({ip: {mac, vendor, hostname, site}}, {site: "ok (N)" | error}) from every OPNsense site's ARP table."""
+def _err(ex):
+    """403s already name the missing privilege (block._call); keep that whole, shorten anything else."""
+    msg = str(ex)
+    return msg[:400] if "privilege" in msg else f"error: {msg[:160]}"
+
+
+def _fws(cfg, key):
+    """(site, OPNsense client) for sites with an API key where the user wants this discovery source."""
     from . import block as blk
-    out, status = {}, {}
+    from .ux import monitored
     for site in cfg.sites:
         fw = blk.enforcer(site)
-        if not isinstance(fw, blk.OPNsense) or not fw.enabled:
-            continue
+        if isinstance(fw, blk.OPNsense) and fw.enabled and monitored(site, key):
+            yield site, fw
+
+
+def arp_rows(cfg):
+    """({ip: {mac, vendor, hostname, site}}, {site: "ok (N)" | error}) from every OPNsense site's ARP table."""
+    out, status = {}, {}
+    for site, fw in _fws(cfg, "discovery_arp"):
         try:
             rows = _arp_call(fw)
         except Exception as ex:
-            msg = str(ex)
-            status[site["id"]] = ("no permission: give the netmon API user the privilege \"Diagnostics: ARP Table\""
-                                  if "403" in msg else f"error: {msg[:120]}")
+            status[site["id"]] = _err(ex)
             continue
         rows = rows if isinstance(rows, list) else rows.get("rows", [])
         n = 0
@@ -92,6 +119,79 @@ def arp_rows(cfg):
                        "hostname": str(r.get("hostname") or "").strip().rstrip(".")[:64], "site": site["id"]}
             n += 1
         status[site["id"]] = f"ok ({n} entries)"
+    return out, status
+
+
+def ndp_rows(cfg):
+    """IPv6 neighbours ({ip: {mac, hostname, site}}, status) from search_ndp ("Diagnostics: NDP Table"). Link-local
+    addresses are skipped (every interface has one; they never cross the firewall)."""
+    out, status = {}, {}
+    for site, fw in _fws(cfg, "discovery_ndp"):
+        try:
+            rows = fw._call("GET", "/api/diagnostics/interface/search_ndp", params={"rowCount": "-1", "current": "1"})
+        except Exception as ex:
+            status[site["id"]] = _err(ex)
+            continue
+        rows = rows if isinstance(rows, list) else rows.get("rows", [])
+        n = 0
+        for r in rows:
+            ip, mac = str(r.get("ip", "")).split("%")[0].strip(), norm_mac(r.get("mac"))
+            try:
+                a = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if not mac or a.version != 6 or a.is_link_local or a.is_multicast or not _usable(cfg, ip):
+                continue
+            out[ip] = {"mac": mac, "hostname": "", "site": site["id"]}
+            n += 1
+        status[site["id"]] = f"ok ({n} entries)"
+    return out, status
+
+
+def _lease_time(v):
+    """Lease start/end as epoch seconds: ints, '2026/11/06 10:00:00 [UTC]' or ISO strings; None when unparseable."""
+    if v in (None, ""):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        pass
+    import calendar
+    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return float(calendar.timegm(time.strptime(str(v).replace(" UTC", "").strip()[:19], fmt)))
+        except ValueError:
+            continue
+    return None
+
+
+def lease_rows(cfg):
+    """DHCP leases [{ip, mac, hostname, site, starts, ends, type}] from ISC DHCPv4 or Kea (whichever answers), status."""
+    out, status = [], {}
+    for site, fw in _fws(cfg, "discovery_dhcp"):
+        rows, errs = None, []
+        for path, params in (("/api/dhcpv4/leases/search_lease", {"rowCount": "-1", "current": "1", "inactive": "0"}),
+                             ("/api/kea/leases4/search", {"rowCount": "-1", "current": "1"})):
+            try:
+                r = fw._call("GET", path, params=params)
+                rows = r if isinstance(r, list) else r.get("rows", [])
+                break
+            except Exception as ex:
+                errs.append(_err(ex))
+        if rows is None:
+            # one of the two servers is normally unused: report the ISC message (the common case) unless only Kea failed oddly
+            status[site["id"]] = errs[0] if errs else "error"
+            continue
+        n = 0
+        for r in rows:
+            ip, mac = str(r.get("address") or r.get("ip_address") or "").strip(), norm_mac(r.get("mac") or r.get("hwaddr"))
+            if not ip or not mac or not _usable(cfg, ip):
+                continue
+            out.append({"ip": ip, "mac": mac, "hostname": str(r.get("hostname") or r.get("client-hostname") or "").strip()[:64],
+                        "site": site["id"], "starts": _lease_time(r.get("starts") or r.get("cltt")),
+                        "ends": _lease_time(r.get("ends") or r.get("expire")), "type": str(r.get("type") or r.get("state") or "")[:16]})
+            n += 1
+        status[site["id"]] = f"ok ({n} leases)"
     return out, status
 
 
@@ -143,11 +243,20 @@ def run(cfg, conn, dash, user="discovery"):
     from .core import apply_assets
     now = int(time.time())
     seen, err = {}, None
+    by_site = {}
     try:
-        seen = traffic_ips(cfg, dash)
+        by_site = traffic_by_site(cfg, dash)
+        seen = {ip: t for ips in by_site.values() for ip, t in ips.items()}
     except Exception as ex:
         err = f"traffic: {type(ex).__name__}"
     arp, arp_status = arp_rows(cfg)
+    ndp, ndp_status = ndp_rows(cfg)
+    leases, dhcp_status = lease_rows(cfg)
+    try:   # persistent identity: time-stamped address ownership per site (identity.py)
+        from . import identity
+        ident = identity.ingest_discovery(conn, by_site, arp, ndp, leases, now)
+    except Exception as ex:
+        ident = {"error": f"{type(ex).__name__}: {str(ex)[:120]}"}
     db = get_setting(conn, "assets:db", {}) or {}
     db, added, filled = merge(db, seen, arp, now)
     if added or filled or seen:
@@ -155,8 +264,8 @@ def run(cfg, conn, dash, user="discovery"):
         apply_assets(cfg, conn)
     if added or filled:
         audit(conn, user, "inventory_discovered", {"added": added, "filled": filled})
-    summary = {"ts": now, "traffic_ips": len(seen), "arp_ips": len(arp), "arp": arp_status, "added": added,
-               "filled": len(filled), "error": err}
+    summary = {"ts": now, "traffic_ips": len(seen), "arp_ips": len(arp), "arp": arp_status, "ndp_ips": len(ndp), "ndp": ndp_status,
+               "leases": len(leases), "dhcp": dhcp_status, "identity": ident, "added": added, "filled": len(filled), "error": err}
     set_state(conn, STATE, summary)
     return summary
 

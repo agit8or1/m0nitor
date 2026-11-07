@@ -187,6 +187,52 @@
     h.replaceChildren("Where traffic goes", NM.scope.cc ? el("a", { class: "small sel-link", href: NM.href(`/netmon/countries/${NM.scope.cc}`), text: ` · open ${d.scope.cc_name} details →` }) : "");
   }
 
+  // "What changed?" top 3 (today vs yesterday): computed in the background on the server, never blocks the page
+  async function loadChanges() {
+    const node = $("chgtop");
+    try {
+      const d = await NM.get("/netmon/api/changes/top");
+      if (!d.ready) { node.replaceChildren(el("p", { class: "muted small", text: "Comparing today with yesterday… (this takes a few seconds)" })); setTimeout(loadChanges, 8000); return; }
+      if (d.error) { node.replaceChildren(el("p", { class: "muted small", text: `The comparison could not run (${d.error}).` })); return; }
+      const items = d.items || [];
+      if (!items.length) {
+        node.replaceChildren(el("p", { class: "small", text: d.complete ? "Nothing notable changed compared with yesterday (within what netmon can see)."
+          : "No notable changes found, but today's data is incomplete, so this is not a clean bill of health." }));
+        return;
+      }
+      const ul = el("ul", { class: "sentence-list" });
+      for (const x of items) ul.append(el("li", {}, el("span", { class: "s1", text: x.title }), el("span", { class: "s2", text: x.detail }),
+        el("span", { class: "acts" }, el("span", { class: `conf c-${x.confidence}`, text: `${x.confidence[0].toUpperCase()}${x.confidence.slice(1)} confidence` }), " · ",
+          el("a", { href: x.link, text: "View evidence →" }))));
+      const more = d.total > items.length ? el("p", { class: "muted small" }, `${d.total - items.length} more · `, el("a", { href: "/netmon/changes", text: "see all" })) : null;
+      const warn = d.complete ? null : el("p", { class: "muted small", text: "Some of today's data is missing; changes are less certain." });
+      node.replaceChildren(ul, ...[warn, more].filter(Boolean));
+    } catch (e) { node.replaceChildren(el("p", { class: "muted small", text: `Could not load changes: ${e.message}` })); }
+  }
+  loadChanges();
+  NM.every(loadChanges, 300000);
+
+  // "Needs attention": incidents, serious findings not yet grouped, and monitoring health (never "all fine" while a source is down)
+  async function loadAttention() {
+    const node = $("attn");
+    try {
+      const d = await NM.get("/netmon/api/attention");
+      const parts = [];
+      if (d.incidents) parts.push(el("a", { href: "/netmon/incidents", class: "attn-i bad" }, el("b", { text: String(d.incidents) }),
+        ` open incident${d.incidents > 1 ? "s" : ""}${d.unassigned ? ` (${d.unassigned} unassigned)` : ""}`));
+      if (d.ungrouped_serious) parts.push(el("a", { href: "/netmon/security", class: "attn-i bad" }, el("b", { text: String(d.ungrouped_serious) }),
+        " high-severity finding(s) to review"));
+      if (d.health_count) parts.push(el("a", { href: d.health_count === 1 ? `/netmon/alert/${d.health[0].id}` : "/netmon/security", class: "attn-i warn" },
+        el("b", { text: "Monitoring: " }), d.health_count === 1 ? d.health[0].title : `${d.health_count} problems — some data may be missing`));
+      if (d.quality_count) parts.push(el("a", { href: "/netmon/quality", class: "attn-i warn" }, el("b", { text: "WAN quality: " }),
+        d.quality_count === 1 ? `${d.quality[0].name} ${d.quality[0].state} (${d.quality[0].text})` : `${d.quality_count} probes degraded or down`));
+      if (!parts.length) parts.push(el("span", { class: "attn-i ok", text: "No open incidents or serious findings, and all monitored sources are reporting." }));
+      node.replaceChildren(...parts);
+    } catch (e) { node.replaceChildren(el("span", { class: "attn-i warn", text: `Could not check what needs attention: ${e.message}` })); }
+  }
+  loadAttention();
+  NM.every(loadAttention, 60000);
+
   async function load() {
     try {
       data = await NM.get("/netmon/api/overview?" + NM.qs());

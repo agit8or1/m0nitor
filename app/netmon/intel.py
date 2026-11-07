@@ -108,7 +108,9 @@ the wild; EPSS = a 30-day forecast, not an observation; a match does not mean a 
     kev = sorted((dict(v, cve=k) for k, v in st.get("rows", {}).items() if v["section"] == "confirmed"), key=kev_date, reverse=True)
     latest = f"""<section class="card wrap"><div class="card-h"><h2>Recently confirmed exploited</h2><span class="muted small">latest CISA KEV additions on the radar</span></div>
 {table.format('', cve_rows(kev[:40])) if kev else "<p class='muted'>No data yet.</p>"}</section>"""
-    return page(req, "Security · Threat intel", tabs(SECURITY_TABS, "/netmon/threat-intel") + feed + sw + ids + latest,
+    hunt_note = ("<div class='banner'>This page lists vulnerabilities (CVEs). To check whether anything here talked to known-bad "
+                 "<b>addresses or domains</b>, use <a href='/netmon/hunt'>Investigate → Threat hunt</a>.</div>")
+    return page(req, "Security · Threat intel", tabs(SECURITY_TABS, "/netmon/threat-intel") + hunt_note + feed + sw + ids + latest,
                 "/netmon/security", scoped=False)
 
 

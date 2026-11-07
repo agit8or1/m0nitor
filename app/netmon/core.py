@@ -172,6 +172,8 @@ def normalize_site(s: dict, raw: dict, first: bool) -> dict:
     s.setdefault("wan_down_mbps", cap)
     s.setdefault("wan_up_mbps", cap)
     s.setdefault("location", {})
+    s.setdefault("tz", raw.get("timezone") or "UTC")   # IANA zone for schedules, baselines and local times (DST-aware)
+    s.setdefault("monitor", {})                        # per-firewall monitoring choices (ux.MONITOR_OPTIONS), default all on
     return s
 
 
@@ -402,6 +404,115 @@ SCHEMA = [
       decision TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT, block_id INTEGER, alert_id INTEGER);
     CREATE INDEX response_log_ts ON response_log(ts);
     CREATE INDEX response_log_addr ON response_log(address, trigger);
+    """,
+    # v6 (1.40): persistent device identity. Address ownership is time-stamped evidence per site (IP, MAC, hostname,
+    # DHCP lease); devices survive IP changes; merges/splits are reversible and audited (identity.py)
+    """
+    CREATE TABLE identities (
+      id INTEGER PRIMARY KEY, site TEXT NOT NULL, name TEXT, basis TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+      merged_into INTEGER, created_at REAL NOT NULL, updated_at REAL NOT NULL, note TEXT);
+    CREATE TABLE identity_evidence (
+      id INTEGER PRIMARY KEY, identity_id INTEGER NOT NULL, site TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
+      first_seen REAL NOT NULL, last_seen REAL NOT NULL, source TEXT NOT NULL, inferred INTEGER NOT NULL DEFAULT 0,
+      original_identity INTEGER, detail TEXT);
+    CREATE INDEX identity_ev_lookup ON identity_evidence(site, kind, value, first_seen);
+    CREATE INDEX identity_ev_owner ON identity_evidence(identity_id);
+    CREATE TABLE identity_suggestions (
+      id INTEGER PRIMARY KEY, site TEXT NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER, detail TEXT,
+      status TEXT NOT NULL DEFAULT 'open', created_at REAL NOT NULL, decided_by TEXT, decided_at REAL);
+    CREATE UNIQUE INDEX identity_sugg_once ON identity_suggestions(site, kind, a, b);
+    CREATE TABLE identity_events (
+      id INTEGER PRIMARY KEY, identity_id INTEGER NOT NULL, ts REAL NOT NULL, user TEXT NOT NULL, action TEXT NOT NULL, detail TEXT);
+    CREATE INDEX identity_events_id ON identity_events(identity_id, ts);
+    ALTER TABLE alerts ADD COLUMN identity_id INTEGER;
+    """,
+    # v7 (1.43): incidents group related findings (with the reason for each link); findings stay as they are
+    """
+    CREATE TABLE incidents (
+      id INTEGER PRIMARY KEY, site TEXT, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', severity TEXT NOT NULL,
+      assignee TEXT, resolution TEXT, resolution_note TEXT, identity_id INTEGER, asset TEXT,
+      anchor TEXT NOT NULL DEFAULT 'manual', peer TEXT, started_at REAL, first_seen REAL NOT NULL, last_seen REAL NOT NULL, created_at REAL NOT NULL, created_by TEXT NOT NULL,
+      updated_at REAL NOT NULL, resolved_at REAL);
+    CREATE INDEX incidents_status ON incidents(status, last_seen);
+    CREATE TABLE incident_alerts (
+      incident_id INTEGER NOT NULL, alert_id INTEGER NOT NULL, added_at REAL NOT NULL, added_by TEXT NOT NULL,
+      reason TEXT, removed INTEGER NOT NULL DEFAULT 0);
+    CREATE UNIQUE INDEX incident_alerts_one ON incident_alerts(alert_id, incident_id);
+    CREATE INDEX incident_alerts_inc ON incident_alerts(incident_id);
+    CREATE TABLE incident_events (
+      id INTEGER PRIMARY KEY, incident_id INTEGER NOT NULL, ts REAL NOT NULL, user TEXT NOT NULL, action TEXT NOT NULL, detail TEXT);
+    CREATE INDEX incident_events_id ON incident_events(incident_id, ts);
+    """,
+    # v8 (1.44): precise exceptions (destination, service, schedule, firewall) with hit counts (baselines.py)
+    """
+    ALTER TABLE exceptions ADD COLUMN peer TEXT NOT NULL DEFAULT '*';
+    ALTER TABLE exceptions ADD COLUMN service TEXT NOT NULL DEFAULT '*';
+    ALTER TABLE exceptions ADD COLUMN schedule TEXT;
+    ALTER TABLE exceptions ADD COLUMN site TEXT;
+    ALTER TABLE exceptions ADD COLUMN hits INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE exceptions ADD COLUMN last_hit REAL;
+    """,
+    # v9 (1.45): historical threat hunting: indicator lists (manual or HTTPS feed), hunt runs, matches (hunt.py)
+    """
+    CREATE TABLE indicator_lists (
+      id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, url TEXT, source TEXT NOT NULL, confidence TEXT NOT NULL,
+      refresh_hours INTEGER NOT NULL DEFAULT 24, enabled INTEGER NOT NULL DEFAULT 1, last_fetch REAL, last_status TEXT,
+      created_by TEXT NOT NULL, created_at REAL NOT NULL);
+    CREATE TABLE indicators (
+      id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL, type TEXT NOT NULL, value TEXT NOT NULL, confidence TEXT,
+      published REAL, known_since REAL NOT NULL, valid_until REAL, note TEXT, active INTEGER NOT NULL DEFAULT 1);
+    CREATE UNIQUE INDEX indicators_once ON indicators(list_id, type, value);
+    CREATE INDEX indicators_value ON indicators(type, value);
+    CREATE TABLE hunt_runs (
+      id INTEGER PRIMARY KEY, created_by TEXT NOT NULL, created_at REAL NOT NULL, status TEXT NOT NULL, spec TEXT NOT NULL,
+      progress TEXT, summary TEXT, error TEXT, finished_at REAL);
+    CREATE TABLE hunt_matches (
+      id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ind_type TEXT NOT NULL, ind_value TEXT NOT NULL, matched TEXT NOT NULL,
+      source TEXT NOT NULL, site TEXT, device TEXT, identity_id INTEGER, first REAL, last REAL, events INTEGER, bytes INTEGER,
+      direction TEXT, detail TEXT);
+    CREATE INDEX hunt_matches_run ON hunt_matches(run_id);
+    """,
+    # v10 (1.46): segmentation monitoring: address groups and expected communication between them (segments.py)
+    """
+    CREATE TABLE seg_groups (
+      id INTEGER PRIMARY KEY, site TEXT NOT NULL, name TEXT NOT NULL, cidrs TEXT NOT NULL, sensitivity TEXT NOT NULL DEFAULT 'normal',
+      note TEXT, created_by TEXT NOT NULL, created_at REAL NOT NULL);
+    CREATE UNIQUE INDEX seg_groups_name ON seg_groups(site, name);
+    CREATE TABLE seg_policies (
+      id INTEGER PRIMARY KEY, site TEXT NOT NULL, src INTEGER NOT NULL, dst INTEGER NOT NULL, expect TEXT NOT NULL, services TEXT NOT NULL DEFAULT '*',
+      schedule TEXT, note TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL, created_at REAL NOT NULL);
+    """,
+    # v11 (1.47): applications (groups of devices) and their dependencies, observed vs confirmed by people (apps.py)
+    """
+    CREATE TABLE apps (
+      id INTEGER PRIMARY KEY, site TEXT NOT NULL, name TEXT NOT NULL, note TEXT, owner TEXT, critical INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL, created_at REAL NOT NULL);
+    CREATE UNIQUE INDEX apps_name ON apps(site, name);
+    CREATE TABLE app_members (
+      app_id INTEGER NOT NULL, ip TEXT NOT NULL, identity_id INTEGER, role TEXT, added_by TEXT NOT NULL, added_at REAL NOT NULL);
+    CREATE UNIQUE INDEX app_members_once ON app_members(app_id, ip);
+    CREATE TABLE app_deps (
+      id INTEGER PRIMARY KEY, app_id INTEGER NOT NULL, dkey TEXT NOT NULL, status TEXT NOT NULL, note TEXT, by TEXT NOT NULL, ts REAL NOT NULL,
+      first_seen REAL, last_seen REAL);
+    CREATE UNIQUE INDEX app_deps_once ON app_deps(app_id, dkey);
+    """,
+    # v12 (1.48): WAN / VPN quality probes run from the netmon server, and their results (quality.py)
+    """
+    CREATE TABLE probes (
+      id INTEGER PRIMARY KEY, site TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL,
+      interval_s INTEGER NOT NULL DEFAULT 60, count INTEGER NOT NULL DEFAULT 5, timeout_s REAL NOT NULL DEFAULT 2, query TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL, created_at REAL NOT NULL);
+    CREATE TABLE probe_results (
+      probe_id INTEGER NOT NULL, ts REAL NOT NULL, ok INTEGER NOT NULL, rtt_ms REAL, loss REAL, jitter_ms REAL, detail TEXT);
+    CREATE INDEX probe_results_t ON probe_results(probe_id, ts);
+    """,
+    # v13 (1.49): saved searches, optionally proposed as scheduled detections and reviewed by an admin (nlsearch.py)
+    """
+    CREATE TABLE saved_searches (
+      id INTEGER PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, question TEXT, spec TEXT NOT NULL, shared INTEGER NOT NULL DEFAULT 0,
+      created_at REAL NOT NULL, last_run REAL,
+      detect TEXT NOT NULL DEFAULT 'none', detect_interval_s INTEGER, detect_threshold INTEGER, detect_severity TEXT,
+      proposed_by TEXT, proposed_at REAL, reviewed_by TEXT, reviewed_at REAL, review_note TEXT, last_detect REAL);
     """,
 ]
 

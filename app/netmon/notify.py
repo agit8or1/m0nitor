@@ -116,6 +116,10 @@ class Notifier:
             quiet = (qs <= h < qe) if qs < qe else (h >= qs or h < qe)
             if quiet and not (ch["quiet_allow_high"] and SEV.get(a["severity"], 0) >= 3):
                 return "quiet hours"
+        from .incidents import already_notified
+        iid = already_notified(self.conn, a, ch["id"], now)
+        if iid:
+            return f"grouped into incident #{iid}, already notified"
         sent = self.conn.execute("SELECT count(*) FROM deliveries WHERE channel_id=? AND status='delivered' AND ts>?",
                                  (ch["id"], now - 3600)).fetchone()[0]
         if sent >= ch["max_per_hour"]:
@@ -175,7 +179,12 @@ class Notifier:
         self.conn.commit()
 
     def format_alert(self, a):
+        from .incidents import incident_of
         nxt = (json.loads(a["next_steps"] or "[]") or [""])[0]
+        iid = incident_of(self.conn, a["id"])
+        if iid:
+            n = self.conn.execute("SELECT count(*) FROM incident_alerts WHERE incident_id=? AND removed=0", (iid,)).fetchone()[0]
+            nxt += f"\nPart of incident #{iid} ({n} related findings): {self.base}/netmon/incidents/{iid}"
         return {"title": f"[{a['severity'].upper()}] {a['title']}", "severity": a["severity"],
                 "text": f"{a['title']}\nConfidence: {a['confidence']} · rule {a['rule']}\nWhy: {a['baseline']}\nNext: {nxt}",
                 "link": f"{self.base}/netmon/alert/{a['id']}", "id": a["id"], "rule": a["rule"], "asset": a["asset"],

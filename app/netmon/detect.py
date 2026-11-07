@@ -276,17 +276,36 @@ class Detector:
         cur = self.q(cur_sql, {"ws": ws, "we": we, "min": rc["min_bytes"]})
         if not cur:
             return []
+        from . import baselines as bl
         hist = self.q(sql, {"ws": ws, "bs": bs})
-        hour = time.gmtime(ws).tm_hour
+        try:
+            have = bl.telemetry_hours(self, bs, ws)   # hours without any flow record are not "zero traffic"
+        except Exception:
+            have = None
         out = []
         win_h = self.cfg["detector"]["window_minutes"] / 60
         ndays = max(1, int(min(days, self.cfg["detector"]["baseline_days"])))
         for r in cur:
-            by_day = {}
+            excluded, exc_ids = 0, []
+            for xid, peer, svc in bl.volume_exceptions(self.conn, "outbound_volume", r["src"], r["src"], now, self.site):
+                rows = self.q(f"""WITH o AS ({OUTBOUND}) SELECT dst, dport, proto, sum(bytes) AS b FROM o
+                    WHERE t >= toDateTime({{ws:UInt32}}) AND t < toDateTime({{we:UInt32}}) AND NOT fw_origin AND src = {{src:String}}
+                    GROUP BY dst, dport, proto ORDER BY b DESC LIMIT 500""", {"ws": ws, "we": we, "src": r["src"]})
+                part = sum(x["b"] for x in rows if bl._in(peer, x["dst"]) and
+                           (svc == "*" or svc == f"{'udp' if x['proto'] == 17 else 'tcp'}/{x['dport']}"))
+                if part:
+                    excluded += part
+                    exc_ids.append(xid)
+            if excluded:   # traffic to excepted destinations is subtracted; the rest must still be explained
+                r = dict(r, bytes=max(0, r["bytes"] - excluded), excluded_by_exceptions=excluded, exceptions=exc_ids)
+                if r["bytes"] < rc["min_bytes"]:
+                    continue
+            mine = {}
             for h in hist:
-                if h["src"] == r["src"] and time.gmtime(h["h"]).tm_hour == hour:
-                    by_day[h["h"] // 86400] = h["bytes"]
-            vals = [by_day.get(d, 0) * win_h for d in range(int(ws // 86400) - ndays, int(ws // 86400))]
+                if h["src"] == r["src"]:
+                    mine[int(h["h"])] = h["bytes"]
+            skip = bl.suspicious_hours(self.conn, self.site["id"], "outbound_volume", r["src"], bs, ws)
+            vals, bdesc = bl.baseline_values(mine, ws, ndays, self.site, have, skip, win_h)
             upper = max(robust_upper(vals), max(vals or [0]))
             if r["bytes"] < rc["factor"] * max(upper, 1):
                 continue
@@ -303,8 +322,10 @@ class Detector:
                       f"(baseline upper {human_bytes(upper)})",
                 window=(ws, we), evidence=[r, {"attribution": [a[2] for a in attrib]}],
                 query=(cur_sql, {"ws": ws, "we": we}),
-                baseline=f"Same UTC hour ({hour:02d}:00) over {ndays} day(s): values {[human_bytes(v) for v in vals]}; "
-                         f"robust upper bound {human_bytes(upper)}; alert at x{rc['factor']}.",
+                baseline=f"Compared with the {bdesc}: values {[human_bytes(v) for v in vals]}; "
+                         f"robust upper bound {human_bytes(upper)}; alert at x{rc['factor']}."
+                         + (f" {human_bytes(r['excluded_by_exceptions'])} to excepted destinations (exception "
+                            f"{', '.join('#' + str(x) for x in r['exceptions'])}) was not counted." if r.get("excluded_by_exceptions") else ""),
                 alternatives=["Backups/replication (PBS, Nextcloud sync, mail queues)",
                               "Patch mirrors, container image pulls, large legitimate uploads",
                               "Shared NAT address aggregates many hosts; one host may not be the cause",
@@ -313,6 +334,38 @@ class Detector:
                             "Identify the internal host (LAN-side capture or host netstat) if NATed",
                             "Check scheduled jobs and backups for this hour"],
                 akvorado_filter=self.akv(f"OutIfName = {self.site['wan_if']} AND SrcAddr = {r['src']}"),
+            ))
+        return out
+
+    def rule_search_detections(self, now):
+        """Saved searches an admin reviewed and approved as detections (Investigate → Search). Nothing runs unreviewed."""
+        from .nlsearch import detection_findings
+        return detection_findings(self.conn, self.cfg, self.ch, self.site, now)
+
+    def rule_segmentation(self, now):
+        """Internal traffic that your communication rules say is not expected (Devices → Segmentation). Monitoring only."""
+        from . import segments as sg
+        ws, we, _ = self.windows(now)
+        out = []
+        for v in sg.violations(self.conn, self.cfg, self.ch, self.site, ws, we)[:200]:
+            pol = v["policy"] or {}
+            why = ("no communication is expected" if pol.get("expect") == "none" else
+                   f"only {pol.get('services', '').replace(',', ', ')} is expected")
+            out.append(dict(
+                rule="segmentation", severity="high" if v["sensitive"] else "medium", confidence="medium",
+                asset=v["client"], subject=f"{v['server']}:{v['port']}" if v["svc"] != "icmp" else v["server"],
+                title=f"{v['src_group']} → {v['dst_group']}: {v['client']} reached {v['server']} on {v['svc']}",
+                window=(ws, we), evidence=[{"peer": v["server"], "port": v["port"], "proto": v["proto"], "src_group": v["src_group"],
+                                            "dst_group": v["dst_group"], "flows": v["n"], "bytes": v["bytes"], "rule_id": pol.get("id")}],
+                query=("segments.observe", {"ws": ws, "we": we}),
+                baseline=f"Your rule {v['src_group']} → {v['dst_group']}: {why}. The firewall saw {v['n']:,} record(s) of this traffic "
+                         "(who opened it is inferred from ports).",
+                alternatives=["The rule is out of date (a new legitimate dependency)", "The device is in the wrong group or has a new address",
+                              "Replies or broadcast traffic interpreted as a connection"],
+                next_steps=["Check whether this device should talk to that one on this service",
+                            "If it is legitimate: change the rule (Segmentation) or add a precise exception (This is normal)",
+                            "If not: check the firewall rules between these networks (netmon does not change them)"],
+                akvorado_filter=self.akv(f"SrcAddr = {v['client']} AND DstAddr = {v['server']}"),
             ))
         return out
 
@@ -898,6 +951,11 @@ class Detector:
             days = self.learning()
         except Exception as e:  # ClickHouse down: report and stop this cycle
             days, errors = 0, [f"learning: {e}"]
+        from .ux import monitored
+        want = {   # rule group -> per-firewall monitoring choice (Settings → Firewalls & sites → What to monitor)
+            "new_dest_country": "flows", "new_dest_asn": "flows", "unexpected_inbound": "flows", "outbound_volume": "flows",
+            "fanout": "flows", "beaconing": "flows", "ids": "ids", "firewall": "syslog", "dns": "dns", "device events": "device_events",
+            "segmentation": "segmentation"}
         if not errors:
             for name, fn in [("new_dest_country", lambda: self.rule_new_dest(now, days, "country")),
                              ("new_dest_asn", lambda: self.rule_new_dest(now, days, "asn")),
@@ -909,7 +967,11 @@ class Detector:
                              ("firewall", lambda: self.rule_fw_blocks(now)),
                              ("dns", lambda: self.rule_dns(now)),
                              ("device events", lambda: self.rule_events(now)),
+                             ("segmentation", lambda: self.rule_segmentation(now)),
+                             ("search detections", lambda: self.rule_search_detections(now)),
                              ("health", lambda: self.rule_health(now))]:
+                if name in want and not monitored(self.site, want[name]):
+                    continue
                 try:
                     findings += fn()
                 except Exception as e:
@@ -931,10 +993,9 @@ class Detector:
 
     def record(self, f, now) -> int:
         """Insert or merge a finding. Returns 1 if a new alert was created."""
-        excs = [dict(r) for r in self.conn.execute("SELECT * FROM exceptions WHERE enabled=1")]
-        for e in excs:
-            if exception_matches(e, f["rule"], f["asset"], f["subject"], now):
-                return 0
+        from .baselines import matching_exception   # precise: destination, service, schedule, firewall, expiry
+        if matching_exception(self.conn, f, now, self.cfg.site(f.get("site")) if f.get("site") else self.site):
+            return 0
         exp = expected_devices(self.conn, now)
         if exp and f["rule"] not in ("source_health", "detector_error") and \
                 (expected_match(exp, f["asset"]) or expected_match(exp, str(f["subject"]).split("|")[-1].split(":")[0])):
@@ -949,9 +1010,18 @@ class Detector:
                               "direction=?, direction_verified=?, direction_basis=? WHERE id=?",
                               (now, f["window"][1], json.dumps(f["evidence"], default=str), f["title"],
                                f.get("direction"), f.get("direction_verified", 0), f.get("direction_basis"), row["id"]))
+            self.conn.execute("UPDATE incidents SET last_seen=max(last_seen, ?) WHERE id IN (SELECT incident_id FROM incident_alerts "
+                              "WHERE alert_id=? AND removed=0)", (now, row["id"]))
             self.conn.commit()
             return 0
         sql, params = f["query"]
+        ident = None
+        try:   # who had the address when it happened (address ownership changes over time; identity.py)
+            if f["asset"] and self.cfg.is_internal(f["asset"]):
+                from .identity import owner_at
+                ident = owner_at(self.conn, site, f["asset"], f["window"][0] or now)["identity"]
+        except Exception:
+            ident = None
         cur = self.conn.execute(
             "INSERT INTO alerts(key,rule,severity,confidence,asset,subject,title,first_seen,last_seen,window_start,"
             "window_end,evidence,query,baseline,alternatives,next_steps,akvorado_filter,direction,direction_verified,direction_basis,site) "
@@ -961,8 +1031,12 @@ class Detector:
              json.dumps({"sql": sql.strip(), "params": params}, default=str), f["baseline"],
              json.dumps(f["alternatives"]), json.dumps(f["next_steps"]), f["akvorado_filter"],
              f.get("direction"), f.get("direction_verified", 0), f.get("direction_basis"), site))
+        if ident:
+            self.conn.execute("UPDATE alerts SET identity_id=? WHERE id=?", (ident, cur.lastrowid))
         self.conn.commit()
         audit(self.conn, "detector", "alert_created", {"id": cur.lastrowid, "key": key, "severity": f["severity"]})
+        from .incidents import correlate   # before notifying, so a channel is not sent every finding of one incident
+        correlate(self.conn, self.cfg, cur.lastrowid, now)
         if self.notifier:
             self.notifier.alert(cur.lastrowid)
         return 1

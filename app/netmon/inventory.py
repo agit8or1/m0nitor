@@ -401,7 +401,22 @@ def inventory_page(req: Request, msg: str = ""):
 <p class="note">Only type and role change; names, notes and other settings of named devices are kept. At most {BULK_MAX} addresses.</p></form></section>""" if admin else ""
     from . import discovery
     ds, den = discovery.last(conn), discovery.enabled(conn)
-    arp = "".join(f"<li>{e(cfg.site(k)['name'] if cfg.site(k) else k)}: {e(v)}</li>" for k, v in (ds.get("arp") or {}).items())
+    from .fwperms import missing_html
+    from .ux import monitored
+    srcs = (("arp", "ARP table (IPv4)", "discovery_arp"), ("ndp", "NDP table (IPv6)", "discovery_ndp"), ("dhcp", "DHCP leases", "discovery_dhcp"))
+    arp = ""
+    for x in cfg.sites:
+        cells = []
+        for k, label, opt in srcs:
+            v = (ds.get(k) or {}).get(x["id"])
+            cells.append(f"{label}: " + ("<span class='muted'>not monitored (your choice)</span>" if not monitored(x, opt) else
+                                         "<span class='muted'>no API key</span>" if v is None else
+                                         e(v) if str(v).startswith("ok") else missing_html(e, v)))
+        arp += f"<li><b>{e(x['name'])}</b> — " + " · ".join(cells) + "</li>"
+    idn = ds.get("identity") or {}
+    ident_line = (f"Device identity: {idn.get('arp', 0)} ARP, {idn.get('ndp', 0)} NDP, {idn.get('dhcp', 0)} DHCP and {idn.get('traffic', 0)} "
+                  f"traffic-only observations recorded · <a href='/netmon/identities'>review identities →</a>" if "error" not in idn and idn else
+                  f"Device identity: {e(idn.get('error'))}" if idn else "")
     when = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(ds["ts"])) if ds.get("ts") else ""
     stats = (f"Last run {when} · {ds.get('traffic_ips', 0)} addresses in traffic · {ds.get('arp_ips', 0)} in ARP tables · "
              f"{len(ds.get('added') or [])} added · {ds.get('filled', 0)} filled in") if when else "Not run yet."
@@ -410,9 +425,11 @@ def inventory_page(req: Request, msg: str = ""):
 <button name=act value=save>Save</button><button name=act value=run class="primary">Run now</button></form>""" if admin else "")
     disc = f"""<section class="card" id="discovery"><div class="card-h"><h2>Auto-discovery</h2><span class="muted small">{'on' if den else 'off'} · every {discovery.INTERVAL // 60} min</span></div>
 <p class="note">New internal addresses are added on their own: from traffic (any LAN address that received internet traffic in
-the last 24 h) and from each firewall's ARP table (MAC, vendor, hostname). A virtualization MAC prefix (Proxmox, VMware,
+the last 24 h) and from each firewall's ARP table (MAC, vendor, hostname), plus the IPv6 neighbour table and DHCP leases where the API
+user may read them. Each sighting is kept with its time, so a device keeps its history when its address changes. A virtualization MAC prefix (Proxmox, VMware,
 Hyper-V, …) sets the type to virtual machine; other vendors set no type. Nothing you set is overwritten; only empty fields are filled.</p>
 <p class="small">{e(stats)} {f"<span class='warnline'>{e(ds['error'])}</span>" if ds.get('error') else ''}</p>{f"<ul class='small'>{arp}</ul>" if arp else ''}
+<p class="small">{ident_line}</p>
 {ctl}</section>"""
     body = f"""{role_datalist()}{tabs(SETTINGS_TABS, back)}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}
 <section class="card" id="devices"><div class="card-h"><h2>Internal devices</h2><span class="muted small">{len(assets)} · stored in the netmon database</span></div>

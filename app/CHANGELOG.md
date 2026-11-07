@@ -3,6 +3,247 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.50 — 2026-11-07
+
+### Added
+- **Investigate → Test detections**: run a **synthetic scenario** against the real detection rules:
+  - a device contacting a new country;
+  - an unusually large upload;
+  - the internet reaching a port with no port forward;
+  - a scan of many internet addresses;
+  - regular check-ins (beaconing);
+  - a normal day where nothing should be raised.
+  Choose the device and the scenario's numbers. The made-up records exist only inside the query (a `values()`
+  table expression on the read-only session); any other table reference is refused. Production data and findings
+  are never touched, and nothing is recorded, notified or blocked.
+- Each test shows **expected vs actual**. When a finding is raised, the rule's own explanation says why. When it is
+  not, the page gives the likely reason: thresholds, the rule being switched off, the per-firewall monitoring choice,
+  still learning, a port forward, an ephemeral port. A finding the rule raised but an exception or expected device
+  would hide is named. Exceptions are checked without counting a hit. "Run all scenarios" checks every scenario at
+  once.
+- **Preview rule changes** on Settings → Alert rules, next to Save. Nothing is saved; preview shows:
+  - every changed setting, current vs proposed (relative to config.yaml, like saved changes);
+  - the affected scenarios with the current and with the proposed settings;
+  - **Replay on retained data**: the changed rules, current and proposed, over up to 48 sampled windows of the last
+    24 hours, 3 days or 7 days, comparing how many distinct findings each would have raised, with examples of new
+    and disappearing ones.
+  Replay limits:
+  - it runs in the background, one at a time, at most 10 minutes, and can be cancelled;
+  - nothing is recorded or notified;
+  - live-state rules (source silence, disk) are listed as not replayable;
+  - the last result is kept per firewall and audited.
+- Each rule on the Alert rules page links to its test scenario.
+
+## v1.49 — 2026-11-07
+
+### Added
+- **Investigate → Search**: ask in plain English (for example "Which devices talked to Russia in the last 7 days?",
+  "Blocked connections to 10.0.0.5 yesterday", "Devices that uploaded more than 1 GB yesterday"). netmon interprets
+  the question itself, without AI, into named filters, and shows them as "Searching for …". Words it did not
+  understand are listed, never guessed. Every filter can be changed in a form, and searching works without asking a
+  question at all.
+- Searches cover traffic records, DNS lookups, the firewall log and findings, grouped by device, remote, service,
+  country, network owner, name or finding type. They are read-only, use netmon's fixed query templates with typed
+  parameters (never generated SQL), and are bounded by the data's retention, a period and a row limit.
+- Results name devices even behind a shared NAT address where the records allow it. Where they do not (volume sent
+  behind a shared address), the page says so instead of guessing. The query behind the results is shown under
+  technical details.
+- Optional **AI interpretation**, when an AI key is configured. You see exactly what will be sent first: only the
+  question, with internal addresses and device names replaced. Requests count against the daily AI request limit.
+  The answer is only a set of filters, which netmon validates and shows for review.
+- **Saved searches**: private by default; analysts can share them. A saved search can be **proposed as a
+  detection** (interval 15 min – 24 h, threshold, severity). It only runs after an admin reviews it: the review shows
+  how often it would have fired over the last 7 days, and an admin cannot approve their own proposal when another
+  admin exists. Approved detections raise normal findings (notification rules and exceptions apply, nothing is ever
+  blocked) and can be stopped at any time. All steps are audited.
+
+## v1.48 — 2026-11-07
+
+### Added
+- **Settings → Status → WAN / VPN quality**: small active probes run from the netmon server (the vantage point)
+  through each firewall:
+  - ping (latency, loss, jitter);
+  - TCP connect time;
+  - a DNS query to a resolver (response time and result);
+  - one HTTPS request (response time, status, certificate problems).
+  Probes are opt-in. A recommended set covers the firewall itself, two anycast resolvers, DNS through the firewall
+  and one HTTPS check, and is listed before anything is added. Each probe has a role: the firewall, the provider's
+  first hop, an internet host, a VPN site, or a service. Admins set the interval (30 s to 1 h), the packets per
+  round and the timeout, up to 20 probes. Results are kept 30 days. There are no bandwidth tests.
+- Each probe shows its current state (normal, learning, degraded, down, no data, paused) against its usual values,
+  with an accessible latency chart that marks loss.
+- **Degraded periods** need two bad rounds in a row: loss, no answer, or more than twice the usual time. Each period
+  lists **facts**:
+  - which probes were affected and which were not;
+  - WAN traffic at the time, from the traffic records, as a share of the contracted capacity when that is set;
+  - firewall events logged at the same time (gateway, VPN, interface, configuration changes), each marked "not
+    necessarily the cause".
+  A **suspected cause** is given only where the probes support it: the local side, a busy link, beyond the
+  firewall, one destination, the DNS resolver, or the VPN. The provider is suspected only when a probe to its first
+  hop was affected while the firewall answered normally and the link was not busy.
+- A Health row per firewall, and an Overview item while a probe is degraded or down. Both honour the per-firewall
+  "WAN / VPN quality probes" choice. Configuration changes are audited.
+
+## v1.47 — 2026-11-07
+
+### Added
+- **Internal devices → Applications**: group the devices that make up an application (with an owner and a
+  "critical" mark). Each application lists **what it uses** and **what uses it** (outage impact) from the traffic
+  records: internal conversations, and internet dependencies grouped by network owner (AS) and service from reply
+  records, so they are tied to the device even behind a shared address. Every dependency shows its service,
+  direction, records, last seen, when netmon first saw it, and a confidence based on how many days (4-hour periods
+  for 24 hours) of the period it was seen.
+- Dependencies are **observed** until a person **confirms** or dismisses them. A confirmed dependency that was not
+  seen is listed as such, with the reminder that lack of traffic does not prove a dependency is gone.
+  **New** dependencies (first seen in the last 24 hours, not counted for a just-created application) are highlighted.
+- **Outage impact of one device**: which applications and devices used it, and whether it is reached from the
+  internet. An optional picture shows the application and its main dependencies; the list remains the source.
+- Members follow their device identity, so an address change does not drop a device from its application. Queries
+  are bounded (period, row limit) and cached for five minutes. Analysts and admins edit; changes are audited.
+
+## v1.46 — 2026-11-07
+
+### Added
+- **Internal devices → Segmentation** (monitoring only; netmon never changes firewall rules). Define **groups** of
+  address ranges per firewall (e.g. Guest, IoT, Servers, Management; mark sensitive ones) and **rules** for the
+  communication you expect. Rules are either "communication expected" (optionally only on listed services) or "no
+  communication expected", between groups or to/from any group, optionally only during a schedule. **Templates**
+  cover guest isolation, IoT apart, servers on listed services, and management only from admins.
+- **Communication matrix**: for every pair of groups, what your rules expect and what the firewall saw (records,
+  unexpected records, and blocks from the firewall log). Each cell opens the top conversations with links to the
+  records. "Not seen" is never presented as "blocked": traffic within one switch or VLAN does not pass the firewall,
+  and groups with no visible traffic are named.
+- **Segmentation findings**: internal traffic your rules call unexpected becomes a finding, with high severity when
+  it reaches a sensitive group. The per-firewall "Segmentation checks" choice switches it off. Precise exceptions
+  (device to destination and service) work for these findings.
+- The firewall's own address (proxies, NAT reflection) is not counted as device traffic.
+
+## v1.45 — 2026-11-07
+
+### Added
+- **Investigate → Threat hunt**: search retained history for known-bad IP addresses, address ranges and domains.
+  Paste indicators for one hunt, or keep **indicator lists**: manual (analyst) or an HTTPS feed fetched on a
+  schedule (admin; size-limited; none by default). Plain lists and CSV (value, confidence, published, valid until)
+  are accepted, including defanged forms; private addresses and very wide ranges are refused.
+- A hunt searches traffic records in both directions, the DNS query log (names, and answers that point to an
+  indicator address) and the firewall log. It runs in the background, one at a time, with progress and **Cancel**,
+  within 31 days and fixed indicator limits.
+- Results per indicator: affected devices (the device at the time) and firewalls, first and last contact, how often,
+  volume, direction and a link to the records. Each result also shows the indicator's list, source and confidence,
+  when netmon first knew it and when it was published, and whether it is still valid.
+- Every result is qualified. It flags contact **before the indicator was published**, **CDN** addresses and
+  **shared hosting** (one address, many names), **stale** indicators, and connections through the shared NAT address
+  that cannot be tied to a device. It also says which history was searched, with its gaps.
+- **Create a finding** from a match (analyst), so it can be triaged and grouped into an incident. It is not notified.
+- Threat intel (CVE radar) links to the hunt for address and domain indicators.
+
+## v1.44 — 2026-11-07
+
+### Added
+- **Precise exceptions.** "This is normal" on a finding now offers: only this behaviour; this device to one
+  destination (IP or CIDR) and/or service; only during a schedule (days and a local time window, overnight allowed, in
+  the firewall's time zone); until a date (default 90 days). Broader options (any finding of this kind, every finding
+  for the device) are still there, marked as broad.
+- **Preview before saving**: the sentence of what will be hidden, how many findings of the last 30 days it would have
+  hidden (with examples), and how many findings for the same device would still be raised.
+- An exception with a destination only hides findings that name exactly that destination. Findings about many
+  destinations (scanning, external DNS, blocked outbound) are never hidden by one. For outbound volume, traffic to the
+  excepted destinations is left out of the count and the rest is still checked, so a normal backup cannot hide an
+  unrelated upload.
+- **Security → Suppressions**: each exception as a plain sentence, how often it hid a finding and when last, its
+  expiry; extend by 30 days or remove; warnings for exceptions that expire soon or never.
+- **Baselines** card: learning progress per firewall and how "usual" is calculated.
+
+### Changed
+- Outbound volume is compared with the **same local hour** in the firewall's time zone (daylight saving included)
+  instead of the same UTC hour, weekdays with weekdays and weekends with weekends once three of each exist.
+- Hours without traffic records from the firewall are left out of the baseline instead of counted as zero, which
+  removes false alarms after an outage.
+- Hours covered by unresolved volume findings for the same address are not learned as normal.
+
+## v1.43 — 2026-11-06
+
+### Added
+- **Investigate → Incidents**: related findings handled as one case. Each incident shows what happened, the affected
+  devices, why it matters, confidence and missing information (monitoring problems at the time, unverified
+  direction, devices known only by address, sources not monitored), the next step, a timeline (findings, people's
+  actions, firewall configuration changes around the same time) and the raw evidence.
+- Findings are grouped automatically when they share a **device** (its identity, so an address change does not split
+  it) or a **remote address** within 6 hours, and every link says why. An incident needs two related findings, one of
+  them a security finding of medium severity or higher. It covers at most a day, and never chains devices together
+  through other findings. Grouping does not claim that one finding caused another.
+- Assign, add notes, set status (open, investigating, resolved) with a required resolution reason, optionally close
+  the findings, split a finding out (it stays out), add a finding, merge incidents. Everything is in the incident's
+  history and the audit log (analyst role).
+- **Evidence export** (JSON) per incident, for analysts and admins, recorded in the audit log.
+- Finding pages link to their incident, or offer "Start an incident from this finding"; the Security list tags
+  grouped findings.
+- Overview: **Needs attention** strip (open incidents, serious findings not yet grouped, monitoring problems). It
+  never says everything is fine while a monitored source has a problem.
+- Open findings from the last 7 days are grouped once after the upgrade.
+
+### Changed
+- **Calmer notifications**: a channel that already received a finding of an incident in the last 6 hours is not sent
+  another one of the same or lower severity; higher-severity findings are always sent. Messages link to the incident.
+
+## v1.42 — 2026-11-06
+
+### Added
+- **Investigate → What changed?**: a short, prioritized list of plain sentences comparing two periods: today vs
+  yesterday, this week vs last week, a selected period vs the one before, the same weekday and time on previous weeks,
+  or two custom periods. Days and weeks follow each firewall's time zone, including daylight-saving changes.
+  It highlights newly observed services answering outside clients, new destinations of fixed-function devices,
+  unusual upload or download volume, configuration changes, newly observed devices, new countries and networks, and
+  lost telemetry. Each line shows the actual values, the comparison, a confidence level and a **View evidence** link.
+- Configuration change page: the firewall's audit lines around the change, and inbound services first observed in the
+  24 hours after it, labelled as an association in time, not a cause.
+- Overview: **Important changes today** (top three, computed in the background).
+
+### Honesty rules
+- "Newly observed" means not seen in the history searched, and every line says how much history that was.
+- Hours without flow records are not counted as zero traffic. Incomplete periods are flagged and lower confidence;
+  "nothing changed" is never shown as a clean result when data is missing.
+- Expected devices are listed but labelled and never placed at the top. Novelty on the shared NAT address is marked
+  as unattributable and ranked low.
+
+## v1.41 — 2026-11-06
+
+### Added
+- **Device identity that survives address changes.** Discovery keeps time-stamped evidence per site: which MAC
+  address used which IP address and when, hostnames, and DHCP leases. Every device page has an **Address history**.
+  A finding shows the **device at the time** it happened, and warns when the address now belongs to another device.
+  Same private address at two sites = two devices. Traffic without a MAC address, randomized MACs and two devices on
+  one address are shown as probable / medium / ambiguous, never as certain.
+- **Internal devices → Identity review**: questions netmon will not decide on its own (same hostname, same MAC at two
+  sites, device moved), plus merge, separate, undo and rename. Every change is in the device's history and the audit
+  log (admin).
+- Discovery also reads the firewall's **IPv6 neighbour table** and **DHCP leases** (ISC or Kea), when the API user may.
+- **What to monitor, per firewall** (Settings → Firewalls & sites): choose the sources and checks netmon analyses
+  for each firewall. A source switched off shows as "not monitored (your choice)" and never fails a health check.
+- **Time zone per firewall**, for schedules and local times.
+- **Firewall picker on the dashboard**: all firewalls, one, or any combination (kept in the page address).
+
+### Changed
+- When the firewall refuses an API call, the message names the **exact privilege** to grant and links to
+  Settings → Firewall permissions (auto-discovery, blocking, name sync). New optional privileges are listed there and
+  in the permissions guide: *Diagnostics: NDP Table*, *Services: ISC DHCPv4: Leases*, *Services: DHCP: Kea(v4)*.
+
+## v1.40 — 2026-11-06
+
+### Security
+- **Second-factor codes and login challenges are now strictly single-use under concurrent requests.** Before, recovery
+  codes and the TOTP replay counter were checked and updated in separate steps, and a pending two-factor challenge was
+  read and deleted separately. Two simultaneous submissions could both accept the same recovery code or the same TOTP
+  timestep and each get a session. This needed the account password (a pending login) and a valid second-factor code:
+  it weakened single-use and replay protection, it did not let anyone skip the second factor. Now:
+  - a recovery code is removed with a compare-and-swap; only the request that actually removed it succeeds;
+  - the TOTP counter only moves forward in the same statement that accepts the code, so a timestep works once;
+  - a login challenge is claimed by one request at a time, deleted before the session is created, and only the
+    request that deleted it gets a session. A second simultaneous submission sees "already being checked".
+  Wrong codes, expiry (5 minutes), rate limiting and audit logging work as before.
+- New tests reproduce the races with real concurrent database connections.
+- New scheduled dependency advisory check (weekly, runtime and development lockfiles, PyPI and OSV databases).
+
 ## v1.39 — 2026-11-03
 
 ### Added
