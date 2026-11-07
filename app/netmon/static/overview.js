@@ -57,7 +57,7 @@
     const node = $("secpanel"), A = d.alert_summary, L = NM.live(), det = L ? L.detector : null;
     const pill = (lvl, n, label) => el("a", { href: "/netmon/security" }, sev(lvl), el("b", { text: String(n) }), label ? el("span", { class: "muted", text: label }) : null);
     const all = d.alerts.filter((a) => a.category === "security"), items = all.slice(0, 6);
-    const ul = el("ul", { class: "slist" });
+    const ul = el("ul", { class: "slist" }), empty = el("div", { class: "state empty", text: "No open security findings" });
     for (const a of items) {
       const [head, tail] = a.title.split(" — ");
       const b = sev(a.severity); b.classList.add("badge");
@@ -76,7 +76,7 @@
     node.replaceChildren(
       el("div", { class: "sevsum" }, pill("high", A.security.high), pill("medium", A.security.medium), pill("low", A.security.low),
         el("a", { href: "/netmon/security", title: "Informational changes" }, el("span", { class: "sev s-muted", text: "○ info" }), el("b", { text: String(A.info) }))),
-      items.length ? ul : el("div", { class: "state empty", text: "No open security findings" }),
+      items.length ? ul : empty,
       el("div", { class: "sec-foot" }, el("span", { text: `Coverage: ${cov.join(" · ")}` }), el("a", { href: "/netmon/coverage", text: "What is visible →" })));
     // fixed-height panel on desktop: drop items that would be clipped instead of adding a nested scrollbar. A short
     // panel may keep none: the severity counts and a link then stand in for the list (never a half-cut finding).
@@ -96,6 +96,7 @@
     const secFoot = node.querySelector(".sec-foot");
     if (secFoot && !fits()) secFoot.hidden = true;
     if (more.isConnected && !fits()) ul.hidden = true;
+    if (!items.length && !fits()) empty.hidden = true;   // the zero counts above already say it
   }
 
   function renderBandwidth(d) {

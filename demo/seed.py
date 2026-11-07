@@ -511,6 +511,10 @@ def main():
     elif cmd == "feed":
         rng = random.Random()
         last = int(time.time()) - 60
+        # after a stop/start, fill the time the demo was down (up to a day) so charts have no hole
+        latest = int(float(ch("SELECT toUnixTimestamp(max(TimeReceived)) FROM default.flows").strip() or 0))
+        if latest:
+            last = min(last, max(latest - latest % 60 + 60, int(time.time()) - 86400))
         while True:
             now = int(time.time())
             if now - last >= 60:

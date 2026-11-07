@@ -506,7 +506,7 @@ form.askq label.grow input { flex: 1; min-width: 0; }
 .ovfit.fit > .ovrow { flex: 1 1 0; min-height: 200px; margin-bottom: 0; }
 .ovfit.fit .sidecol { overflow: hidden; } .ovfit.fit .sec-card { min-height: 92px; }   /* header + severity counts */
 .ovfit.fit .sevsum { margin-bottom: 6px; } .ovfit.fit .sevsum a { padding: 3px 10px; }
-.sec-foot[hidden], #secpanel .slist[hidden] { display: none; }
+#secpanel > [hidden] { display: none; }
 .ovfit.fit .ovrow > .card { overflow: hidden; display: flex; flex-direction: column; }
 .ovfit.fit .bwcard .chart { flex: 1; min-height: 60px; height: auto; }
 .ovfit.fit .bwcard { container-type: size; }   /* short card: drop the in/out figures (also on the summary cards) to keep the chart readable */

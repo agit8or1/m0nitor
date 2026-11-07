@@ -3,6 +3,14 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.57 — 2026-11-07
+
+### Fixed
+- Overview: with no open findings, "No open security findings" is no longer cut off on shorter screens (the zero
+  counts stand in for it when there is no room).
+- Demo: after the demo is stopped and started again, its feed fills in the time it was down (up to a day), so
+  charts show no gap.
+
 ## v1.56 — 2026-11-07
 
 ### Fixed
