@@ -485,3 +485,9 @@ tr.dim td { opacity: .6; }
 .qspark .q-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .qspark .q-loss { fill: var(--warning); opacity: .45; } .qspark .q-fail { fill: var(--critical); opacity: .6; }
 .qeps { list-style: none; padding: 0; } .qep { padding: 8px 0; border-bottom: 1px solid var(--border); } .qep ul { margin: 4px 0 4px 18px; }
+/* card headers outside a .finding (incident page) get the same spacing as finding headers */
+.card > .fh { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; } .card > .fh .tag { margin-left: auto; }
+/* Search: the question box takes the free width of the row */
+form.askq { flex-wrap: nowrap; } form.askq label.grow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+form.askq label.grow input { flex: 1; min-width: 0; }
+@media (max-width: 640px) { form.askq { flex-wrap: wrap; } form.askq label.grow { flex-basis: 100%; flex-direction: column; align-items: stretch; } }

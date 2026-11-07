@@ -3,6 +3,13 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.52 — 2026-11-07
+
+### Fixed
+- Search: the question box now takes the full width of the row (longer questions were cut off); on a phone it sits
+  above the Search button.
+- Incident page: the header spaces the severity, firewall and dates apart again (they ran together).
+
 ## v1.51 — 2026-11-07
 
 ### Added
