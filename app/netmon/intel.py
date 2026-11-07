@@ -35,11 +35,13 @@ def exposed(ip):
 def ids_cves(days=30):
     """CVE ids cited by IDS alert metadata in the last `days`, with hit counts and signatures."""
     try:
-        return ch.query("""
+        from . import access
+        sql, p = access.ch_restrict("""
             SELECT c, count() AS hits, groupUniqArray(3)(signature) AS sigs, toUInt32(max(ts)) AS last FROM (
               SELECT arrayJoin(arrayDistinct(extractAll(raw, '(?i)cve[-_][0-9]{4}[-_][0-9]{4,7}'))) AS c, signature, ts
               FROM netmon.ids_events WHERE ts > now() - INTERVAL {d:UInt32} DAY AND event_type = 'alert')
-            GROUP BY c ORDER BY hits DESC LIMIT 500""", {"d": days}), ""
+            GROUP BY c ORDER BY hits DESC LIMIT 500""", {"d": days}, cfg.sites)
+        return ch.query(sql, p), ""
     except Exception as ex:
         return [], str(ex)[:200]
 

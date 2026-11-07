@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from urllib.parse import quote
 
 from .rdns import LIST_WAIT
-from . import counters, geocity, secretbox
+from . import access, counters, geocity, secretbox
 from .ai import AI
 from .core import audit, get_state
 from .dash import IPS, META, cname
@@ -54,7 +54,7 @@ def guard(fn):
 
 
 def open_alerts():
-    return [dict(a) for a in conn.execute("SELECT * FROM alerts WHERE status='open' AND test=0")]
+    return [dict(a) for a in conn.execute("SELECT * FROM alerts WHERE status='open' AND test=0 AND site_ok(site)")]
 
 
 def alert_summary():
@@ -88,15 +88,17 @@ def alert_brief(a):
             "site": a["site"], "lan_hosts": lan_hosts_text(a), "status": a["status"]}
 
 
-_alert_cc = {"t": 0, "v": {}}
+_alert_cc = {}   # allowed-sites key -> {"t", "fp", "v"}
 
 
 def alert_countries():
     """Countries of remote addresses named in open security/info alerts (from observed flows)."""
     # cache keyed on the open-finding set too, so ack/unack/close shows on the map at the next refresh
-    fp = tuple(conn.execute("SELECT count(*), coalesce(sum(id), 0), coalesce(max(last_seen), 0) FROM alerts WHERE status='open' AND test=0").fetchone())
-    if time.time() - _alert_cc["t"] < 60 and _alert_cc.get("fp") == fp:
-        return _alert_cc["v"]
+    fp = tuple(conn.execute("SELECT count(*), coalesce(sum(id), 0), coalesce(max(last_seen), 0) FROM alerts WHERE status='open' AND test=0 "
+                            "AND site_ok(site)").fetchone())
+    hit = _alert_cc.get(access.allowed_key())    # per set of visible firewalls
+    if hit and time.time() - hit["t"] < 60 and hit.get("fp") == fp:
+        return hit["v"]
     by_cc, ips, meta = {}, {}, {}
     for a in open_alerts():
         cat = CATEGORY.get(a["rule"], "security")
@@ -118,7 +120,7 @@ def alert_countries():
     if ips:
         sc = dash.scope(range_key="7d")
         rows = dash.q(sc, """SELECT replaceOne(IPv6NumToString(SrcAddr), '::ffff:', '') AS ip, any(SrcCountry) AS cc FROM flows
-                             WHERE TimeReceived > now() - INTERVAL 7 DAY AND has({ips:Array(String)}, replaceOne(IPv6NumToString(SrcAddr), '::ffff:', ''))
+                             WHERE ExporterName IN {exps:Array(String)} AND TimeReceived > now() - INTERVAL 7 DAY AND has({ips:Array(String)}, replaceOne(IPv6NumToString(SrcAddr), '::ffff:', ''))
                              GROUP BY ip""", {"ips": sorted(ips)}, ttl=60)
         for r in rows:
             r["cc"] = (r["cc"] or "").strip("\x00")
@@ -135,7 +137,7 @@ def alert_countries():
                 d["sec_ids"] = sorted(set(d["sec_ids"]) | ips[r["ip"]])
                 d["ids"] = sorted(set(d["ids"]) | ips[r["ip"]])
                 d["security"] = len(d["sec_ids"])
-    _alert_cc.update(t=time.time(), v=by_cc, fp=fp)
+    _alert_cc[access.allowed_key()] = {"t": time.time(), "v": by_cc, "fp": fp}
     return by_cc
 
 
@@ -259,7 +261,7 @@ def api_overview(req: Request):
     def run():
         coll = dash.collection(sc)
         alerts = [alert_brief(a) for a in conn.execute(
-            "SELECT * FROM alerts WHERE status='open' AND test=0 ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+            "SELECT * FROM alerts WHERE status='open' AND test=0 AND site_ok(site) ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
             "WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, last_seen DESC LIMIT 40")]
         alerts.sort(key=lambda a: {"security": 0, "health": 1, "info": 2}.get(a["category"], 3))
         traffic, scope = rolling(sc, "overview", overview_traffic)
@@ -280,7 +282,7 @@ def overview_traffic(sc):
             "countries": lambda: dash.countries(sc), "srv": lambda: dash.servers(sc, limit=200),
             "orgs": lambda: dash.orgs(sc, 10), "services": lambda: dash.services(sc, 8),
             "recent": lambda: dash.conversations(sc, page=1, per=24, sort="time")}
-    r = {k: f.result() for k, f in {k: POOL.submit(fn) for k, fn in jobs.items()}.items()}
+    r = {k: f.result() for k, f in {k: access.submit(POOL, fn) for k, fn in jobs.items()}.items()}
     srv = r.pop("srv")
     sel = {s["id"] for s in sc.sites}
     locs = [l for l in site_locations() if l["id"] in sel]
@@ -332,7 +334,7 @@ def rolling(sc, name, fn, *extra):
         stale = bool(hit) and 0 < sc.end - hit["end"] <= 2 * QUANTUM[sc.range_key]
         if stale and shape not in _ROLL_BUSY:
             _ROLL_BUSY.add(shape)
-            threading.Thread(target=_roll_refresh, args=(shape, sc, fn, extra), daemon=True).start()
+            access.spawn(_roll_refresh, shape, sc, fn, extra)
     if stale:
         return hit["v"]
     return _roll_compute(shape, sc, fn, extra)
@@ -372,7 +374,7 @@ PEER_KEYS = ("peers", "sample_peers", "top_dst", "top_dsts", "peer", "dst", "rem
 def api_alert_traffic(req: Request, aid: int):
     """Traffic behind one finding over its own evidence window: to/from whom, which countries, which ports."""
     current(req)
-    a = conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()
+    a = conn.execute("SELECT * FROM alerts WHERE id=? AND site_ok(site)", (aid,)).fetchone()
     if not a:
         raise HTTPException(404)
 
@@ -474,7 +476,7 @@ def api_server(req: Request, ip: str):
 
     def run():
         coll = dash.collection(sc)
-        alerts = [alert_brief(a) for a in conn.execute("SELECT * FROM alerts WHERE asset=? AND test=0 ORDER BY last_seen DESC LIMIT 30", (ip,))]
+        alerts = [alert_brief(a) for a in conn.execute("SELECT * FROM alerts WHERE asset=? AND test=0 AND site_ok(site) ORDER BY last_seen DESC LIMIT 30", (ip,))]
         a = cfg.asset(ip)
         exps = [x for x in cfg.exposures if x.ip == ip]
         pub = cfg.binat_ext(ip)
@@ -614,7 +616,7 @@ def geo_policy(site=None):
     config.yaml snapshot; a site whose policy cannot be read at all is marked unknown."""
     from . import block as blk
     site = site or cfg.sites[0]
-    first = site["id"] == cfg.sites[0]["id"]
+    first = site["id"] == cfg.all_sites[0]["id"]   # the state key of the first configured firewall, whoever is signed in
     skey = "geoip_policy" if first else f"geoip_policy:{site['id']}"
     with _GEO_LOCK:
         hit = _GEO.get(site["id"])
@@ -711,12 +713,12 @@ def api_country(req: Request, cc: str):
         coll = dash.collection(sc)
         ids = alert_countries().get(cc, {}).get("ids", [])
         findings = [alert_brief(a) for a in conn.execute(
-            f"SELECT * FROM alerts WHERE id IN ({','.join('?' * len(ids))}) ORDER BY last_seen DESC", ids)] if ids else []
+            f"SELECT * FROM alerts WHERE id IN ({','.join('?' * len(ids))}) AND site_ok(site) ORDER BY last_seen DESC", ids)] if ids else []
         pol = geo_policy()
         jobs = {"summary": lambda: dash.summary(sc), "flow_series": lambda: dash.flow_series(sc, coll),
                 "servers": lambda: dash.servers(sc, 50)["servers"][:20], "orgs": lambda: dash.orgs(sc, 12),
                 "conversations": lambda: dash.conversations(sc, page=1, per=25)}
-        r = {k: f.result() for k, f in {k: POOL.submit(fn) for k, fn in jobs.items()}.items()}
+        r = {k: f.result() for k, f in {k: access.submit(POOL, fn) for k, fn in jobs.items()}.items()}
         return {"ok": True, "scope": scope_json(sc), "cc": cc, "name": cname(cc), "collection": coll, **r, "findings": findings,
                 "policy": {**policy_json(), "listed": cc in pol.get("countries", []),
                            "in": pol["blocked_in"].get(cc, []), "out": pol["blocked_out"].get(cc, [])}}
@@ -742,7 +744,7 @@ def api_country_preview(req: Request, cc: str):
             return {"ok": True, **hit[1]}
         jobs = {"servers": lambda: dash.servers(sc7, limit=100)["servers"][:15], "services": lambda: dash.services(sc7, 15),
                 "summary": lambda: dash.summary(sc7)}
-        pv = {"cc": cc, "name": cname(cc), "computed": time.time(), **{k: f.result() for k, f in {k: POOL.submit(fn) for k, fn in jobs.items()}.items()}}
+        pv = {"cc": cc, "name": cname(cc), "computed": time.time(), **{k: f.result() for k, f in {k: access.submit(POOL, fn) for k, fn in jobs.items()}.items()}}
         _PREVIEW7[key] = (time.time(), pv)
         return {"ok": True, **pv}
     return guard(run)
@@ -797,15 +799,15 @@ def address_prefix_matches(q):
     except Exception:
         pass
     import ipaddress
-    for x in conn.execute("SELECT address, max(ts) AS ts, group_concat(DISTINCT decision) AS d FROM response_log GROUP BY address ORDER BY ts DESC LIMIT 2000"):
+    for x in conn.execute("SELECT address, max(ts) AS ts, group_concat(DISTINCT decision) AS d FROM response_log WHERE site_ok(site) GROUP BY address ORDER BY ts DESC LIMIT 2000"):
         try:
             hit = ipaddress.ip_address(x["address"]) in net and x["address"].startswith(pre)
         except ValueError:
             continue
         if hit:
             out.append({"type": "Auto-response", "label": x["address"], "sub": f"decisions: {x['d'].replace('_', ' ')} · {fmt_ts(x['ts'])}",
-                        "href": "/netmon/settings/response#log"})
-    for b in conn.execute("SELECT id, address, status, auto FROM blocks ORDER BY id DESC LIMIT 2000"):
+                        "href": "/netmon/settings/response#log" if not access.restricted() else ""})
+    for b in conn.execute("SELECT id, address, status, auto FROM blocks WHERE site_ok(site) ORDER BY id DESC LIMIT 2000"):
         try:
             hit = ipaddress.ip_network(b["address"], strict=False).overlaps(net) and (not pre or b["address"].startswith(pre))
         except ValueError:
@@ -836,7 +838,7 @@ def api_search(req: Request, q: str = ""):
         if ql == cc.lower() or ql in m["name"].lower():
             res.append({"type": "Country", "label": m["name"], "sub": cc, "href": f"/netmon/countries/{cc}"})
     for x in cfg.exposures:
-        if q.isdigit() and x.lo <= int(q) <= x.hi:
+        if q.isdigit() and x.lo <= int(q) <= x.hi and cfg.ip_visible(x.ip):
             res.append({"type": "Service", "label": f"{x.proto}/{q} on {cfg.asset(x.ip)['name']}", "sub": "port forward",
                         "href": f"/netmon/servers/{x.ip}"})
     if q.isdigit():
@@ -947,14 +949,16 @@ def name_card(req, ip, back, msg=""):
     _, r = user_of(req)
     internal = cfg.is_internal(ip)
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
-    ok = ROLES[r] >= ROLES["admin" if internal else "analyst"]
+    ok = ROLES[r] >= ROLES["admin" if internal else "analyst"] and not access.restricted()
     what = "Name &amp; role" if internal else "Your label for this address"
     banner = f"<div class='banner'>{e(msg)}</div>" if msg else ""
     if ok:
         inner = name_form(req, ip, back)
     else:
-        inner = f"<p>{e(a.get('name') or 'Not named')}{(' · ' + e(a['notes'])) if a.get('notes') else ''}</p><p class='muted small'>Only {'admins' if internal else 'analysts'} can edit names.</p>"
-    return f"""<section class="card" id="srvname"><div class="card-h"><h2>{what}</h2><a class="small" href="/netmon/settings/inventory">All names →</a></div>{banner}{inner}</section>"""
+        who = ("users who can see every firewall (names are shared)" if access.restricted() else 'admins' if internal else 'analysts')
+        inner = f"<p>{e(a.get('name') or 'Not named')}{(' · ' + e(a['notes'])) if a.get('notes') else ''}</p><p class='muted small'>Only {who} can edit names.</p>"
+    allnames = "" if access.restricted() else '<a class="small" href="/netmon/settings/inventory">All names →</a>'
+    return f"""<section class="card" id="srvname"><div class="card-h"><h2>{what}</h2>{allnames}</div>{banner}{inner}</section>"""
 
 
 @app.get("/netmon/connections", response_class=HTMLResponse)
@@ -1081,11 +1085,11 @@ def ai_evidence(req, kind, target):
             "organizations": dash.orgs(sc, 10), "new_or_unusual": dash.server_novelty(sc)[:30],
             "conversations": [{k: r[k] for k in ("remote", "cc", "asname", "proto", "service", "direction", "evidence", "rx", "flows", "last")} for r in conv],
             "alerts": [{k: a[k] for k in ("title", "rule", "severity", "confidence", "why")} for a in
-                       (alert_brief(x) for x in conn.execute("SELECT * FROM alerts WHERE asset=? AND test=0 ORDER BY last_seen DESC LIMIT 10", (ip,)))],
+                       (alert_brief(x) for x in conn.execute("SELECT * FROM alerts WHERE asset=? AND test=0 AND site_ok(site) ORDER BY last_seen DESC LIMIT 10", (ip,)))],
             "collection": [{"first_flow": coll["first"], "last_flow": coll["last"], "active_timeout_s": cfg["exporter_active_timeout"]}],
             "asset_context": [asset_context(ip)]}
     if kind == "alert":
-        a = conn.execute("SELECT * FROM alerts WHERE id=?", (int(target),)).fetchone()
+        a = conn.execute("SELECT * FROM alerts WHERE id=? AND site_ok(site)", (int(target),)).fetchone()
         if not a:
             raise HTTPException(404)
         ev = json.loads(a["evidence"] or "[]")
@@ -1122,10 +1126,15 @@ def ai_evidence(req, kind, target):
     raise HTTPException(400, "unknown analysis type")
 
 
+# AI analyses visible to the current user: everything when unrestricted (site_ok(NULL) is true), else analyses of findings
+# on their firewalls plus their own (a device analysis is only about traffic they could see when they ran it)
+INV_VISIBLE = ("(site_ok(NULL) OR user=? OR (kind='alert' AND target IN (SELECT CAST(id AS TEXT) FROM alerts WHERE site_ok(site))))")
+
+
 @app.get("/netmon/investigations", response_class=HTMLResponse)
 def investigations_page(req: Request, kind: str = "", target: str = "", msg: str = ""):
     u, r = user_of(req)
-    hist = conn.execute("SELECT * FROM investigations ORDER BY id DESC LIMIT 20").fetchall()
+    hist = conn.execute(f"SELECT * FROM investigations WHERE {INV_VISIBLE} ORDER BY id DESC LIMIT 20", (u,)).fetchall()
     rows = "".join(f"<tr><td class='num'>{e(fmt_ts(h['ts']))}</td><td>{e(h['user'])}</td><td>{e(h['kind'])}</td><td>{e(h['target'])}</td>"
                    f"<td><a href='/netmon/investigations/{h['id']}'>view</a></td></tr>" for h in hist)
     state = (f"<div class='banner'>AI analysis is <b>configured</b> · model <code>{e(ai.ac.get('model'))}</code> · "
@@ -1197,8 +1206,8 @@ def api_ai_send(req: Request, digest: str = Form(...), csrf: str = Form("")):
 
 @app.get("/netmon/investigations/{iid}", response_class=HTMLResponse)
 def investigation_view(req: Request, iid: int):
-    user_of(req)
-    h = conn.execute("SELECT * FROM investigations WHERE id=?", (iid,)).fetchone()
+    u, _ = user_of(req)
+    h = conn.execute(f"SELECT * FROM investigations WHERE id=? AND {INV_VISIBLE}", (iid, u)).fetchone()
     if not h:
         raise HTTPException(404)
     res = json.loads(h["result"] or "{}")
@@ -1254,7 +1263,7 @@ def settings_page(req: Request):
 <p class="note">Port speed is not contracted capacity; utilization is shown only when a WAN capacity is set on <a href="/netmon/settings/sites">Firewalls &amp; sites</a>.</p></div>
 <div class="card"><div class="card-h"><h2>Features</h2></div><table class="tbl">
 <tr><td>Firewalls</td><td>{len(cfg["sites"])} site(s)</td><td><a href="/netmon/settings/sites">Firewalls &amp; sites</a></td></tr>
-<tr><td>Inventory</td><td>{len(cfg.get('assets', {}))} internal devices</td><td><a href="/netmon/settings/inventory">edit names</a></td></tr>
+<tr><td>Inventory</td><td>{len(cfg.get('assets', {}))} internal devices</td><td>{'' if access.restricted() else '<a href="/netmon/settings/inventory">edit names</a>'}</td></tr>
 <tr><td>Blocking</td><td>{f"{enforcement()[0]} of {enforcement()[1]} firewalls connected" if enforcement()[0] else 'not set up'}</td><td><a href="/netmon/blocks">block requests</a> · <a href="/netmon/settings/response">auto-response</a></td></tr>
 <tr><td>AI analysis</td><td>{'configured · ' + e(ai.ac.get('model')) if ai.enabled else 'not configured'}</td><td><a href="/netmon/investigations">setup</a></td></tr>
 <tr><td>GeoIP</td><td>{e(geo_sources())}</td><td><a href="/netmon/coverage">what is visible</a></td></tr>

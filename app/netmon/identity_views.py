@@ -7,6 +7,7 @@ from urllib.parse import quote
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from . import access
 from . import identity as idn
 from .ux import DEVICE_TABS, conf_badge, empty_state, fmt_local, tabs
 from .web import ROLES, app, cfg, check_csrf, conn, csrf_field, e, need, page, site_name, user_of
@@ -62,7 +63,7 @@ def address_history_card(ip, site=""):
             return f"<section class='card' id='addrhist'>{head}<p>More than one device used this address recently: {names}. {e(o['explain'])}.</p></section>"
         return (f"<section class='card' id='addrhist'>{head}" + empty_state(
             "learning", " No device history for this address yet. It is built from the firewall's ARP / neighbour tables, DHCP leases "
-            "and traffic every 15 minutes.", "/netmon/settings/inventory#discovery", "Discovery status") + "</section>")
+            "and traffic every 15 minutes.", "" if access.restricted() else "/netmon/settings/inventory#discovery", "Discovery status") + "</section>")
     iid = o["identity"]
     moved = conn.execute("SELECT count(DISTINCT value) FROM identity_evidence WHERE identity_id=? AND kind='ip'", (iid,)).fetchone()[0]
     prior = conn.execute("SELECT count(DISTINCT identity_id) FROM identity_evidence WHERE site=? AND kind='ip' AND value=?", (site, ip)).fetchone()[0]
@@ -80,7 +81,7 @@ def address_history_card(ip, site=""):
 
 
 def _suggestions(site=None, status="open", limit=100):
-    q = "SELECT * FROM identity_suggestions WHERE status=?" + (" AND site=?" if site else "") + " ORDER BY created_at DESC LIMIT ?"
+    q = "SELECT * FROM identity_suggestions WHERE status=? AND site_ok(site)" + (" AND site=?" if site else "") + " ORDER BY created_at DESC LIMIT ?"
     return conn.execute(q, (status, site, limit) if site else (status, limit)).fetchall()
 
 
@@ -103,7 +104,7 @@ def identities_page(req: Request, q: str = "", msg: str = ""):
                                 f"<button class='sm' name=status value=dismissed>{'Different devices: keep separate' if s['b'] else 'Dismiss'}</button></form>")
         srows += (f"<li><span class='s1'>{a}{b}</span><span class='s2'>{e(idn.suggestion_text(s['kind'], d))}</span>"
                   f"<span class='acts'>{e(site_name(s['site']))} · {e(fmt_local(s['created_at']))} {acts}</span></li>")
-    where, args = "WHERE i.status='active'", []
+    where, args = "WHERE i.status='active' AND site_ok(i.site)", []
     if q.strip():
         where += " AND (i.name LIKE ? OR i.id IN (SELECT identity_id FROM identity_evidence WHERE value LIKE ?))"
         args = [f"%{q.strip()}%", f"%{q.strip().lower()}%"]
@@ -114,7 +115,7 @@ def identities_page(req: Request, q: str = "", msg: str = ""):
         f"<tr><td><a href='/netmon/identities/{x['id']}'>{e(idn.name_of(conn, cfg, x['id']))}</a></td><td class='mono small'>{e(idn.current_ip(conn, x['id']))}</td>"
         f"<td>{e(site_name(x['site']))}</td><td class='small'>{e({'mac': 'MAC', 'random-mac': 'randomized MAC', 'ip-only': 'IP only', 'manual': 'manual'}.get(x['basis'], x['basis']))}</td>"
         f"<td class='num'>{x['ips']}</td><td class='num'>{x['macs']}</td><td class='num'>{e(fmt_local(x['updated_at']))}</td></tr>" for x in rows)
-    total = conn.execute("SELECT count(*) FROM identities WHERE status='active'").fetchone()[0]
+    total = conn.execute("SELECT count(*) FROM identities WHERE status='active' AND site_ok(site)").fetchone()[0]
     body = f"""{tabs(DEVICE_TABS, '/netmon/identities')}{f"<div class='banner'>{e(msg)}</div>" if msg else ''}
 <section class="card"><div class="card-h"><h2>Needs your review</h2><span class="muted small">{len(sugg)} open</span></div>
 <p class="note">netmon never merges devices on its own because of a shared hostname, vendor or a reused IP address. When the evidence
@@ -123,7 +124,7 @@ suggests two records might be one device (or a device moved), it asks here.</p>
 <section class="card"><div class="card-h"><h2>Devices</h2><span class="muted small">{total} known · per site, so overlapping private addresses at different sites stay apart</span></div>
 <form class="row" method=get><input name=q value="{e(q)}" placeholder="name, IP, MAC or hostname" aria-label="Find a device"> <button>Find</button></form>
 <div class="wrap"><table class="tbl"><thead><tr><th>Device</th><th>Current IP</th><th>Site</th><th>Identified by</th><th class="num">IPs</th><th class="num">MACs</th><th class="num">Updated</th></tr></thead>
-<tbody>{trs or '<tr><td colspan=7>' + empty_state('learning', ' No identities yet: they are built by auto-discovery every 15 minutes.', '/netmon/settings/inventory#discovery', 'Discovery') + '</td></tr>'}</tbody></table></div></section>"""
+<tbody>{trs or '<tr><td colspan=7>' + empty_state('learning', ' No identities yet: they are built by auto-discovery every 15 minutes.', '' if access.restricted() else '/netmon/settings/inventory#discovery', 'Discovery') + '</td></tr>'}</tbody></table></div></section>"""
     return page(req, "Identity review", body, "/netmon/servers", scoped=False,
                 subtitle="Which device had which address, and when")
 
@@ -131,7 +132,7 @@ suggests two records might be one device (or a device moved), it asks here.</p>
 @app.get("/netmon/identities/{iid}", response_class=HTMLResponse)
 def identity_page(req: Request, iid: int, msg: str = ""):
     u, r = user_of(req)
-    x = conn.execute("SELECT * FROM identities WHERE id=?", (iid,)).fetchone()
+    x = conn.execute("SELECT * FROM identities WHERE id=? AND site_ok(site)", (iid,)).fetchone()
     if not x:
         raise HTTPException(404)
     if x["status"] == "merged":

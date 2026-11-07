@@ -3,6 +3,25 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.53 — 2026-11-07
+
+### Added
+- **Per-user firewall restrictions.** Settings → Users & 2FA: an admin can limit a viewer or analyst to some firewalls.
+  The user then sees only those firewalls on every page and in the API: traffic, maps, findings, incidents, device
+  identities, applications, WAN / VPN probes, segmentation, threat hunts, searches, firewall and IDS logs, blocks and
+  auto-response decisions. Another firewall's record opened by its number is "not found". Applies to open sessions at
+  once and is recorded in the audit log. Admins always see every firewall.
+  - Exceptions a restricted analyst adds from a finding apply to that finding's firewall; the expected-devices list
+    (every firewall) is left to unrestricted users.
+  - A restricted user's saved search stores their firewalls, so a detection approved from it stays on them.
+  - Settings shared by every firewall (capacity planning, maintenance windows, Inventory, data sources,
+    auto-response, indicator lists, wallboard editing) and the Akvorado flow explorer (cannot be limited per user)
+    are not available to restricted users; the page says why.
+    Their menus, links and buttons are hidden for restricted users.
+  - Incidents that group findings from several firewalls are shown only to users who can see all of them.
+  - Health and detector-error findings are now filed under the firewall they are about.
+  - Existing users are unchanged: every account starts with all firewalls.
+
 ## v1.52 — 2026-11-07
 
 ### Fixed

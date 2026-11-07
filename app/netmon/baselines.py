@@ -260,7 +260,7 @@ def preview(conn, exc, cfg, now=None, days=PREVIEW_DAYS, limit=5):
     how many findings for the same device it would NOT hide (so the scope is visible before saving)."""
     now = now or time.time()
     match, other, n = [], 0, 0
-    for a in conn.execute("SELECT * FROM alerts WHERE test=0 AND last_seen >= ? ORDER BY last_seen DESC LIMIT 5000",
+    for a in conn.execute("SELECT * FROM alerts WHERE test=0 AND last_seen >= ? AND site_ok(site) ORDER BY last_seen DESC LIMIT 5000",
                           (now - days * 86400,)).fetchall():
         f = dict(a) | {"window": (a["window_start"], a["window_end"])}
         site = cfg.site(a["site"]) if a["site"] else None

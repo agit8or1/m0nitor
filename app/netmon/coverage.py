@@ -13,8 +13,9 @@ import time
 from fastapi import Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from . import access
 from .core import get_state
-from .web import app, ch, check_csrf, conn, csrf_field, dash, e, need, page
+from .web import app, cfg, ch, check_csrf, conn, csrf_field, dash, e, need, page
 
 COV = {"verified": ("good", "✓ verified"), "partial": ("warning", "◐ partial"), "unavailable": ("muted", "✕ unavailable"),
        "awaiting": ("muted", "… awaiting setup")}
@@ -28,6 +29,7 @@ def _ts(t):
 
 def _q1(sql, p=None, default=0):
     try:
+        sql, p = access.ch_restrict(sql, p, cfg.sites)     # only the signed-in user's firewalls
         r = ch.query(sql, p or {})
         return r[0] if r else default
     except Exception:
@@ -113,7 +115,8 @@ def coverage_page(req: Request, msg: str = ""):
     from . import health as H
     from .admin import SETTINGS_TABS, tabs
     hs, ts = get_state(conn, "health", {})
-    checks = (hs or {}).get("checks", [])
+    checks = [c for c in (hs or {}).get("checks", []) if access.can_site(H.check_site(cfg, c["id"]) or "")
+              or H.check_site(cfg, c["id"]) is None]      # other firewalls' checks are not shown (netmon.access)
     groups = {}
     for c in checks:
         groups.setdefault(c["group"], []).append(c)

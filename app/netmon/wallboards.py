@@ -7,7 +7,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .core import audit
 from .dash import PRESETS
-from .web import ASSET_V, ROLES, app, cfg, check_csrf, conn, csrf_token, e, need, page, user_of, SECURITY_HEADERS
+from . import access
+from .web import need_all_sites, ASSET_V, ROLES, app, cfg, check_csrf, conn, csrf_token, e, need, page, user_of, SECURITY_HEADERS
 
 # type -> (label, default w (of 12), default h (rows), description)
 WIDGETS = {
@@ -66,9 +67,19 @@ def clean_layout(raw):
     return out
 
 
+def _board_ok(layout_json):
+    """A board pinned to a firewall is only for users who can see that firewall; 'all' boards show each viewer's own
+    firewalls (their data comes from the scoped APIs)."""
+    try:
+        site = json.loads(layout_json or "{}").get("site", "all")
+    except ValueError:
+        return False
+    return site in (None, "", "all") or access.can_site(site)
+
+
 def board(bid):
     b = conn.execute("SELECT * FROM wallboards WHERE id=?", (bid,)).fetchone()
-    if not b:
+    if not b or not _board_ok(b["layout"]):
         raise HTTPException(404)
     lay = json.loads(b["layout"])
     for w in lay["widgets"]:
@@ -81,7 +92,7 @@ def board(bid):
 @app.get("/netmon/wallboards", response_class=HTMLResponse)
 def wallboards_list(req: Request):
     u, r = user_of(req)
-    rows = conn.execute("SELECT * FROM wallboards ORDER BY name").fetchall()
+    rows = [x for x in conn.execute("SELECT * FROM wallboards ORDER BY name").fetchall() if _board_ok(x["layout"])]
     cards = ""
     for b in rows:
         lay = json.loads(b["layout"])
@@ -89,7 +100,7 @@ def wallboards_list(req: Request):
         acts = (f"<a class='btn' href='/netmon/wallboards/{b['id']}/edit'>Edit</a> "
                 f"<form method=post action='/netmon/wallboards/{b['id']}/copy' class=inline><input type=hidden name=csrf value='{csrf_token(req)}'><button>Duplicate</button></form> "
                 + (f"<form method=post action='/netmon/wallboards/{b['id']}/delete' class='inline confirm'><input type=hidden name=csrf value='{csrf_token(req)}'><button>Delete</button></form>"
-                   if r == "admin" or b["created_by"] == u else "")) if ROLES[r] >= 1 else ""
+                   if r == "admin" or b["created_by"] == u else "")) if ROLES[r] >= 1 and not access.restricted() else ""
         cards += f"""<div class="card wbcard"><a class="wbopen" href="/netmon/wallboards/{b['id']}"><h2>{e(b['name'])}</h2>
 <p class="muted small">{len(lay['widgets'])} tiles · {e(lay['range'])} · refresh {lay['refresh']} s · updated {e(time.strftime('%Y-%m-%d %H:%M', time.localtime(b['updated_at'] or 0)))} by {e(b['updated_by'] or b['created_by'])}</p>
 <p class="small">{e(types)}{'…' if len(lay['widgets']) > 6 else ''}</p></a>
@@ -97,7 +108,7 @@ def wallboards_list(req: Request):
     new = (f"""<section class="card"><div class="card-h"><h2>New wallboard</h2></div>
 <form method=post action="/netmon/wallboards" class="row"><input type=hidden name=csrf value="{csrf_token(req)}">
 <input name=name placeholder="Wallboard name" required maxlength=60> <select name=template><option value="">Empty</option>
-{''.join(f'<option>{e(t)}</option>' for t in TEMPLATES)}</select> <button class="primary">Create</button></form></section>""" if ROLES[r] >= 1 else "")
+{''.join(f'<option>{e(t)}</option>' for t in TEMPLATES)}</select> <button class="primary">Create</button></form></section>""" if ROLES[r] >= 1 and not access.restricted() else "")
     body = f"""<section class="wbgrid">{cards or '<p class="state empty">No wallboards</p>'}</section>{new}
 <p class="note">Kiosk mode hides navigation for wall displays; the session still needs a login (use a viewer account for screens).</p>"""
     return page(req, "Wallboards", body, "/netmon/wallboards", ("settings.js",), scoped=False)
@@ -105,7 +116,7 @@ def wallboards_list(req: Request):
 
 @app.post("/netmon/wallboards")
 async def wallboard_create(req: Request):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Editing wallboards")
     form = await req.form()
     check_csrf(req, form.get("csrf", ""))
     tpl = TEMPLATES.get(form.get("template", ""), {"range": "15m", "refresh": 30, "widgets": [{"type": "kpi_in"}, {"type": "kpi_out"}]})
@@ -118,7 +129,7 @@ async def wallboard_create(req: Request):
 
 @app.post("/netmon/wallboards/{bid}/{action}")
 async def wallboard_action(req: Request, bid: int, action: str):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Editing wallboards")
     form = await req.form()
     check_csrf(req, form.get("csrf", ""))
     b, lay = board(bid)
@@ -145,13 +156,14 @@ def wallboard_get(req: Request, bid: int):
     b, lay = board(bid)
     return {"ok": True, "id": bid, "name": b["name"], "layout": lay,
             "catalog": {k: {"label": v[0], "w": v[1], "h": v[2], "desc": v[3]} for k, v in WIDGETS.items()},
-            "boards": [{"id": x["id"], "name": x["name"]} for x in conn.execute("SELECT id, name FROM wallboards ORDER BY name")],
+            "boards": [{"id": x["id"], "name": x["name"]} for x in conn.execute("SELECT id, name, layout FROM wallboards ORDER BY name")
+                       if _board_ok(x["layout"])],
             "sites": [{"id": s["id"], "name": s["name"]} for s in cfg["sites"]]}
 
 
 @app.post("/netmon/api/wallboards/{bid}")
 async def wallboard_save(req: Request, bid: int):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Editing wallboards")
     check_csrf(req, req.headers.get("x-csrf", ""))
     board(bid)
     body = await req.json()

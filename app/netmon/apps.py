@@ -69,7 +69,7 @@ def delete(conn, aid, user):
 
 
 def get(conn, aid):
-    a = conn.execute("SELECT * FROM apps WHERE id=?", (aid,)).fetchone()
+    a = conn.execute("SELECT * FROM apps WHERE id=? AND site_ok(site)", (aid,)).fetchone()   # other firewalls: not found
     if not a:
         raise ValueError("no such application")
     return a

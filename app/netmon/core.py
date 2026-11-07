@@ -34,18 +34,61 @@ class Config:
     public_nets: list = field(default_factory=list)
     exposures: list = field(default_factory=list)
 
+    # Firewalls are limited to the signed-in user's allowed set while a request has one (netmon.access); code that
+    # must see every firewall regardless (admin editing, background workers) reads self.raw["sites"] or runs outside
+    # a request.
     def __getitem__(self, k):
+        if k == "sites":
+            return self.sites
+        if k == "assets":
+            return self._assets()
         return self.raw[k]
 
     def get(self, k, d=None):
+        if k == "sites":
+            return self.sites if "sites" in self.raw else d
+        if k == "assets":
+            return self._assets() if "assets" in self.raw else d
         return self.raw.get(k, d)
+
+    def ip_visible(self, ip) -> bool:
+        """Internal device names are shared settings: for a user limited to some firewalls, hide a device that only
+        other firewalls' own internal networks contain. Addresses no firewall claims on its own stay visible."""
+        from .access import can_site, restricted
+        if not restricted():
+            return True
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return True
+        claims = [x["id"] for x in self.raw["sites"]
+                  if any(a in ipaddress.ip_network(str(n), strict=False) for n in x.get("internal_nets", []))]
+        return not claims or any(can_site(c) for c in claims)
+
+    def _assets(self) -> dict:
+        from .access import allowed_key, restricted
+        allv = self.raw.get("assets", {})
+        if not restricted():
+            return allv
+        key = (allowed_key(), id(allv), len(allv))
+        hit = self.__dict__.get("_assets_cache")
+        if hit and hit[0] == key:
+            return hit[1]
+        out = {ip: v for ip, v in allv.items() if self.ip_visible(ip)}
+        self.__dict__["_assets_cache"] = (key, out)
+        return out
 
     @property
     def sites(self) -> list:
+        from .access import filter_sites
+        return filter_sites(self.raw["sites"])
+
+    @property
+    def all_sites(self) -> list:
         return self.raw["sites"]
 
     def site(self, sid: str):
-        return next((x for x in self.raw["sites"] if x["id"] == sid), None)
+        return next((x for x in self.sites if x["id"] == sid), None)
 
     def site_ours(self, s: dict) -> list:
         """CIDRs that are 'ours' for an address-based (capture) site."""
@@ -61,15 +104,15 @@ class Config:
         return any(a in n for n in self.internal_nets + self.public_nets)
 
     def asset(self, ip: str) -> dict:
-        a = self.raw.get("assets", {}).get(ip)
+        a = self._assets().get(ip)
         return a or {"name": ip, "role": "unknown", "sensitive": False}
 
     def asset_label(self, ip: str) -> str:
         if ip in self.raw.get("outbound_nat_ips", []):
             return f"Shared NAT {ip} (many LAN hosts; see the LAN host attribution)"
-        a = self.raw.get("assets", {}).get(ip) or self.raw.get("labels", {}).get(ip)
+        a = self._assets().get(ip) or self.raw.get("labels", {}).get(ip)
         if not a and ip in self.binat:     # 1:1 NAT public address: name it after the one internal server behind it
-            inner = self.raw.get("assets", {}).get(self.binat[ip])
+            inner = self._assets().get(self.binat[ip])
             return f"{inner['name'] if inner else self.binat[ip]} via 1:1 NAT ({ip})"
         return f"{a['name']} ({ip})" if a else ip
 
@@ -106,7 +149,7 @@ class Config:
 
     def label(self, ip: str) -> str:
         """Operator-given name for any address (internal servers first, then external labels)."""
-        a = self.raw.get("assets", {}).get(ip) or self.raw.get("labels", {}).get(ip)
+        a = self._assets().get(ip) or self.raw.get("labels", {}).get(ip)
         return a["name"] if a else ""
 
     @property
@@ -528,6 +571,10 @@ def SITE_FIRST() -> str:
 def db_connect(path: str = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # site_ok(site): is this firewall visible to the current request's user (netmon.access)? Always true outside
+    # requests and for unrestricted users; NULL sites only for unrestricted users.
+    from .access import can_site, restricted
+    conn.create_function("site_ok", 1, lambda sid: 1 if (not restricted() if sid is None else can_site(sid)) else 0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     ver = conn.execute("PRAGMA user_version").fetchone()[0]

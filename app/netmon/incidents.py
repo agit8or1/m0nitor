@@ -67,8 +67,10 @@ def incident_of(conn, alert_id):
 
 
 def members(conn, iid):
+    """Findings in the incident that the current user may see (all of them outside requests; netmon.access)."""
     return conn.execute("SELECT a.*, ia.reason AS link_reason, ia.added_by AS link_by, ia.added_at AS link_at FROM incident_alerts ia "
-                        "JOIN alerts a ON a.id = ia.alert_id WHERE ia.incident_id=? AND ia.removed=0 ORDER BY a.first_seen", (iid,)).fetchall()
+                        "JOIN alerts a ON a.id = ia.alert_id WHERE ia.incident_id=? AND ia.removed=0 AND site_ok(a.site) "
+                        "ORDER BY a.first_seen", (iid,)).fetchall()
 
 
 def _removed_from(conn, alert_id, iid):
@@ -304,9 +306,26 @@ def update(conn, iid, user, status=None, assignee=None, resolution=None, note=No
     return changes
 
 
+# An incident is visible to a user limited to some firewalls (netmon.access) only when its own firewall and every
+# finding in it are theirs: grouping by remote address can span firewalls, and the title, severity and times are
+# derived from all members. Use with the incidents table aliased as i.
+VISIBLE = ("site_ok(i.site) AND NOT EXISTS (SELECT 1 FROM incident_alerts iav JOIN alerts av ON av.id = iav.alert_id "
+           "WHERE iav.incident_id = i.id AND iav.removed = 0 AND NOT site_ok(av.site))")
+
+
 def history(conn, iid):
-    return [dict(r) | {"detail": json.loads(r["detail"] or "{}")} for r in
-            conn.execute("SELECT * FROM incident_events WHERE incident_id=? ORDER BY ts, id", (iid,))]
+    """The incident's history; events naming findings or incidents the current user cannot see are left out."""
+    out = []
+    for r in conn.execute("SELECT * FROM incident_events WHERE incident_id=? ORDER BY ts, id", (iid,)):
+        d = json.loads(r["detail"] or "{}")
+        ids = [d[k] for k in ("finding",) if isinstance(d.get(k), int)] + [x for x in d.get("findings", []) if isinstance(x, int)]
+        if ids and conn.execute(f"SELECT count(*) FROM alerts WHERE id IN ({','.join('?' * len(ids))}) AND NOT site_ok(site)", ids).fetchone()[0]:
+            continue
+        other = d.get("incident") or d.get("to")
+        if isinstance(other, int) and not conn.execute(f"SELECT 1 FROM incidents i WHERE i.id=? AND {VISIBLE}", (other,)).fetchone():
+            continue
+        out.append(dict(r) | {"detail": d})
+    return out
 
 
 def already_notified(conn, alert, channel_id, now=None):

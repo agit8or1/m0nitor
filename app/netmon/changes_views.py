@@ -158,28 +158,29 @@ def _lab(ip, site):
     return idn.label(conn, cfg, cfg.binat.get(ip, ip), site)
 
 
-_TOP = {"t": 0, "v": None, "busy": False}
+_TOP = {}   # allowed-firewalls key -> {"t", "v", "busy"}: each set of visible firewalls has its own card
 
 
 @app.get("/netmon/api/changes/top")
 def api_changes_top(req: Request):
-    """Overview card: the three most important changes today vs yesterday (all firewalls). Computed in the
+    """Overview card: the three most important changes today vs yesterday (the user's firewalls). Computed in the
     background and cached, so the Overview never waits for it."""
     user_of(req)
-    import threading
-    if (_TOP["v"] is None or time.time() - _TOP["t"] > 300) and not _TOP["busy"]:
-        _TOP["busy"] = True
+    from . import access
+    top = _TOP.setdefault(access.allowed_key(), {"t": 0, "v": None, "busy": False})
+    if (top["v"] is None or time.time() - top["t"] > 300) and not top["busy"]:
+        top["busy"] = True
 
         def run():
             try:
                 per = periods("day", time.time(), cfg.sites[0])
                 res = ENGINE.compute(list(cfg.sites), per)
-                _TOP.update(t=time.time(), v={"items": [{k: x[k] for k in ("kind", "title", "detail", "confidence", "link")}
-                                                      | {"device": (x.get("device") or {}).get("name")} for x in summarize(res["items"])[:3]],
-                                            "total": len(res["items"]), "complete": res["complete"], "notes": res["notes"][:2]})
+                top.update(t=time.time(), v={"items": [{k: x[k] for k in ("kind", "title", "detail", "confidence", "link")}
+                                                     | {"device": (x.get("device") or {}).get("name")} for x in summarize(res["items"])[:3]],
+                                           "total": len(res["items"]), "complete": res["complete"], "notes": res["notes"][:2]})
             except Exception as ex:
-                _TOP.update(t=time.time(), v={"error": f"{type(ex).__name__}"})
+                top.update(t=time.time(), v={"error": f"{type(ex).__name__}"})
             finally:
-                _TOP["busy"] = False
-        threading.Thread(target=run, daemon=True).start()
-    return JSONResponse({"ready": _TOP["v"] is not None, **(_TOP["v"] or {})})
+                top["busy"] = False
+        access.spawn(run)       # keeps this request's firewall restriction
+    return JSONResponse({"ready": top["v"] is not None, **(top["v"] or {})})

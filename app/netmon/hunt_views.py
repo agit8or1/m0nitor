@@ -7,17 +7,34 @@ from urllib.parse import quote, urlencode
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from . import access
 from . import hunt as H
 from . import identity as idn
 from .core import audit
 from .ux import INVESTIGATE_TABS, conf_badge, device_html, empty_state, fmt_local, tabs
-from .web import ROLES, app, cfg, ch, check_csrf, conn, csrf_field, e, human_bytes, need, page, site_name, user_of
+from .web import need_all_sites, ROLES, app, cfg, ch, check_csrf, conn, csrf_field, e, human_bytes, need, page, site_name, user_of
 
 PERIODS = {"24h": ("Last 24 hours", 86400), "7d": ("Last 7 days", 7 * 86400), "all": ("All retained history (up to 31 days)", H.MAX_DAYS * 86400)}
 SOURCE_LABEL = {"flows": "traffic records", "dns": "DNS query", "dns_answer": "DNS answer", "firewall": "firewall log"}
 TYPE_LABEL = {"ip": "IP address", "cidr": "address range", "domain": "domain"}
 NOT_PROOF = ("A match is evidence to investigate, not proof: indicators go stale, addresses are reused, and CDN or shared-hosting "
              "addresses serve many unrelated sites.")
+
+
+def _run_ok(x):
+    """A hunt run is visible when every firewall it searched is visible to the signed-in user (netmon.access)."""
+    try:
+        sites = json.loads(x["spec"] or "{}").get("sites") or []
+    except ValueError:
+        sites = []
+    return all(access.can_site(s) for s in sites) and (sites or not access.restricted())
+
+
+def _run(rid, cols="*"):
+    x = conn.execute(f"SELECT {cols}, spec FROM hunt_runs WHERE id=?", (rid,)).fetchone()
+    if not x or not _run_ok(x):
+        raise HTTPException(404)
+    return x
 
 
 def _msg(m):
@@ -34,20 +51,21 @@ def hunt_page(req: Request, msg: str = ""):
     can, admin = ROLES[r] >= ROLES["analyst"], ROLES[r] >= ROLES["admin"]
     lists = conn.execute("SELECT l.*, (SELECT count(*) FROM indicators i WHERE i.list_id=l.id AND i.active=1) AS n FROM indicator_lists l "
                          "ORDER BY l.enabled DESC, l.id DESC").fetchall()
-    runs = conn.execute("SELECT * FROM hunt_runs ORDER BY id DESC LIMIT 15").fetchall()
+    runs = [x for x in conn.execute("SELECT * FROM hunt_runs ORDER BY id DESC LIMIT 200").fetchall() if _run_ok(x)][:15]
     chk = "".join(f"<label class='chk'><input type=checkbox name=lists value={x['id']} {'checked' if x['enabled'] else 'disabled'}> "
                   f"{e(x['name'])} <span class='muted small'>({x['n']:,})</span></label>" for x in lists)
     per = "".join(f"<option value={k} {'selected' if k == '7d' else ''}>{e(v[0])}</option>" for k, v in PERIODS.items())
     sites = ("<label>Firewalls<select name=site><option value=all>All firewalls</option>" + "".join(
         f"<option value='{e(s['id'])}'>{e(s['name'])}</option>" for s in cfg.sites) + "</select></label>") if len(cfg.sites) > 1 else ""
-    busy = conn.execute("SELECT id FROM hunt_runs WHERE status IN ('queued','running','cancelling')").fetchone()
+    busy = conn.execute("SELECT id, spec FROM hunt_runs WHERE status IN ('queued','running','cancelling')").fetchone()
     form = (f"""<form method=post action="/netmon/hunt/run" class="stackform">{csrf_field(req)}
 <fieldset><legend>Indicator lists</legend><div class="chkgrid">{chk or '<span class="muted">No lists yet — paste indicators below or add a list.</span>'}</div></fieldset>
 <label>And/or paste indicators for this hunt only<textarea name=adhoc rows=4 class="mono" placeholder="one per line: 198.51.100.7, 203.0.113.0/24, bad.example.com, hxxps://evil[.]example/x"></textarea></label>
 <div class="row"><label>Period<select name=period>{per}</select></label>{sites}<label>Confidence of pasted indicators<select name=conf>
 <option>low</option><option selected>medium</option><option>high</option></select></label></div>
 <div class="row"><button class="primary" {'disabled' if busy else ''}>Search history</button>
-{f"<span class='muted small'>Hunt <a href='/netmon/hunt/{busy[0]}'>#{busy[0]}</a> is running; one hunt runs at a time.</span>" if busy else ''}</div>
+{(f"<span class='muted small'>Hunt <a href='/netmon/hunt/{busy[0]}'>#{busy[0]}</a> is running; one hunt runs at a time.</span>" if _run_ok(busy)
+   else "<span class='muted small'>Another hunt is running; one hunt runs at a time.</span>") if busy else ''}</div>
 <p class="muted small">Searches traffic records (both directions), the DNS query log and the firewall log. Read-only and bounded: at most
 {H.MAX_DAYS} days, {H.MAX_IPS:,} addresses, {H.MAX_CIDRS} ranges and {H.MAX_DOMAINS:,} domains per hunt, {H.MAX_RUNTIME // 60} minutes.</p></form>"""
             if can else "<p class='muted'>Analysts can run hunts.</p>")
@@ -96,6 +114,7 @@ def _run_line(x):
 @app.post("/netmon/hunt/lists")
 def add_list(req: Request, name: str = Form(...), source: str = Form(""), confidence: str = Form("medium"), text: str = Form(""),
              url: str = Form(""), refresh_hours: str = Form("24"), csrf: str = Form("")):
+    need_all_sites(req, "viewer", "Indicator lists")
     u, r = user_of(req)
     need(req, "admin" if url.strip() else "analyst")
     check_csrf(req, csrf)
@@ -117,7 +136,7 @@ def add_list(req: Request, name: str = Form(...), source: str = Form(""), confid
 
 @app.post("/netmon/hunt/lists/{lid}/fetch")
 def fetch_list(req: Request, lid: int, csrf: str = Form("")):
-    u = need(req, "admin")
+    u = need_all_sites(req, "admin", "Indicator lists")
     check_csrf(req, csrf)
     try:
         st = H.fetch_feed(conn, lid)
@@ -129,6 +148,7 @@ def fetch_list(req: Request, lid: int, csrf: str = Form("")):
 
 @app.post("/netmon/hunt/lists/{lid}/toggle")
 def toggle_list(req: Request, lid: int, csrf: str = Form("")):
+    need_all_sites(req, "viewer", "Indicator lists")
     u, r = user_of(req)
     x = conn.execute("SELECT * FROM indicator_lists WHERE id=?", (lid,)).fetchone()
     if not x:
@@ -179,6 +199,7 @@ async def run_hunt(req: Request):
 def cancel_hunt(req: Request, rid: int, csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
+    _run(rid, "id")
     H.cancel(conn, rid, u)
     return RedirectResponse(f"/netmon/hunt/{rid}", 303)
 
@@ -186,9 +207,7 @@ def cancel_hunt(req: Request, rid: int, csrf: str = Form("")):
 @app.get("/netmon/api/hunt/{rid}")
 def hunt_status(req: Request, rid: int):
     user_of(req)
-    x = conn.execute("SELECT status, progress, error FROM hunt_runs WHERE id=?", (rid,)).fetchone()
-    if not x:
-        raise HTTPException(404)
+    x = _run(rid, "status, progress, error")
     return JSONResponse({"status": x["status"], "progress": json.loads(x["progress"] or "{}"), "error": x["error"]})
 
 
@@ -206,9 +225,7 @@ def _lab(site, ip, iid):
 @app.get("/netmon/hunt/{rid}", response_class=HTMLResponse)
 def hunt_result(req: Request, rid: int, msg: str = ""):
     u, r = user_of(req)
-    x = conn.execute("SELECT * FROM hunt_runs WHERE id=?", (rid,)).fetchone()
-    if not x:
-        raise HTTPException(404)
+    x = _run(rid)
     spec = json.loads(x["spec"])
     can = ROLES[r] >= ROLES["analyst"]
     head = (f"<p class='small'>Period {e(fmt_local(spec['t0']))} → {e(fmt_local(spec['t1']))} · firewalls "
@@ -227,7 +244,7 @@ def hunt_result(req: Request, rid: int, msg: str = ""):
                               "/netmon/hunt", "New hunt") + "</section>")
         return page(req, f"Hunt #{rid}", body, "/netmon/investigate", scoped=False)
     s = json.loads(x["summary"] or "{}")
-    ms = conn.execute("SELECT * FROM hunt_matches WHERE run_id=? ORDER BY ind_value, events DESC", (rid,)).fetchall()
+    ms = conn.execute("SELECT * FROM hunt_matches WHERE run_id=? AND site_ok(site) ORDER BY ind_value, events DESC", (rid,)).fetchall()
     by = {}
     for m in ms:
         by.setdefault((m["ind_type"], m["ind_value"]), []).append(m)
@@ -310,7 +327,7 @@ def match_finding(req: Request, mid: int, csrf: str = Form("")):
     """Turn a match into a finding (so it can be triaged and grouped into an incident). Not notified: a person made it."""
     u = need(req, "analyst")
     check_csrf(req, csrf)
-    m = conn.execute("SELECT * FROM hunt_matches WHERE id=?", (mid,)).fetchone()
+    m = conn.execute("SELECT * FROM hunt_matches WHERE id=? AND site_ok(site)", (mid,)).fetchone()
     if not m:
         raise HTTPException(404)
     d = json.loads(m["detail"] or "{}")

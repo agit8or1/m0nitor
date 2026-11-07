@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS mfa_pending (token_hash TEXT PRIMARY KEY, username TE
   ip TEXT, next TEXT);
 """
 USER_COLS = {"totp_secret": "TEXT", "totp_enabled": "INTEGER NOT NULL DEFAULT 0", "totp_last": "INTEGER NOT NULL DEFAULT 0",
-             "recovery": "TEXT", "email": "TEXT"}
+             "recovery": "TEXT", "email": "TEXT",
+             "sites": "TEXT"}   # JSON list of firewall ids a viewer/analyst may see; NULL = all (netmon.access)
 # a pending second-factor challenge is claimed by exactly one request at a time (claim_mfa); see complete_mfa
 PENDING_COLS = {"claim": "TEXT", "claimed_at": "REAL"}
 CLAIM_TTL = 30          # seconds; a claim left behind by a crashed request can be taken over after this

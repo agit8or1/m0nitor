@@ -11,7 +11,7 @@ from . import block as blk
 from . import respond
 from .core import audit, get_state, put_setting
 from .detect import fmt_ts
-from .web import app, cfg, check_csrf, conn, csrf_field, e, need, page, user_of
+from .web import need_all_sites, app, cfg, check_csrf, conn, csrf_field, e, page, user_of
 
 BASE = "/netmon/settings/response"
 MODES = {"off": ("Off", "Nothing is evaluated. Existing automatic blocks still expire on time."),
@@ -81,6 +81,7 @@ Disabling “manual blocks” rules stops enforcing approved manual blocks; disa
 @app.get(BASE, response_class=HTMLResponse)
 def response_page(req: Request, msg: str = ""):
     from .admin import SETTINGS_TABS, tabs
+    need_all_sites(req, "viewer", "Auto-response")
     u, r = user_of(req)
     admin = r == "admin"
     s = respond.settings(conn)
@@ -133,14 +134,14 @@ many addresses needs upstream (ISP) mitigation; per-address blocks do not stop i
 <p class="note">Always applied as well: the manual-block guardrails (no private, own, protected or broader-than-/{cfg['opnsense']['min_prefix_v4']} ranges),
 addresses you named in Inventory, addresses a person un-blocked in the last 7 days, and addresses our servers use as a service.</p>
 {'<div class="row"><button class="primary">Save</button></div>' if admin else '<p class="muted small">Only admins can change these settings.</p>'}</form>"""
-    active = conn.execute("SELECT * FROM blocks WHERE auto=1 AND status='applied' ORDER BY applied_at DESC LIMIT 200").fetchall()
+    active = conn.execute("SELECT * FROM blocks WHERE auto=1 AND status='applied' AND site_ok(site) ORDER BY applied_at DESC LIMIT 200").fetchall()
     now = time.time()
     rm = lambda b: f'<form method=post action="/netmon/block/{b["id"]}/remove" class="inline">{csrf_field(req)}<button>Remove now</button></form>' if admin else ""  # noqa: E731
     arows = "".join(f"""<tr><td><a href="/netmon/block/{b['id']}">#{b['id']}</a></td><td><a class="mono" href="/netmon/connections?rip={e(b['address'])}">{e(b['address'])}</a></td>
 <td>{e(respond.TRIGGER_LABEL.get(b['trigger'], b['trigger'] or ''))}</td><td class="small">{e(b['reason'])}</td><td class="num">{e(fmt_ts(b['applied_at']))}</td>
 <td class="num" title="{e(fmt_ts(b['expires_at']))}">in {max(0, (b['expires_at'] - now)) / 3600:.1f} h</td>
 <td>{rm(b)}</td></tr>""" for b in active)
-    logs = conn.execute("SELECT * FROM response_log ORDER BY id DESC LIMIT 150").fetchall()
+    logs = conn.execute("SELECT * FROM response_log WHERE site_ok(site) ORDER BY id DESC LIMIT 150").fetchall()
     lrows = []
     for x in logs:
         cls, txt = DECISION.get(x["decision"], ("muted", x["decision"]))
@@ -157,8 +158,8 @@ addresses you named in Inventory, addresses a person un-blocked in the last 7 da
 <section class="cards fit">
 <div class="kpi"><div class="k">Mode</div><div class="v {'ok' if s['mode'] == 'on' else 'na' if s['mode'] == 'off' else ''}">{MODES[s['mode']][0]}</div><div class="s">{e(MODES[s['mode']][1])}</div></div>
 <div class="kpi"><div class="k">Active auto-blocks</div><div class="v">{len(active)}</div><div class="s">expire after {s['ttl_hours']:g} h</div></div>
-<div class="kpi"><div class="k">Last 24 h</div><div class="v">{conn.execute("SELECT count(*) FROM blocks WHERE auto=1 AND applied_at > ?", (now - 86400,)).fetchone()[0]}</div>
-<div class="s">blocked · {conn.execute("SELECT count(*) FROM response_log WHERE decision='would_block' AND ts > ?", (now - 86400,)).fetchone()[0]} would block (dry run) · {conn.execute("SELECT count(*) FROM response_log WHERE decision='skipped' AND ts > ?", (now - 86400,)).fetchone()[0]} skipped</div></div>
+<div class="kpi"><div class="k">Last 24 h</div><div class="v">{conn.execute("SELECT count(*) FROM blocks WHERE auto=1 AND applied_at > ? AND site_ok(site)", (now - 86400,)).fetchone()[0]}</div>
+<div class="s">blocked · {conn.execute("SELECT count(*) FROM response_log WHERE decision='would_block' AND ts > ? AND site_ok(site)", (now - 86400,)).fetchone()[0]} would block (dry run) · {conn.execute("SELECT count(*) FROM response_log WHERE decision='skipped' AND ts > ? AND site_ok(site)", (now - 86400,)).fetchone()[0]} skipped</div></div>
 <div class="kpi"><div class="k">Engine</div><div class="v {'ok' if last.get('ts') and now - last['ts'] < 300 else 'na'}">{'● Running' if last.get('ts') and now - last['ts'] < 300 else '○ Waiting'}</div><div class="s">{e(status)}</div></div>
 </section>{f"<div class='banner bad'><ul>{errs}</ul></div>" if errs else ''}
 {sites}
@@ -176,7 +177,7 @@ addresses you named in Inventory, addresses a person un-blocked in the last 7 da
 
 @app.post(BASE)
 async def response_save(req: Request):
-    u = need(req, "admin")
+    u = need_all_sites(req, "admin", "Auto-response")
     form = await req.form()
     check_csrf(req, form.get("csrf", ""))
     old = respond.settings(conn)["mode"]
@@ -190,7 +191,7 @@ async def response_save(req: Request):
 
 @app.post(BASE + "/setup/{sid}")
 async def response_setup(req: Request, sid: str):
-    u = need(req, "admin")
+    u = need_all_sites(req, "admin", "Auto-response")
     form = await req.form()
     check_csrf(req, form.get("csrf", ""))
     site = cfg.site(sid)
@@ -216,7 +217,7 @@ async def response_setup(req: Request, sid: str):
 
 @app.post(BASE + "/rule/{sid}/{key}")
 async def response_rule(req: Request, sid: str, key: str):
-    u = need(req, "admin")
+    u = need_all_sites(req, "admin", "Auto-response")
     form = await req.form()
     check_csrf(req, form.get("csrf", ""))
     site = cfg.site(sid)
@@ -235,7 +236,7 @@ async def response_rule(req: Request, sid: str, key: str):
 async def response_evaluate(req: Request):
     from .detect import Detector
     from .web import ch, notifier
-    u = need(req, "admin")
+    u = need_all_sites(req, "admin", "Auto-response")
     form = await req.form()
     check_csrf(req, form.get("csrf", ""))
     r = respond.Responder(cfg, conn, Detector(cfg, ch, conn, notifier), notifier)

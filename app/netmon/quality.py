@@ -118,7 +118,7 @@ def delete(conn, pid, user):
 
 
 def probes(conn, site=None):
-    q = "SELECT * FROM probes" + (" WHERE site=?" if site else "") + " ORDER BY site, CASE role WHEN 'gateway' THEN 0 WHEN 'upstream' THEN 1 ELSE 2 END, id"
+    q = "SELECT * FROM probes WHERE site_ok(site)" + (" AND site=?" if site else "") + " ORDER BY site, CASE role WHEN 'gateway' THEN 0 WHEN 'upstream' THEN 1 ELSE 2 END, id"
     return [dict(r) for r in conn.execute(q, (site,) if site else ())]
 
 

@@ -20,6 +20,27 @@ ACTION_LABEL = {"created": "Incident created", "finding_added": "Finding added",
                 "merged_from": "Another incident merged in", "updated": "Updated", "note": "Note", "findings_closed": "Findings closed"}
 
 
+def _visible(iid):
+    """The incident if the signed-in user may see its firewall (netmon.access), else 404."""
+    i = conn.execute(f"SELECT * FROM incidents i WHERE i.id=? AND {inc.VISIBLE}", (iid,)).fetchone()
+    if not i:
+        raise HTTPException(404)
+    return i
+
+
+def _alert_ok(aid):
+    if not conn.execute("SELECT 1 FROM alerts WHERE id=? AND site_ok(site)", (aid,)).fetchone():
+        raise HTTPException(404, "no such finding")
+
+
+def _not_in_hidden(aid):
+    """A finding that already sits in an incident the user cannot see (it also groups another firewall's findings)
+    stays there: moving it would change that incident."""
+    cur = inc.incident_of(conn, aid)
+    if cur and not conn.execute(f"SELECT 1 FROM incidents i WHERE i.id=? AND {inc.VISIBLE}", (cur,)).fetchone():
+        raise HTTPException(409, "this finding is part of an incident that also covers another firewall; ask a user who can see every firewall")
+
+
 def _msg(msg):
     return f"<div class='banner'>{e(msg)}</div>" if msg else ""
 
@@ -69,6 +90,7 @@ def incidents_page(req: Request, status: str = "active", mine: int = 0, msg: str
     status = status if status in ("active", "resolved", "all", *inc.STATUSES) else "active"
     where, p = {"active": ("status != 'resolved'", ()), "resolved": ("status = 'resolved'", ()), "all": ("1=1", ())}.get(
         status, ("status = ?", (status,)))
+    where += f" AND {inc.VISIBLE}"
     if mine:
         where, p = where + " AND assignee = ?", (*p, u)
     rows = conn.execute(f"SELECT i.*, (SELECT count(*) FROM incident_alerts ia WHERE ia.incident_id=i.id AND ia.removed=0) AS n "
@@ -91,7 +113,7 @@ def incidents_page(req: Request, status: str = "active", mine: int = 0, msg: str
  {f"<span class='tag'>assigned to {e(i['assignee'])}</span>" if i['assignee'] else "<span class='tag muted'>unassigned</span>"}</div>
 <a class="ft" href="/netmon/incidents/{i['id']}">#{i['id']} · {e(i['title'])}</a>
 <div class="small muted">Grouped because: {e('; '.join(reasons) or 'grouped by a person')}</div>{_quick_form(req, i, back) if can else ''}</article>"""
-    ungrouped = conn.execute("SELECT count(*) FROM alerts WHERE status='open' AND test=0 AND severity IN ('high','critical') AND id NOT IN "
+    ungrouped = conn.execute("SELECT count(*) FROM alerts WHERE status='open' AND test=0 AND severity IN ('high','critical') AND site_ok(site) AND id NOT IN "
                              "(SELECT alert_id FROM incident_alerts WHERE removed=0)").fetchone()[0]
     if not cards:
         cards = empty_state("nomatch", " No incidents in this view. Related findings are grouped here automatically; single findings stay on "
@@ -117,7 +139,7 @@ def _missing(i, fs):
     """What netmon could not see or verify for this incident (plain sentences)."""
     out = []
     t0, t1 = i["first_seen"] - 3600, i["last_seen"] + 600
-    for h in conn.execute("SELECT id, title FROM alerts WHERE test=0 AND site IS ? AND first_seen <= ? AND last_seen >= ? ORDER BY id LIMIT 50",
+    for h in conn.execute("SELECT id, title FROM alerts WHERE test=0 AND site IS ? AND site_ok(site) AND first_seen <= ? AND last_seen >= ? ORDER BY id LIMIT 50",
                           (i["site"], t1, t0)).fetchall():
         a = conn.execute("SELECT rule FROM alerts WHERE id=?", (h["id"],)).fetchone()
         if category(a["rule"]) == "health":
@@ -158,11 +180,9 @@ def _config_changes(site, t0, t1):
 @app.get("/netmon/incidents/{iid}", response_class=HTMLResponse)
 def incident_page(req: Request, iid: int, msg: str = ""):
     u, r = user_of(req)
-    i = conn.execute("SELECT * FROM incidents WHERE id=?", (iid,)).fetchone()
-    if not i:
-        raise HTTPException(404)
+    i = _visible(iid)
     s = cfg.site(i["site"]) or {}
-    fs = inc.members(conn, iid)
+    fs = inc.members(conn, iid)   # only findings of firewalls this user may see
     can = ROLES[r] >= ROLES["analyst"]
     top = max(fs, key=lambda x: inc.SEV.get(x["severity"], 0)) if fs else None
     devs = {}
@@ -260,6 +280,7 @@ def _int(v):
 def incident_update(req: Request, iid: int, status: str = Form(""), assignee: str = Form(""), resolution: str = Form(""),
                     note: str = Form(""), close_findings: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
+    _visible(iid)
     check_csrf(req, csrf)
     if assignee and assignee not in _users():
         raise HTTPException(400, "assign to an analyst or admin")
@@ -274,6 +295,7 @@ def incident_update(req: Request, iid: int, status: str = Form(""), assignee: st
 @app.post("/netmon/incidents/{iid}/dismiss")
 def incident_dismiss(req: Request, iid: int, back: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
+    _visible(iid)
     check_csrf(req, csrf)
     i = conn.execute("SELECT status FROM incidents WHERE id=?", (iid,)).fetchone()
     if not i:
@@ -287,6 +309,7 @@ def incident_dismiss(req: Request, iid: int, back: str = Form(""), csrf: str = F
 @app.post("/netmon/incidents/{iid}/reopen")
 def incident_reopen(req: Request, iid: int, back: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
+    _visible(iid)
     check_csrf(req, csrf)
     if not conn.execute("SELECT 1 FROM incidents WHERE id=?", (iid,)).fetchone():
         raise HTTPException(404)
@@ -297,8 +320,11 @@ def incident_reopen(req: Request, iid: int, back: str = Form(""), csrf: str = Fo
 @app.post("/netmon/incidents/{iid}/add")
 def incident_add(req: Request, iid: int, alert_id: str = Form(...), reason: str = Form(""), csrf: str = Form("")):
     u = need(req, "analyst")
+    _visible(iid)
     check_csrf(req, csrf)
     try:
+        _alert_ok(_int(alert_id))
+        _not_in_hidden(_int(alert_id))
         inc.link(conn, iid, _int(alert_id), u, (reason.strip() or f"added by {u}")[:200])
     except ValueError as ex:
         raise HTTPException(400, str(ex))
@@ -308,6 +334,7 @@ def incident_add(req: Request, iid: int, alert_id: str = Form(...), reason: str 
 @app.post("/netmon/incidents/{iid}/remove")
 def incident_remove(req: Request, iid: int, alert_id: str = Form(...), csrf: str = Form("")):
     u = need(req, "analyst")
+    _visible(iid)
     check_csrf(req, csrf)
     try:
         inc.unlink(conn, iid, _int(alert_id), u)
@@ -319,8 +346,10 @@ def incident_remove(req: Request, iid: int, alert_id: str = Form(...), csrf: str
 @app.post("/netmon/incidents/{iid}/merge")
 def incident_merge(req: Request, iid: int, other: str = Form(...), csrf: str = Form("")):
     u = need(req, "analyst")
+    _visible(iid)
     check_csrf(req, csrf)
     try:
+        _visible(_int(other))
         inc.merge(conn, iid, _int(other), u)
     except ValueError as ex:
         raise HTTPException(400, str(ex))
@@ -332,9 +361,10 @@ def incident_new(req: Request, alert_id: str = Form(...), csrf: str = Form("")):
     """Start an incident from one finding (by hand); more findings can then be added."""
     u = need(req, "analyst")
     check_csrf(req, csrf)
-    a = conn.execute("SELECT * FROM alerts WHERE id=?", (_int(alert_id),)).fetchone()
+    a = conn.execute("SELECT * FROM alerts WHERE id=? AND site_ok(site)", (_int(alert_id),)).fetchone()
     if not a:
         raise HTTPException(404)
+    _not_in_hidden(a["id"])
     old = inc.incident_of(conn, a["id"])
     if old:
         return RedirectResponse(f"/netmon/incidents/{old}", 303)
@@ -345,6 +375,7 @@ def incident_new(req: Request, alert_id: str = Form(...), csrf: str = Form("")):
 @app.get("/netmon/incidents/{iid}/export.json")
 def incident_export(req: Request, iid: int):
     u = need(req, "analyst")
+    _visible(iid)
     try:
         data = inc.export(conn, cfg, iid)
     except ValueError:
@@ -358,7 +389,10 @@ def finding_incident_box(req, a, role):
     """On the finding page: the incident it belongs to, or 'Start an incident'."""
     iid = inc.incident_of(conn, a["id"])
     if iid:
-        i = conn.execute("SELECT id, title, status FROM incidents WHERE id=?", (iid,)).fetchone()
+        i = conn.execute(f"SELECT id, title, status FROM incidents i WHERE i.id=? AND {inc.VISIBLE}", (iid,)).fetchone()
+        if not i:
+            return ("<div class='banner'>Part of an incident that also covers another firewall; it is handled by users who can "
+                    "see every firewall.</div>")
         n = conn.execute("SELECT count(*) FROM incident_alerts WHERE incident_id=? AND removed=0", (iid,)).fetchone()[0]
         return (f"<div class='banner'>Part of <a href='/netmon/incidents/{iid}'>incident #{iid}: {e(i['title'])}</a> "
                 f"({n} related findings, {e(STATUS_LABEL.get(i['status'], i['status']).lower())}).</div>")
@@ -370,11 +404,11 @@ def finding_incident_box(req, a, role):
 
 def attention():
     """Overview strip: open incidents, ungrouped serious findings, monitoring health. Never 'all fine' while a source is down."""
-    n_inc = conn.execute("SELECT count(*) FROM incidents WHERE status != 'resolved'").fetchone()[0]
-    n_unassigned = conn.execute("SELECT count(*) FROM incidents WHERE status = 'open' AND assignee IS NULL").fetchone()[0]
-    ungrouped = conn.execute("SELECT count(*) FROM alerts WHERE status='open' AND test=0 AND severity IN ('high','critical') AND id NOT IN "
+    n_inc = conn.execute(f"SELECT count(*) FROM incidents i WHERE status != 'resolved' AND {inc.VISIBLE}").fetchone()[0]
+    n_unassigned = conn.execute(f"SELECT count(*) FROM incidents i WHERE status = 'open' AND assignee IS NULL AND {inc.VISIBLE}").fetchone()[0]
+    ungrouped = conn.execute("SELECT count(*) FROM alerts WHERE status='open' AND test=0 AND severity IN ('high','critical') AND site_ok(site) AND id NOT IN "
                              "(SELECT alert_id FROM incident_alerts WHERE removed=0)").fetchone()[0]
-    health = [r for r in conn.execute("SELECT id, rule, title FROM alerts WHERE status IN ('open','acked') AND test=0 ORDER BY last_seen DESC LIMIT 200")
+    health = [r for r in conn.execute("SELECT id, rule, title FROM alerts WHERE status IN ('open','acked') AND test=0 AND site_ok(site) ORDER BY last_seen DESC LIMIT 200")
               if category(r["rule"]) == "health"]
     try:
         from .quality import overview

@@ -545,6 +545,7 @@ def _findings(conn, cfg, spec, t0, t1):
     if spec.get("sites"):
         w.append(f"site IN ({','.join('?' * len(spec['sites']))})")
         p += spec["sites"]
+    w.append("site_ok(site)")       # never findings of firewalls the signed-in user cannot see (netmon.access)
     if spec.get("severity"):
         sv = SEVERITIES[SEVERITIES.index(spec["severity"]):]
         w.append(f"severity IN ({','.join('?' * len(sv))})")
@@ -696,6 +697,11 @@ def save(conn, owner, name, question, spec, shared=False):
     name = " ".join((name or "").split())[:80]
     if not name:
         raise SpecError("give the search a name")
+    from . import access
+    if access.restricted() and not spec.get("sites"):
+        # "all firewalls" for a user limited to some means theirs: stored explicitly, so the search (and a detection
+        # made from it, which runs in the background) never covers other firewalls
+        spec = {**spec, "sites": sorted(access.allowed())}
     sid = conn.execute("INSERT INTO saved_searches(owner, name, question, spec, shared, created_at) VALUES (?,?,?,?,?,?)",
                        (owner, name, (question or "")[:300], json.dumps({k: v for k, v in spec.items() if not k.startswith("_")}),
                         1 if shared else 0, time.time())).lastrowid
@@ -704,8 +710,20 @@ def save(conn, owner, name, question, spec, shared=False):
     return sid
 
 
+def _sites_ok(row):
+    from . import access
+    if not access.restricted():
+        return True
+    try:
+        sites = json.loads(row["spec"] or "{}").get("sites") or []
+    except ValueError:
+        return False
+    return bool(sites) and all(access.can_site(x) for x in sites)
+
+
 def visible(conn, user):
-    return [dict(r) for r in conn.execute("SELECT * FROM saved_searches WHERE owner=? OR shared=1 ORDER BY name", (user,))]
+    """Own and shared searches; for a user limited to some firewalls, only searches over those firewalls."""
+    return [dict(r) for r in conn.execute("SELECT * FROM saved_searches WHERE owner=? OR shared=1 ORDER BY name", (user,)) if _sites_ok(r)]
 
 
 def get(conn, sid):
@@ -716,7 +734,7 @@ def get(conn, sid):
 
 
 def can_see(row, user):
-    return row["owner"] == user or row["shared"]
+    return bool(row["owner"] == user or row["shared"]) and _sites_ok(row)
 
 
 def delete(conn, sid, user, admin=False):

@@ -60,6 +60,13 @@ def save_settings(conn, form, user):
     return s
 
 
+def check_site(cfg, cid):
+    """The firewall a check is about ('netflow:<site>', 'snmp:<site>:<if>' ...), or None for monitor-wide checks."""
+    parts = str(cid).split(":")
+    ids = {x["id"] for x in (getattr(cfg, "all_sites", None) or cfg.sites)}
+    return next((p for p in parts[1:] if p in ids), None)
+
+
 def check(cid, group, label, state, value, last=None, evidence="", limits="", action=""):
     assert state in STATES
     return {"id": cid, "group": group, "label": label, "state": state, "value": value, "last": last,
@@ -508,7 +515,9 @@ class Health:
                         (key, "source_health", "high" if c["state"] == "fail" else "medium", "high", "monitor", c["id"], title, now, now,
                          now - 300, now, json.dumps([c], default=str), json.dumps({"sql": "", "params": {}}),
                          "Monitoring health check (Coverage page)", json.dumps(["A source stopped, or the monitor cannot reach it"]),
-                         json.dumps([c["action"] or "Open Settings -> Coverage for evidence"]), "", self.cfg.sites[0]["id"]))
+                         json.dumps([c["action"] or "Open Settings -> Coverage for evidence"]), "",
+                         # the firewall the check is about; monitor-wide checks have none (shown to unrestricted users)
+                         check_site(self.cfg, c["id"])))
                     self.conn.commit()
                     audit(self.conn, "health", "alert_created", {"id": cur.lastrowid, "check": c["id"]})
                     if s["notify"] and self.notifier:

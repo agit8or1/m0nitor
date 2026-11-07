@@ -160,7 +160,7 @@ async def quality_recommended(req: Request):
 
 
 def _probe(pid):
-    r = conn.execute("SELECT * FROM probes WHERE id=?", (pid,)).fetchone()
+    r = conn.execute("SELECT * FROM probes WHERE id=? AND site_ok(site)", (pid,)).fetchone()
     if not r:
         raise HTTPException(404)
     return r

@@ -187,7 +187,8 @@ class Changes:
 
     # ---- compose ---------------------------------------------------------------------------------------------
     def compute(self, sites, per, now=None, lookback_days=LOOKBACK_DAYS):
-        key = (tuple(s["id"] for s in sites), per["a"], tuple(per["b"]), lookback_days)
+        from . import access
+        key = (tuple(s["id"] for s in sites), per["a"], tuple(per["b"]), lookback_days, access.allowed_key())  # labels differ per user
         with _lock:
             hit = _cache.get(key)
             if hit and time.time() - hit[0] < CACHE_TTL:

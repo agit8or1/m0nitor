@@ -9,7 +9,8 @@ from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .core import apply_assets, audit, get_setting, put_setting
-from .web import ROLES, app, cfg, check_csrf, conn, csrf_field, current, e, need, page, safe_next, user_of
+from . import access
+from .web import need_all_sites, ROLES, app, cfg, check_csrf, conn, csrf_field, current, e, page, safe_next, user_of
 
 # no markup or quote characters: names end up in titles, notifications and AI evidence
 NAME_RE = re.compile(r"^[\w .,:;/+()&@#=~-]{1,64}$")
@@ -263,7 +264,7 @@ def sync_vips(user="vip-sync"):
 
 @app.post("/netmon/settings/inventory/sync")
 def vip_sync_now(req: Request, csrf: str = Form("")):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Inventory (device names shared by every firewall)")
     check_csrf(req, csrf)
     res = sync_vips(u)
     txt = "; ".join(f"{cfg.site(k)['name'] if cfg.site(k) else k}: {v if isinstance(v, str) else f'{v} addresses'}" for k, v in res.items())
@@ -284,7 +285,7 @@ def back_to(url, msg):
 def post_name(req: Request, ip: str = Form(...), name: str = Form(""), role: str = Form(""), sensitive: str = Form(""),
               notes: str = Form(""), aliases: str = Form(""), software: str = Form(""), kind: str | None = Form(None), clear: str = Form(""),
               back: str = Form(""), csrf: str = Form("")):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Inventory (device names shared by every firewall)")
     check_csrf(req, csrf)
     _, r = user_of(req)
     js = req.headers.get("x-nm-fetch") == "1"   # the in-page ✎ editor wants JSON, plain forms get a redirect
@@ -308,7 +309,7 @@ def name_json(ip, role):
     internal = cfg.is_internal(ip)
     a = (cfg.get("assets", {}) if internal else cfg.get("labels", {})).get(ip) or {}
     return {"ip": ip, "internal": internal, "name": a.get("name", ""), "role": a.get("role", ""), "sensitive": bool(a.get("sensitive")),
-            "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "software": a.get("software", []), "kind": a.get("kind", ""), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"],
+            "notes": a.get("notes", ""), "aliases": a.get("aliases", []), "software": a.get("software", []), "kind": a.get("kind", ""), "can_edit": ROLES[role] >= ROLES["admin" if internal else "analyst"] and not access.restricted(),
             "needs": "admin" if internal else "analyst",
             **({"role_options": role_options(), "kind_options": list(DEVICE_TYPES)} if internal else {})}
 
@@ -343,6 +344,7 @@ def name_form(req, ip, back, compact=False):
 @app.get("/netmon/settings/inventory", response_class=HTMLResponse)
 def inventory_page(req: Request, msg: str = ""):
     from .admin import SETTINGS_TABS, tabs
+    need_all_sites(req, "viewer", "Inventory (device names shared by every firewall)")
     u, r = user_of(req)
     admin, analyst = r == "admin", ROLES[r] >= ROLES["analyst"]
     back = "/netmon/settings/inventory"
@@ -449,7 +451,7 @@ A device's type and role tell AI analysis what is normal for it (inbound mail to
 @app.post("/netmon/settings/inventory/roles")
 def post_roles(req: Request, ips: str = Form(...), role: str = Form(""), only_named: str = Form(""), kind: str = Form("__keep"),
                keep_role: str = Form(""), csrf: str = Form("")):
-    u = need(req, "admin")
+    u = need_all_sites(req, "admin", "Inventory (device names shared by every firewall)")
     check_csrf(req, csrf)
     _, r = user_of(req)
     try:
@@ -463,7 +465,7 @@ def post_roles(req: Request, ips: str = Form(...), role: str = Form(""), only_na
 
 @app.get("/netmon/api/role-suggest")
 def api_role_suggest(req: Request, ip: str):
-    need(req, "analyst")
+    need_all_sites(req, "analyst", "Inventory (device names shared by every firewall)")
     try:
         ip = str(ipaddress.ip_address(ip.strip()))
     except ValueError:
@@ -480,7 +482,7 @@ def api_role_suggest(req: Request, ip: str):
 def post_discovery(req: Request, enabled: str = Form(""), act: str = Form("save"), csrf: str = Form("")):
     from . import discovery
     from .web import dash
-    u = need(req, "admin")
+    u = need_all_sites(req, "admin", "Inventory (device names shared by every firewall)")
     check_csrf(req, csrf)
     on = enabled == "1"
     if on != discovery.enabled(conn):

@@ -349,9 +349,8 @@ devices**. WAN/VPN quality is under Settings → Status, with a summary on the O
 - **Limits:**
   - The parser covers common phrasing, not arbitrary English; AI or the filter form covers the rest.
   - Sent volume per device behind a shared NAT address is not knowable from the WAN records.
-  - Per-user firewall (site) restrictions are not built: as everywhere in netmon, every signed-in user can see every
-    firewall. Restricting this only in Search would be a misleading control. It needs enforcement on every page and
-    API, and remains open.
+  - Per-user firewall (site) restrictions were not built in this phase (a Search-only restriction would have been a
+    misleading control). They were added in v1.53 for every page and API; see docs/privacy-hardening.md.
 
 ### Phase 10 — Detection testing and replay (v1.50)
 

@@ -9,12 +9,12 @@ import httpx
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import auth, secretbox
+from . import access, auth, secretbox
 from .core import apply_overrides, audit, get_setting, get_state, put_setting
 from .detect import fmt_ts
 from .notify import TYPES
 from .views import guard, scope_of
-from .web import (ROLES, app, cfg, check_csrf, conn, csrf_field, current, dash, e, need, notifier, page, user_of)
+from .web import (need_all_sites, ROLES, app, cfg, check_csrf, conn, csrf_field, current, dash, e, need, notifier, page, user_of)
 
 # (name, href, group, admin-only): grouped in this order; admin-only entries are hidden from other roles
 SETTINGS_TABS = [("Health", "/netmon/settings", "Status", False), ("Coverage", "/netmon/coverage", "Status", False),
@@ -199,10 +199,17 @@ def tip_box(key, open_=False):
             f"<div class='tip-body'>{html_}<p class='sub'><a href='/netmon/settings/integrations#tip-{key}'>All setup tips →</a></p></div></details>")
 
 
+# settings pages that cover every firewall: refused (403) for users limited to some firewalls, so not offered to them
+ALL_SITES_PAGES = {"/netmon/settings/integrations", "/netmon/settings/inventory", "/netmon/settings/response",
+                   "/netmon/settings/maintenance", "/netmon/settings/capacity", "/netmon/settings/resources"}
+
+
 def tabs(items, active):
     if items and len(items[0]) == 4:   # grouped settings menu
         groups = {}
         for n, h, g, adm in items:
+            if h in ALL_SITES_PAGES and access.restricted():
+                continue
             groups.setdefault(g, []).append(f"<a href='{h}' class='{'on' if h == active else ''}{' adm' if adm else ''}'>{e(n)}</a>")
         return ("<nav class='subtabs grouped' aria-label='Settings'>" + "".join(
             f"<div class='tgrp'><span class='tgl'>{e(g)}</span><div class='tgl-links'>{''.join(links)}</div></div>" for g, links in groups.items()) + "</nav>")
@@ -214,11 +221,12 @@ def sources():
     ing, ts = get_state(conn, "ingest", {})
     last = (ing or {}).get("last_line")
     try:
-        r = dash.ch.query("""SELECT (SELECT toUInt32(max(received)) FROM netmon.fw_events) AS fw,
+        sql, p = access.ch_restrict("""SELECT (SELECT toUInt32(max(received)) FROM netmon.fw_events) AS fw,
                                     (SELECT toUInt32(max(received)) FROM netmon.ids_events) AS ids,
                                     (SELECT toUInt32(max(received)) FROM netmon.sys_events) AS sys,
                                     (SELECT count() FROM netmon.fw_events WHERE ts > now() - INTERVAL 1 DAY AND action = 'block') AS blocks24,
-                                    (SELECT count() FROM netmon.ids_events WHERE ts > now() - INTERVAL 1 DAY) AS ids24""")[0]
+                                    (SELECT count() FROM netmon.ids_events WHERE ts > now() - INTERVAL 1 DAY) AS ids24""", {}, cfg.sites)
+        r = dash.ch.query(sql, p)[0]
     except Exception:
         r = {"fw": 0, "ids": 0, "sys": 0, "blocks24": 0, "ids24": 0}
 
@@ -226,6 +234,8 @@ def sources():
         if not t:
             return "not_connected"
         return "ok" if time.time() - t < stale else "stale"
+    if access.restricted():     # per-sender line counts name every firewall's log sources
+        ing = {}
     return {"ingest": ing or {}, "ingest_last": last,
             "fw": {"state": st(r["fw"]), "last": r["fw"] or None, "blocks24": int(r["blocks24"])},
             "ids": {"state": st(r["ids"], 86400 * 7), "last": r["ids"] or None, "alerts24": int(r["ids24"])},
@@ -399,7 +409,8 @@ def notifications_page(req: Request, msg: str = ""):
                  f"<td>{('<a href=/netmon/alert/' + str(d['alert_id']) + '>#' + str(d['alert_id']) + '</a>') if d['alert_id'] else '—'}</td>"
                  f"<td><span class='sev s-{'good' if d['status'] == 'delivered' else 'critical' if d['status'] in ('failed', 'error') else 'muted'}'>{e(d['status'])}</span></td>"
                  f"<td>{d['attempts']}</td><td class='muted small'>{e(d['detail'] or '')}</td></tr>"
-                 for d in conn.execute("SELECT * FROM deliveries ORDER BY id DESC LIMIT 40"))
+                 for d in conn.execute("SELECT * FROM deliveries WHERE alert_id IS NULL OR alert_id IN (SELECT id FROM alerts WHERE site_ok(site)) "
+                                       "ORDER BY id DESC LIMIT 40"))
     groups = ""
     for t, (label, fields, secrets_) in TYPES.items():
         inputs = "".join(f"<label>{e(lbl)}<input name='f_{t}_{k}' type='{'password' if kind == 'secret' else 'number' if kind == 'number' else 'text'}' "
@@ -640,6 +651,7 @@ def reset_rules(req: Request, csrf: str = Form("")):
 # ---- maintenance windows -------------------------------------------------------------------
 @app.get("/netmon/settings/maintenance", response_class=HTMLResponse)
 def maintenance_page(req: Request, msg: str = ""):
+    need_all_sites(req, "viewer", "Maintenance windows")
     u, r = user_of(req)
     now = time.time()
     rows = ""
@@ -670,7 +682,7 @@ def maintenance_page(req: Request, msg: str = ""):
 @app.post("/netmon/settings/maintenance")
 def add_maintenance(req: Request, start: str = Form(...), end: str = Form(...), asset: str = Form("*"), rule: str = Form("*"),
                     reason: str = Form(...), csrf: str = Form("")):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Maintenance windows")
     check_csrf(req, csrf)
     try:
         s, t = float(start), float(end)
@@ -691,7 +703,7 @@ def add_maintenance(req: Request, start: str = Form(...), end: str = Form(...), 
 
 @app.post("/netmon/settings/maintenance/{mid}/cancel")
 def cancel_maintenance(req: Request, mid: int, csrf: str = Form("")):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Maintenance windows")
     check_csrf(req, csrf)
     conn.execute("UPDATE maintenance SET enabled=0 WHERE id=?", (mid,))
     conn.commit()
@@ -707,6 +719,7 @@ def status_badge(state, ok="Connected", na="Not connected", stale="Stale"):
 
 @app.get("/netmon/settings/integrations", response_class=HTMLResponse)
 def integrations_page(req: Request):
+    need_all_sites(req, "viewer", "Data sources")
     user_of(req)
     s = sources()
     ing = s["ingest"]

@@ -805,7 +805,7 @@ class Detector:
 
     def _health(self, rule, asset, title, alternatives):
         now = time.time()
-        return dict(rule=rule, severity="high", confidence="high", asset=asset, subject=rule, title=title,
+        return dict(rule=rule, severity="high", confidence="high", asset=asset, subject=rule, title=title, site=self.site["id"],
                     window=(now - 300, now), evidence=[], query=("", {}), baseline="Health check",
                     alternatives=alternatives,
                     next_steps=["cd /opt/netmon/akvorado && sudo docker compose ps", "See /opt/netmon/README.md"],
@@ -934,11 +934,11 @@ class Detector:
             f, err, days = self.run_site(now)
             findings += f
             errors += [f"{site['id']}: {x}" for x in err]
+            if err:     # filed under the firewall it is about, so only people who see that firewall see its errors
+                findings.append(self._health("detector_error", "monitor", "Detector errors: " + "; ".join(err)[:300],
+                                             ["ClickHouse unavailable or schema changed after upgrade"]))
             per_site[site["id"]] = round(days, 2)
         self.site = self.cfg.sites[0]
-        if errors:
-            findings.append(self._health("detector_error", "monitor", "Detector errors: " + "; ".join(errors)[:300],
-                                         ["ClickHouse unavailable or schema changed after upgrade"]))
         new = sum(self.record(f, now) for f in findings)
         set_state(self.conn, "detector", {"last_run": now, "learning_days": per_site.get(self.cfg.sites[0]["id"], 0),
                                           "sites": per_site, "findings": len(findings), "new": new, "errors": errors})

@@ -423,7 +423,8 @@ def register(app):
                      f"<td>{e(p['name'])} {status_pill(p)}</td><td class='small'>{proto or '<span class=muted>nothing configured</span>'}</td>"
                      f"<td class='small'>{cov}</td></tr>")
         unreg = ""
-        if flows:
+        from . import access
+        if flows and not access.restricted():     # the list would name other firewalls' exporters
             known = {d.get("exporter_ip") for d in all_devices(cfg)}
             extra = [a for a in flows if a not in known]
             if extra:

@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, secretbox, threatradar
+from . import access, auth, secretbox, threatradar
 from . import block as blk
 from .core import (DATA_DIR, EXPECTED_KEY, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
                    load_config, put_setting, set_state)
@@ -81,6 +81,37 @@ def _asset_version() -> str:
 ASSET_V = _asset_version()
 from . import __version__ as VERSION   # noqa: E402
 CHANGELOG = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CHANGELOG.md")
+
+
+@app.middleware("http")
+async def firewall_restriction(request: Request, call_next):
+    """Set the signed-in user's allowed firewalls (netmon.access) before any handler code runs, so a handler that
+    builds data before its own auth call can never see other firewalls. current() sets the same value again (and
+    refreshes the session); this lookup only reads."""
+    path = request.url.path
+    if path.startswith("/netmon/static/") or path == "/netmon/healthz":
+        return await call_next(request)
+    tok = None
+    try:
+        t = request.cookies.get(auth.SESSION_COOKIE)
+        row = conn.execute("SELECT s.username, u.role FROM sessions s JOIN users u USING(username) WHERE s.token_hash=? "
+                           "AND s.expires_at > ? AND u.disabled=0", (auth._th(t), time.time())).fetchone() if t else None
+        allowed = access.user_sites(conn, row[0], row[1], [x["id"] for x in cfg.all_sites]) if row else None
+    except Exception:
+        row, allowed = True, frozenset()          # fail closed
+    if row and allowed is not None and not allowed and not path.startswith(ENROLL_OK):
+        msg = "No firewalls are assigned to your account. Ask an admin to assign one."
+        if path.startswith("/netmon/api/"):
+            return JSONResponse({"error": msg}, status_code=403)
+        tokv = html.escape(csrf_token(auth._th(request.cookies.get(auth.SESSION_COOKIE))), quote=True)
+        return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>No firewalls</title><p>{msg}</p>"
+                            f"<form method=post action='/logout'><input type=hidden name=csrf value='{tokv}'><button>Sign out</button></form>",
+                            status_code=403, headers=SECURITY_HEADERS)
+    tok = access.set_allowed(allowed)
+    try:
+        return await call_next(request)
+    finally:
+        access.reset(tok)
 
 
 @app.middleware("http")
@@ -171,15 +202,30 @@ def must_enroll(user: str) -> bool:
 def current(req: Request):
     s = auth.session_user(conn, req.cookies.get(auth.SESSION_COOKIE))
     if not s:
+        access.set_allowed(frozenset())     # no session: nothing (login redirect follows)
         raise LoginRequired()
+    # firewalls this user may see, for the rest of this request (netmon.access; admins: all)
+    allowed = access.user_sites(conn, s[0], s[1], [x["id"] for x in cfg.all_sites])
+    access.set_allowed(allowed)
     if must_enroll(s[0]) and not req.url.path.startswith(ENROLL_OK):
         raise MustEnroll()
+    if allowed is not None and not allowed and not req.url.path.startswith(ENROLL_OK):
+        raise HTTPException(403, "No firewalls are assigned to your account. Ask an admin to assign one")
     return s  # (user, role, session_hash)
 
 
 def user_of(req: Request):
     u, r, _ = current(req)
     return u, r
+
+
+def need_all_sites(req: Request, role: str = "viewer", what: str = "This page") -> str:
+    """For pages that only make sense across every firewall (monitor capacity, global settings): users limited to
+    some firewalls get a plain 403 instead of partial numbers presented as the whole."""
+    u = need(req, role)
+    if access.restricted():
+        raise HTTPException(403, f"{what} covers every firewall and is not available to accounts limited to some firewalls")
+    return u
 
 
 def need(req: Request, role: str) -> str:
@@ -284,7 +330,7 @@ def page(req, title, body, active="", scripts=(), wide=True, scoped=True, subtit
 <meta name="nm-csrf" content="{e(csrf_token(req))}"><meta name="nm-role" content="{e(r)}">
 <link rel="stylesheet" href="/netmon/static/app.css?v={ASSET_V}"><script src="/netmon/static/theme.js?v={ASSET_V}"></script></head><body class="role-{e(r)}">
 <header class="appbar"><a class="brand" href="/"><span class="logo">◎</span> {e(BRAND)}</a><a class="ver" href="/netmon/changelog" title="Version — what changed">v{VERSION}</a>
-<nav class="mainnav">{nav}<a href="/visualize" target="_blank" rel="noopener" class="ext" title="Akvorado: raw flow exploration">Advanced flow explorer ↗</a></nav>
+<nav class="mainnav">{nav}{'' if access.restricted() else '<a href="/visualize" target="_blank" rel="noopener" class="ext" title="Akvorado: raw flow exploration">Advanced flow explorer ↗</a>'}</nav>
 <div class="who"><select class="themebtn" data-theme-toggle aria-label="Color theme" title="Color theme"><option value="auto">◐ System</option><option value="light">☀ Light</option><option value="dark">☾ Dark</option></select> <span>{e(u)}</span> <small>{e(r)}</small>
 <form method="post" action="/logout" class="inline">{csrf_field(req)}<button class="link">Sign out</button></form></div></header>
 <main class="{'wide' if wide else ''}">
@@ -430,6 +476,10 @@ def verify(req: Request):
         return RedirectResponse("/login?next=" + quote(safe_next(uri)), 302)
     if must_enroll(s[0]):
         return RedirectResponse("/netmon/account?enroll=1", 302)
+    if access.user_sites(conn, s[0], s[1], [x["id"] for x in cfg.all_sites]) is not None:
+        # Akvorado shows every firewall's flows and cannot be limited per user: not for restricted accounts
+        return Response("The advanced flow explorer shows every firewall and is not available to accounts limited to "
+                        "some firewalls.", status_code=403, media_type="text/plain")
     return Response(status_code=200, headers={"Remote-User": s[0]})
 
 
@@ -453,8 +503,12 @@ def healthz():
 
 def detector_status():
     st, ts = get_state(conn, "detector", {})
-    return {"last_run": ts, "learning_days": (st or {}).get("learning_days", 0),
-            "baseline_days": cfg["detector"]["baseline_days"], "errors": (st or {}).get("errors", [])}
+    st = st or {}
+    per = {k: v for k, v in (st.get("sites") or {}).items() if access.can_site(k)}
+    # errors are prefixed with their firewall id; a user limited to some firewalls sees only theirs
+    errs = [x for x in st.get("errors", []) if not access.restricted() or access.can_site(str(x).split(":", 1)[0])]
+    learning = st.get("learning_days", 0) if not access.restricted() else (min(per.values()) if per else 0)
+    return {"last_run": ts, "learning_days": learning, "baseline_days": cfg["detector"]["baseline_days"], "errors": errs}
 
 
 def internal_ip(ip: str) -> str:
@@ -464,6 +518,8 @@ def internal_ip(ip: str) -> str:
         raise HTTPException(400, "bad ip")
     if not cfg.is_internal(ip):
         raise HTTPException(400, "not an internal address")
+    if not cfg.ip_visible(ip):      # a device on another firewall's own networks (netmon.access)
+        raise HTTPException(404, "not found")
     return ip
 
 
@@ -622,7 +678,9 @@ def finding_card(a, ack=""):
 
 
 def incident_tag(a):
-    r = conn.execute("SELECT incident_id FROM incident_alerts WHERE alert_id=? AND removed=0 LIMIT 1", (a["id"],)).fetchone()
+    from .incidents import VISIBLE
+    r = conn.execute(f"SELECT ia.incident_id FROM incident_alerts ia JOIN incidents i ON i.id = ia.incident_id WHERE ia.alert_id=? "
+                     f"AND ia.removed=0 AND {VISIBLE} LIMIT 1", (a["id"],)).fetchone()
     return f"<a class='tag' href='/netmon/incidents/{r[0]}' title='Part of an incident'>incident #{r[0]}</a>" if r else ""
 
 
@@ -631,7 +689,7 @@ def security_page(req: Request, status: str = "open"):
     u, r = user_of(req)
     if status not in ("open", "acked", "closed", "all"):
         status = "open"
-    where = "WHERE status=? AND test=0" if status != "all" else "WHERE test=0"
+    where = ("WHERE status=? AND test=0" if status != "all" else "WHERE test=0") + " AND site_ok(site)"
     rows = conn.execute(f"SELECT * FROM alerts {where} ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
                         f"WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, last_seen DESC LIMIT 300",
                         (status,) if status != "all" else ()).fetchall()
@@ -659,13 +717,13 @@ def security_page(req: Request, status: str = "open"):
 </section>"""
     can_ack, back = ROLES[r] >= ROLES["analyst"], f"/netmon/security?status={status}"
     # Ack all covers every open finding (the list shows at most 300), up to the newest one at page load
-    n_open, max_id = conn.execute("SELECT count(*), max(id) FROM alerts WHERE status='open' AND test=0").fetchone()
+    n_open, max_id = conn.execute("SELECT count(*), max(id) FROM alerts WHERE status='open' AND test=0 AND site_ok(site)").fetchone()
     ack_all = (f"<form method=post action='/netmon/alerts/ack' class='inline' data-confirm='Acknowledge all {n_open:,} open findings?'>"
                f"{csrf_field(req)}{back_field(back)}<input type=hidden name=max_id value='{max_id}'>"
                f"<button title='Acknowledge every open finding, including any beyond the 300 listed'>Ack all ({n_open:,})</button></form>"
                if can_ack and status == "open" and n_open else "")
     # Unack all on the acked tab: everything acked before the page loaded (acks made since then stay acked)
-    n_acked = conn.execute("SELECT count(*) FROM alerts WHERE status='acked' AND test=0").fetchone()[0]
+    n_acked = conn.execute("SELECT count(*) FROM alerts WHERE status='acked' AND test=0 AND site_ok(site)").fetchone()[0]
     if can_ack and status == "acked" and n_acked:
         ack_all = (f"<form method=post action='/netmon/alerts/unack' class='inline' data-confirm='Move all {n_acked:,} acked findings back to open?'>"
                    f"{csrf_field(req)}{back_field(back)}<input type=hidden name=asof value='{time.time():.3f}'>"
@@ -769,7 +827,7 @@ def back_field(back: str) -> str:
 @app.get("/netmon/alert/{aid}", response_class=HTMLResponse)
 def alert_view(req: Request, aid: int, back: str = ""):
     u, r = user_of(req)
-    a = conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()
+    a = conn.execute("SELECT * FROM alerts WHERE id=? AND site_ok(site)", (aid,)).fetchone()
     if not a:
         raise HTTPException(404)
     q = json.loads(a["query"] or "{}")
@@ -819,7 +877,7 @@ def alert_view(req: Request, aid: int, back: str = ""):
 <dt>Notification</dt><dd>{e(a['notify_status'] or 'not sent (no destination configured)')}</dd></dl>
 <div class="grid2 even"><div><h3>Other possible explanations</h3><ul>{lis(a['alternatives'])}</ul></div>
 <div><h3>Next investigation steps</h3><ul>{lis(a['next_steps'])}</ul>
-<p>{'<a class="btn" href="#aibox">Analyze with AI ↓</a> ' if can_ai else ''}<a class="btn" href="/visualize" target="_blank" rel="noopener">Open flow explorer</a></p></div></div></div>
+<p>{'<a class="btn" href="#aibox">Analyze with AI ↓</a> ' if can_ai else ''}{'' if access.restricted() else '<a class="btn" href="/visualize" target="_blank" rel="noopener">Open flow explorer</a>'}</p></div></div></div>
 <section class="card" id="ftraffic" data-aid="{aid}"><div class="card-h"><h2>Traffic behind this finding</h2>
 <div class="panelctl"><span class="muted small" id="ftscope"></span><div class="seg" id="mapdir" role="group" aria-label="Direction"><button data-v="both">Both</button><button data-v="in">Inbound</button><button data-v="out">Outbound</button></div>
 <details class="info"><summary aria-label="About this view" title="About this view">i</summary><div class="pop" id="mapnote"></div></details></div></div>
@@ -935,10 +993,15 @@ async def alert_normal(req: Request, aid: int):
     form = await req.form()
     g = lambda k, d="": str(form.get(k, d) or d)  # noqa: E731
     check_csrf(req, g("csrf"))
-    a = conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()
+    a = conn.execute("SELECT * FROM alerts WHERE id=? AND site_ok(site)", (aid,)).fetchone()
     if not a:
         raise HTTPException(404)
     scope, back = g("scope"), g("back")
+    # a user limited to some firewalls can only make exceptions for this finding's firewall; "expected device" is a
+    # global list (every firewall), so it is left to unrestricted users
+    xsite = a["site"] if access.restricted() else None
+    if scope == "device" and access.restricted():
+        raise HTTPException(403, "marking a device expected applies to every firewall; ask an admin, or choose an option for this firewall")
     reason = " ".join(g("reason").split())[:200]
     if not reason:
         raise HTTPException(400, "reason required")
@@ -954,7 +1017,7 @@ async def alert_normal(req: Request, aid: int):
     now = time.time()
     if scope in ("rule", "exact", "dest"):
         exc = {"rule": a["rule"], "asset": a["asset"], "subject": a["subject"] if scope == "exact" else "*", "peer": peer, "service": svc,
-               "schedule": json.dumps(sched) if sched else None, "site": None, "enabled": 1, "expires_at": exp}
+               "schedule": json.dumps(sched) if sched else None, "site": xsite, "enabled": 1, "expires_at": exp}
     elif scope == "device":
         try:
             ip = str(ipaddress.ip_address(a["asset"]))
@@ -976,14 +1039,14 @@ async def alert_normal(req: Request, aid: int):
     else:
         conn.execute("INSERT INTO exceptions(rule,asset,subject,owner,reason,created_by,created_at,expires_at,peer,service,schedule,site) "
                      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (exc["rule"], exc["asset"], exc["subject"], u, f"{reason} (from finding #{aid})", u, now,
-                                                         exp, peer, svc, exc["schedule"], None))
+                                                         exp, peer, svc, exc["schedule"], xsite))
         audit(conn, u, "exception_added", {"rule": exc["rule"], "asset": exc["asset"], "subject": exc["subject"], "peer": peer, "service": svc,
                                            "schedule": sched, "expires": exp, "alert": aid})
         hit = lambda x: bl.exception_applies(exc, dict(x) | {"window": (x["window_start"], x["window_end"])}, now,  # noqa: E731
                                              cfg.site(x["site"]) if x["site"] else None)
     closed = []
     if g("close"):
-        for x in conn.execute("SELECT * FROM alerts WHERE status IN ('open','acked') AND test=0").fetchall():
+        for x in conn.execute("SELECT * FROM alerts WHERE status IN ('open','acked') AND test=0 AND site_ok(site)").fetchall():
             if x["id"] == aid or hit(x):
                 conn.execute("UPDATE alerts SET status='closed', acked_by=?, acked_at=? WHERE id=?", (u, now, x["id"]))
                 closed.append(x["id"])
@@ -999,8 +1062,8 @@ def _normal_preview(req, a, exc, scope, form):
     and how many findings for the same device would still be raised."""
     from . import baselines as bl
     if scope == "device":
-        n = conn.execute("SELECT count(*) FROM alerts WHERE asset=? AND test=0 AND last_seen>=?", (exc["asset"], time.time() - 30 * 86400)).fetchone()[0]
-        pv = {"matches": n, "examples": [dict(x) for x in conn.execute("SELECT id, title, last_seen, status FROM alerts WHERE asset=? AND test=0 "
+        n = conn.execute("SELECT count(*) FROM alerts WHERE asset=? AND test=0 AND last_seen>=? AND site_ok(site)", (exc["asset"], time.time() - 30 * 86400)).fetchone()[0]
+        pv = {"matches": n, "examples": [dict(x) for x in conn.execute("SELECT id, title, last_seen, status FROM alerts WHERE asset=? AND test=0 AND site_ok(site) "
                                                                         "ORDER BY last_seen DESC LIMIT 5", (exc["asset"],))],
               "same_device_not_hidden": 0, "days": 30}
         what = f"every finding for {cfg.asset_label(exc['asset'])} (expected device)"
@@ -1034,6 +1097,8 @@ def alert_status(req: Request, aid: int, status: str = Form(...), back: str = Fo
     check_csrf(req, csrf)
     if status not in ("open", "acked", "closed"):
         raise HTTPException(400)
+    if not conn.execute("SELECT 1 FROM alerts WHERE id=? AND site_ok(site)", (aid,)).fetchone():
+        raise HTTPException(404)
     # reopening clears "acked by" (the audit log keeps who acked and who reopened)
     conn.execute("UPDATE alerts SET status=?, acked_by=?, acked_at=? WHERE id=?",
                  (status, None, None, aid) if status == "open" else (status, u, time.time(), aid))
@@ -1052,7 +1117,7 @@ def alerts_ack(req: Request, max_id: int = Form(...), back: str = Form(""), csrf
     raised after that stay open. Not limited to the rows the page lists."""
     u = need(req, "analyst")
     check_csrf(req, csrf)
-    acked = [x[0] for x in conn.execute("SELECT id FROM alerts WHERE status='open' AND test=0 AND id<=?", (max_id,)).fetchall()]
+    acked = [x[0] for x in conn.execute("SELECT id FROM alerts WHERE status='open' AND test=0 AND id<=? AND site_ok(site)", (max_id,)).fetchall()]
     if acked:
         conn.executemany("UPDATE alerts SET status='acked', acked_by=?, acked_at=? WHERE id=?", [(u, time.time(), i) for i in acked])
         conn.commit()
@@ -1065,7 +1130,7 @@ def alerts_unack(req: Request, asof: float = Form(...), back: str = Form(""), cs
     """Unack all: moves every finding acked before the page loaded (acked_at <= asof) back to open."""
     u = need(req, "analyst")
     check_csrf(req, csrf)
-    ids = [x[0] for x in conn.execute("SELECT id FROM alerts WHERE status='acked' AND test=0 AND (acked_at IS NULL OR acked_at<=?)",
+    ids = [x[0] for x in conn.execute("SELECT id FROM alerts WHERE status='acked' AND test=0 AND (acked_at IS NULL OR acked_at<=?) AND site_ok(site)",
                                       (asof,)).fetchall()]
     if ids:
         conn.executemany("UPDATE alerts SET status='open', acked_by=NULL, acked_at=NULL WHERE id=?", [(i,) for i in ids])
@@ -1095,7 +1160,7 @@ def test_alert(req: Request, csrf: str = Form("")):
 def exceptions(req: Request):
     u, r = user_of(req)
     from . import baselines as bl
-    rows = conn.execute("SELECT * FROM exceptions ORDER BY enabled DESC, id DESC").fetchall()
+    rows = conn.execute("SELECT * FROM exceptions WHERE site_ok(site) ORDER BY enabled DESC, id DESC").fetchall()
     now0 = time.time()
 
     def xstate(x):
@@ -1143,7 +1208,12 @@ def exceptions(req: Request):
 <label class="span2">Why it is legitimate<input name=reason required maxlength=200 placeholder="e.g. contact crawler for the CRM"></label>
 <label>Expires after (days)<input name=expires_days inputmode=numeric placeholder="never"></label><button class="primary">Add expected device</button></form>"""
            if ROLES[r] >= 1 else "")
-    expected_card = (f"""<section class="card"><div class="card-h"><h2>Expected devices</h2><span class="muted small">legitimate traffic by your decision · excluded from findings</span></div>
+    if access.restricted():   # the expected-devices list applies to every firewall: managed by unrestricted users
+        expected_card = ("<section class='card'><div class='card-h'><h2>Expected devices</h2></div><p class='muted'>Expected devices apply to "
+                         "every firewall, so they are managed by users who can see every firewall. Exceptions you add from a finding "
+                         "(This is normal) apply to that finding's firewall.</p></section>")
+    else:
+        expected_card = (f"""<section class="card"><div class="card-h"><h2>Expected devices</h2><span class="muted small">legitimate traffic by your decision · excluded from findings</span></div>
 <p class="muted small">Findings about these addresses are not raised. Behind a shared NAT address, destinations that replied to these devices are not
 counted towards fan-out, and other findings are dropped when every named peer replied only to them. Destinations that never replied cannot be
 attributed and still count. Traffic is still recorded and shown on every page. Changes are audited.</p>
@@ -1162,9 +1232,17 @@ attributed and still count. Traffic is still recorded and shown on every page. C
 
 @app.post("/netmon/exceptions")
 def add_exception(req: Request, rule: str = Form(...), asset: str = Form(...), subject: str = Form(...),
-                  owner: str = Form(...), reason: str = Form(...), expires_days: str = Form(""), csrf: str = Form("")):
+                  owner: str = Form(...), reason: str = Form(...), expires_days: str = Form(""), site: str = Form(""),
+                  csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
+    xsite = site.strip() or None
+    if xsite and not cfg.site(xsite):
+        raise HTTPException(400, "unknown firewall")
+    if access.restricted() and not xsite:
+        if len(cfg.sites) != 1:
+            raise HTTPException(400, "choose the firewall this exception is for")
+        xsite = cfg.sites[0]["id"]
     if not owner.strip() or not reason.strip():
         raise HTTPException(400, "owner and reason required")
     try:
@@ -1172,8 +1250,8 @@ def add_exception(req: Request, rule: str = Form(...), asset: str = Form(...), s
     except ValueError:
         raise HTTPException(400, "expires must be a number of days")
     vals = [s.strip()[:200] for s in (rule, asset, subject, owner, reason)]
-    conn.execute("INSERT INTO exceptions(rule,asset,subject,owner,reason,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)",
-                 (*vals, u, time.time(), exp))
+    conn.execute("INSERT INTO exceptions(rule,asset,subject,owner,reason,created_by,created_at,expires_at,site) VALUES (?,?,?,?,?,?,?,?,?)",
+                 (*vals, u, time.time(), exp, xsite))
     conn.commit()
     audit(conn, u, "exception_added", {"rule": vals[0], "asset": vals[1], "subject": vals[2], "expires": exp})
     return RedirectResponse("/netmon/exceptions", 303)
@@ -1184,6 +1262,8 @@ def add_expected(req: Request, target: str = Form(...), reason: str = Form(...),
                  csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
+    if access.restricted():
+        raise HTTPException(403, "expected devices apply to every firewall; ask a user who can see every firewall")
     try:
         n = ipaddress.ip_network(target.strip(), strict=False)
     except ValueError:
@@ -1210,6 +1290,8 @@ def add_expected(req: Request, target: str = Form(...), reason: str = Form(...),
 def remove_expected(req: Request, target: str = Form(...), csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
+    if access.restricted():
+        raise HTTPException(403, "expected devices apply to every firewall; ask a user who can see every firewall")
     d = get_setting(conn, EXPECTED_KEY, {}) or {}
     if d.pop(target, None) is not None:
         put_setting(conn, EXPECTED_KEY, d, u)
@@ -1221,7 +1303,7 @@ def remove_expected(req: Request, target: str = Form(...), csrf: str = Form(""))
 def extend_exception(req: Request, xid: int, csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
-    x = conn.execute("SELECT expires_at FROM exceptions WHERE id=? AND enabled=1", (xid,)).fetchone()
+    x = conn.execute("SELECT expires_at FROM exceptions WHERE id=? AND enabled=1 AND site_ok(site)", (xid,)).fetchone()
     if not x:
         raise HTTPException(404)
     new = max(time.time(), x["expires_at"] or time.time()) + 30 * 86400
@@ -1235,6 +1317,8 @@ def extend_exception(req: Request, xid: int, csrf: str = Form("")):
 def disable_exception(req: Request, xid: int, csrf: str = Form("")):
     u = need(req, "analyst")
     check_csrf(req, csrf)
+    if not conn.execute("SELECT 1 FROM exceptions WHERE id=? AND site_ok(site)", (xid,)).fetchone():
+        raise HTTPException(404)
     conn.execute("UPDATE exceptions SET enabled=0 WHERE id=?", (xid,))
     conn.commit()
     audit(conn, u, "exception_disabled", {"id": xid})
@@ -1245,7 +1329,7 @@ def disable_exception(req: Request, xid: int, csrf: str = Form("")):
 @app.get("/netmon/blocks", response_class=HTMLResponse)
 def blocks(req: Request):
     u, r = user_of(req)
-    rows = conn.execute("SELECT * FROM blocks ORDER BY id DESC LIMIT 300").fetchall()
+    rows = conn.execute("SELECT * FROM blocks WHERE site_ok(site) ORDER BY id DESC LIMIT 300").fetchall()
     now = time.time()
 
     def kind(b):
@@ -1280,6 +1364,8 @@ def request_block(req: Request, address: str = Form(...), reason: str = Form(...
     try:
         if not sites:
             raise blk.BlockError("choose at least one firewall")
+        if alert_id.isdigit() and not conn.execute("SELECT 1 FROM alerts WHERE id=? AND site_ok(site)", (int(alert_id),)).fetchone():
+            alert_id = ""        # not a finding this user can see: the request is not linked to it
         bid = blk.request_block(conn, det, u, address, reason, int(alert_id) if alert_id.isdigit() else None, sites)
     except blk.BlockError as ex:
         return page(req, "Block refused", f"<div class='banner bad'>{e(address)}: {e(ex)}</div>", "/netmon/security", scoped=False)
@@ -1289,7 +1375,7 @@ def request_block(req: Request, address: str = Form(...), reason: str = Form(...
 @app.get("/netmon/block/{bid}", response_class=HTMLResponse)
 def block_view(req: Request, bid: int):
     u, r = user_of(req)
-    b = conn.execute("SELECT * FROM blocks WHERE id=?", (bid,)).fetchone()
+    b = conn.execute("SELECT * FROM blocks WHERE id=? AND site_ok(site)", (bid,)).fetchone()
     if not b:
         raise HTTPException(404)
     try:
@@ -1359,7 +1445,8 @@ def users_page(req: Request, msg: str = ""):
 <td class='num'>{e(fmt_ts(x['last_login'])) if x['last_login'] else '—'}</td><td>
 <form method=post action="/netmon/users/{quote(x['username'])}/reset2fa" class="inline">{csrf_field(req)}<button {'disabled' if not x['totp_enabled'] else ''}>Reset 2FA</button></form>
 <form method=post action="/netmon/users/{quote(x['username'])}/password" class="inline">{csrf_field(req)}<input name=password type=password placeholder="new password (12+)" autocomplete="new-password"> <button>Set</button></form>
-<form method=post action="/netmon/users/{quote(x['username'])}/toggle" class="inline">{csrf_field(req)}<button>{'Enable' if x['disabled'] else 'Disable'}</button></form></td></tr>"""
+<form method=post action="/netmon/users/{quote(x['username'])}/toggle" class="inline">{csrf_field(req)}<button>{'Enable' if x['disabled'] else 'Disable'}</button></form></td></tr>
+<tr class="subrow"><td></td><td colspan=5>{_sites_form(req, x)}</td></tr>"""
                   for x in rows)
     note = f"<div class='banner'>{e(msg)}</div>" if msg else ""
     req2 = bool(get_setting(conn, "require_2fa", False))
@@ -1374,7 +1461,27 @@ def users_page(req: Request, msg: str = ""):
 <span>{'<span class="sev s-good">● Required for all users</span>' if req2 else '<span class="sev s-muted">○ Optional</span>'}</span>
 <button>{'Make optional' if req2 else 'Require 2FA for all users'}</button>
 <span class="muted small">Users without 2FA are sent to enrollment at their next request. Enroll yourself first under My account.</span></form></div>
-<div class="card wrap"><table class="tbl"><tr><th>User</th><th>Role</th><th>State</th><th>2FA</th><th>Last login</th><th></th></tr>{trs}</table></div>""", "/netmon/settings", scoped=False)
+<div class="card wrap"><table class="tbl"><tr><th>User</th><th>Role</th><th>State</th><th>2FA</th><th>Last login</th><th></th></tr>{trs}</table>
+<p class="muted small"><b>Firewalls:</b> a viewer or analyst limited to some firewalls sees only their traffic, findings,
+incidents, devices, applications, probes and searches, on every page and in the API; records of other firewalls are
+not found. The advanced flow explorer (Akvorado) cannot be limited and is not available to them. Admins always see every
+firewall. Device names in Inventory and the threat-intel feed are shared by all firewalls.</p></div>""", "/netmon/settings", scoped=False)
+
+
+def _sites_form(req, x):
+    """Per-user firewall restriction (netmon.access). Admins are never restricted."""
+    allsites = cfg.all_sites
+    if x["role"] == "admin":
+        return "<span class='muted small'>Firewalls: all (admins always see every firewall)</span>"
+    have = access.stored_sites(conn, x["username"])
+    boxes = "".join(f"<label class='cb'><input type=checkbox name=site value='{e(s['id'])}' {'checked' if have and s['id'] in have else ''}> {e(s['name'])}</label>"
+                    for s in allsites)
+    state = ("all firewalls" if have is None else
+             ", ".join(e(next((s['name'] for s in allsites if s['id'] == i), i + ' (removed)')) for i in have) or "none")
+    return (f"<form method=post action='/netmon/users/{quote(x['username'])}/sites' class='row'>{csrf_field(req)}"
+            f"<span class='small'>Firewalls: <b>{state}</b></span>{boxes}"
+            f"<label class='cb'><input type=checkbox name=all value=1 {'checked' if have is None else ''}> All firewalls</label>"
+            "<button class='sm'>Save firewalls</button></form>")
 
 
 def _user_change(req, csrf):
@@ -1418,6 +1525,28 @@ def set_role(req: Request, name: str, role: str = Form(...), csrf: str = Form(""
     auth.revoke_user_sessions(conn, name) if name != u else None
     audit(conn, u, "user_role", {"user": name, "role": role})
     return RedirectResponse("/netmon/users?msg=" + quote(f"{name} is now {role}"), 303)
+
+
+@app.post("/netmon/users/{name}/sites")
+async def set_user_sites(req: Request, name: str):
+    form = await req.form()
+    u = _user_change(req, form.get("csrf", ""))
+    row = conn.execute("SELECT role FROM users WHERE username=?", (name,)).fetchone()
+    if not row:
+        raise HTTPException(404)
+    ids = {x["id"] for x in cfg.all_sites}
+    picked = [v for v in form.getlist("site") if v in ids]
+    if form.get("all"):
+        sites = None
+    elif not picked:
+        return RedirectResponse("/netmon/users?msg=" + quote(f"Choose at least one firewall for {name}, or All firewalls."), 303)
+    else:
+        sites = picked
+    before = access.stored_sites(conn, name)
+    access.store_sites(conn, name, sites)        # read on every request: applies to open sessions at once
+    audit(conn, u, "user_sites", {"user": name, "before": before, "sites": sites})
+    note = " (admins see every firewall regardless)" if row["role"] == "admin" else ""
+    return RedirectResponse("/netmon/users?msg=" + quote(f"{name}: " + ("all firewalls" if sites is None else ", ".join(sites)) + note), 303)
 
 
 @app.post("/netmon/users/{name}/password")

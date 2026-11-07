@@ -15,7 +15,7 @@ from urllib.parse import quote
 from . import capacity as C
 from . import fwres
 from .core import DATA_DIR, audit, get_setting, get_state, put_setting
-from .web import app, cfg, check_csrf, conn, csrf_field, dash, e, need, page, user_of
+from .web import need_all_sites, app, cfg, check_csrf, conn, csrf_field, dash, e, need, page, user_of
 
 C.init(conn)
 BENCH_DIR = os.path.join(DATA_DIR, "benchmarks")
@@ -259,6 +259,7 @@ def shell(req, active, title, inner, scripts=("d3.min.js", "capacity.js")):
 
 @app.get("/netmon/settings/capacity", response_class=HTMLResponse)
 def capacity_page(req: Request, msg: str = ""):
+    need_all_sites(req, "viewer", "Capacity planning")
     u, r = user_of(req)
     inner = f"""{f"<div class='banner'>{e(msg)}</div>" if msg else ''}
 <div id="cap" data-view="planner" data-role="{e(r)}" data-csrf-form='{e(csrf_field(req))}'>
@@ -277,7 +278,7 @@ def capacity_page(req: Request, msg: str = ""):
 
 @app.get("/netmon/settings/resources", response_class=HTMLResponse)
 def resources_page(req: Request):
-    need(req, "viewer")
+    need_all_sites(req, "viewer", "Capacity planning")
     inner = """<div id="cap" data-view="resources">
 <section class="card"><div class="card-h"><h2>Resources &amp; capacity</h2><div class="seg" id="resrange"><button data-r="1h">1 h</button><button data-r="24h" class="on">24 h</button>
 <button data-r="7d">7 d</button><button data-r="30d">30 d</button></div></div><p class="muted small" id="resnote">Current load (measured) is shown separately from
@@ -288,7 +289,7 @@ estimated and benchmarked capacity. Gaps are missing samples, not zero.</p><div 
 
 @app.get("/netmon/settings/capacity/report", response_class=HTMLResponse)
 def report_page(req: Request, window: str = "7d"):
-    need(req, "viewer")
+    need_all_sites(req, "viewer", "Capacity planning")
     ov = overview(window if window in C.WINDOWS else "7d")
     return HTMLResponse(render_report(ov), headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'",
                                                      "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
@@ -297,7 +298,7 @@ def report_page(req: Request, window: str = "7d"):
 # ------------------------------------------------------------------------------------------------ APIs
 @app.get("/netmon/api/capacity/overview")
 def api_overview(req: Request, window: str = "7d", start: float = 0, end: float = 0, refresh: int = 0):
-    need(req, "viewer")
+    need_all_sites(req, "viewer", "Capacity planning")
     if window not in C.WINDOWS and not (start and end):
         raise HTTPException(400, "window")
     if start and end and not (0 < end - start <= 31 * 86400):
@@ -308,7 +309,7 @@ def api_overview(req: Request, window: str = "7d", start: float = 0, end: float 
 
 @app.post("/netmon/api/capacity/calc")
 async def api_calc(req: Request):
-    need(req, "viewer")
+    need_all_sites(req, "viewer", "Capacity planning")
     body = await req.json()
     check_csrf(req, req.headers.get("x-csrf", ""))
     ov = overview(body.get("window", "7d") if body.get("window") in C.WINDOWS else "7d")
@@ -317,7 +318,7 @@ async def api_calc(req: Request):
 
 @app.post("/netmon/api/capacity/plan")
 async def api_plan(req: Request):
-    u = need(req, "analyst")
+    u = need_all_sites(req, "analyst", "Capacity planning")
     check_csrf(req, req.headers.get("x-csrf", ""))
     body = await req.json()
     plan = {k: body.get(k) for k in ("mode", "answers", "inputs", "labels", "retention", "headroom", "reserve", "suggested")}
@@ -344,7 +345,7 @@ async def server_manual(req: Request):
 
 @app.get("/netmon/api/capacity/series")
 def api_series(req: Request, window: str = Query("24h", alias="range")):
-    need(req, "viewer")
+    need_all_sites(req, "viewer", "Capacity planning")
     if window not in C.WINDOWS:
         raise HTTPException(400, "range")
     step = {"1h": 60, "24h": 300, "7d": 1800, "30d": 3600}[window]
