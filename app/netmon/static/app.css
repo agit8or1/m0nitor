@@ -491,3 +491,44 @@ tr.dim td { opacity: .6; }
 form.askq { flex-wrap: nowrap; } form.askq label.grow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 form.askq label.grow input { flex: 1; min-width: 0; }
 @media (max-width: 640px) { form.askq { flex-wrap: wrap; } form.askq label.grow { flex-basis: 100%; flex-direction: column; align-items: stretch; } }
+
+/* ---- overview: everything on one screen (desktop); sections stack on narrow screens ---- */
+.ov .attn { margin-bottom: 10px; }
+.ov .cards { gap: 12px; margin-bottom: 12px; }
+.ov .kpi { padding: 8px 14px; } .ov .kpi .k { font-size: 12px; } .ov .kpi .v { font-size: 20px; margin-top: 0; } .ov .kpi .v.na { font-size: 16px; }
+.ov .kpi .s { margin-top: 2px; -webkit-line-clamp: 1; }
+.ov .card { padding: 12px 16px; margin-bottom: 12px; } .ov .card-h { margin-bottom: 8px; } .ov .card-h h2 { font-size: 15px; }
+.ov .mainrow { grid-template-columns: minmax(0, 64fr) minmax(340px, 36fr); gap: 12px; margin-bottom: 12px;
+  height: clamp(350px, calc(100vh - 720px), 560px); }
+.ov .map-card { height: auto; min-height: 0; }
+.ov .sidecol { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
+.ov .sidecol > .card { margin: 0; } .ov .sec-card { height: auto; flex: 1; min-height: 0; } .ov .sec-card > #secpanel { overflow-y: auto; }
+.ov #chgcard { flex: none; }
+.ov #chgtop .sentence-list { gap: 4px; grid-template-columns: minmax(0, 1fr); }
+.ov #chgtop .sentence-list > li { min-width: 0; display: flex; gap: 8px; align-items: baseline; padding: 5px 10px; border-radius: 8px; }
+.ov #chgtop .s1 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.ov #chgtop .s2 { display: none; } .ov #chgtop .acts { font-size: 12px; white-space: nowrap; }
+.ov #chgtop .conf { font-size: 11px; padding: 0 6px; } .ov .chgfoot { margin: 6px 0 0; }
+.ov .slist li { padding: 7px 0; }
+.ov .ovrow { display: grid; grid-template-columns: minmax(0, 2fr) repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.ov .ovrow > .card { margin: 0; min-width: 0; }
+.ov .bwcard .chart { height: 118px; } .ov #bwlegend { display: none; }
+.ov .bwsum { display: flex; flex-wrap: wrap; gap: 2px 18px; margin-bottom: 2px; } .ov .bwsum .grp { flex-direction: row; align-items: baseline; gap: 6px; }
+.ov .bwsum .capgrp { display: none; } .ov .bwsum .big { font-size: 14px; } .ov .bwsum .sm { font-size: 11px; }
+.ov .utilbar { margin-top: 2px; padding-top: 4px; font-size: 12px; gap: 2px 16px; } .ov .utilbar .mtrack { width: 70px; }
+.ov .seg button { font-size: 12px; padding: 4px 8px; }
+.ov .rank td { padding: 4px 3px; font-size: 13px; } .ov .rank .sub { display: none; }
+.ov #t-services h3.grp { margin: 2px 0; font-size: 11px; } .ov .ovrow .note { font-size: 11px; margin: 4px 0 0; }
+.ov .recentbox { padding: 8px 16px; margin-bottom: 0; } .ov .recentbox:not([open]) .pager { display: none; }
+.ov + .attrib { margin: 10px 0 0; }
+.ov .recentbox > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
+.ov .recentbox > summary::-webkit-details-marker { display: none; }
+.ov .recentbox > summary h2 { font-size: 15px; margin: 0; } .ov .recentbox > summary h2::before { content: "▸ "; color: var(--muted); }
+.ov .recentbox[open] > summary h2::before { content: "▾ "; } .ov .recentbox[open] > summary { margin-bottom: 8px; }
+@media (max-width: 1500px) { .ov .ovrow { grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(0, 1fr)); }
+  .ov .ovrow .rank .barcell { display: none; } .ov .ovrow .rank .lbl { width: 64%; } .ov .ovrow .rank td.num { width: 36%; } }
+@media (max-width: 1280px) { .ov .ovrow { grid-template-columns: repeat(4, minmax(0, 1fr)); } .ov .bwcard { grid-column: 1 / -1; } }
+@media (max-width: 1100px) {
+  .ov .mainrow { height: auto; grid-template-columns: minmax(0, 1fr); } .ov .map-card .map { flex: none; aspect-ratio: 2 / 1; }
+  .ov .sec-card > #secpanel { overflow: visible; } .ov .ovrow { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .ov .ovrow { grid-template-columns: minmax(0, 1fr); } }

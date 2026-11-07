@@ -3,6 +3,14 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.54 — 2026-11-07
+
+### Changed
+- **Overview fits on one screen.** Smaller summary cards; *Important changes today* moved beside the map, above
+  Security activity, one line per change (hover for the detail); the map row sizes to the window; WAN bandwidth and
+  the four top lists share one row with five entries each; *Recent connections* is a collapsed section at the bottom.
+  Narrow screens still stack every section.
+
 ## v1.53 — 2026-11-07
 
 ### Added

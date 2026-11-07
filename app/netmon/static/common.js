@@ -152,7 +152,8 @@ const NM = (() => {
     const t = el("table", { class: "rank" });
     for (const r of rows) {
       const i = +r[inKey] || 0, o = +r[outKey] || 0;
-      const lab = link ? el("a", { href: link(r), text: label(r), title: label(r) }) : el("span", { text: label(r), title: label(r) });
+      const tip = sub ? `${label(r)} · ${sub(r)}` : label(r);   // the sub line is hidden on compact layouts (overview)
+      const lab = link ? el("a", { href: link(r), text: label(r), title: tip }) : el("span", { text: label(r), title: tip });
       const bar = el("div", { class: "bar", title: `in ${fmtBytes(i)} · out ${fmtBytes(o)}` });
       if (i) bar.append(el("span", { class: "i", style: `width:${(100 * i / max).toFixed(2)}%` }));
       if (o) bar.append(el("span", { class: "o", style: `width:${(100 * o / max).toFixed(2)}%` }));
@@ -193,7 +194,7 @@ const NM = (() => {
     // contracted capacity: dashed reference line, labelled at the right edge
     for (const r of inScale) svg.append("line").attr("class", `capline ${r.cls || ""}`).attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(r.value)).attr("y2", y(r.value));
     if (offScale.length) svg.append("text").attr("class", "endlabel cap").attr("x", W - m.r - 4).attr("y", m.t + 10).attr("text-anchor", "end")
-      .text(`${offScale.map((r) => `${r.label} ${fmtBps(r.value)}`).join(" · ")} — above this scale (${(100 * vmax / Math.min(...offScale.map((r) => r.value))).toFixed(1)}% peak use)`);
+      .text(`${offScale.map((r) => `${r.label} ${fmtBps(r.value)}`).join(" · ")} — ${W < 640 ? "off scale" : `above this scale (${(100 * vmax / Math.min(...offScale.map((r) => r.value))).toFixed(1)}% peak use)`}`);
     if (!vals.length) { svg.append("text").attr("class", "unavail-t").attr("x", W / 2).attr("y", H / 2).attr("text-anchor", "middle").text("No data in this window"); return; }
     const ends = inScale.map((r) => ({ y: y(r.value) + 4, label: r.label, cls: "cap" }));
     for (const s of series) {

@@ -112,7 +112,7 @@
     $("bwstats").replaceChildren(
       grp("in", "Inbound", useC && c.current ? c.current.in_bps : null, s.in_avg_bps, pin),
       grp("out", "Outbound", useC && c.current ? c.current.out_bps : null, s.out_avg_bps, pout),
-      cap.down || cap.up ? el("div", { class: "grp" }, el("span", { class: "k", text: "Peak use of capacity" }),
+      cap.down || cap.up ? el("div", { class: "grp capgrp" }, el("span", { class: "k", text: "Peak use of capacity" }),
         el("span", { class: "big", text: `↓ ${cap.down ? pct(pin, cap.down) : "—"}  ↑ ${cap.up ? pct(pout, cap.up) : "—"}` }),
         el("span", { class: "sm", text: `of ${cap.down ? fmtBps(cap.down * 1e6) : "?"} down / ${cap.up ? fmtBps(cap.up * 1e6) : "?"} up` })) : null);
     const note = $("bwnote");
@@ -155,24 +155,24 @@
 
   function renderTables(d) {
     const srv = d.servers.map((h) => ({ ...h, in_b: h.rx, out_b: h.tx }));
-    NM.rank($("t-servers"), srv.slice(0, 8), { label: (h) => h.name || h.ip, sub: (h) => `${h.ip} · ${fmtBps(h.in_bps)} in · ${h.tx ? fmtBps(h.out_bps) + " out" : "out n/a (NAT)"}`,
+    NM.rank($("t-servers"), srv.slice(0, TOP), { label: (h) => h.name || h.ip, sub: (h) => `${h.ip} · ${fmtBps(h.in_bps)} in · ${h.tx ? fmtBps(h.out_bps) + " out" : "out n/a (NAT)"}`,
       link: (h) => NM.href(`/netmon/servers/${h.ip}`) });
     if (d.unattributed_nat_tx) $("t-servers").append(el("p", { class: "note", text: `+ ${fmtBytes(d.unattributed_nat_tx)} uploaded via the shared NAT address — not attributable to one server from flows.` }));
-    NM.rank($("t-orgs"), d.orgs.slice(0, 8), { label: (o) => o.asname || `AS${o.asn}`, sub: (o) => `AS${o.asn}${o.cc ? " · " + o.cc : ""}`, link: (o) => NM.href("/netmon/connections", { asn: o.asn }) });
-    NM.rank($("t-countries"), d.countries.filter((c) => c.cc !== "??").slice(0, 8), { label: (c) => c.name, sub: (c) => `${fmtNum(c.servers)} servers · ${fmtNum(c.flows)} flows`,
+    NM.rank($("t-orgs"), d.orgs.slice(0, TOP), { label: (o) => o.asname || `AS${o.asn}`, sub: (o) => `AS${o.asn}${o.cc ? " · " + o.cc : ""}`, link: (o) => NM.href("/netmon/connections", { asn: o.asn }) });
+    NM.rank($("t-countries"), d.countries.filter((c) => c.cc !== "??").slice(0, TOP), { label: (c) => c.name, sub: (c) => `${fmtNum(c.servers)} servers · ${fmtNum(c.flows)} flows`,
       link: (c) => NM.href(`/netmon/countries/${c.cc}`) });
     const sv = $("t-services"); sv.replaceChildren();
     const ex = el("div"), us = el("div");
-    sv.append(el("h3", { class: "grp", text: "Exposed services (inventory: port forwards)" }), ex, el("h3", { class: "grp", text: "Services used by servers (port-based guess)" }), us);
-    NM.rank(ex, d.services.exposed.slice(0, 4).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.name} · ${s.proto}/${s.port}${s.mgmt ? " ⚠ admin" : ""}`,
+    sv.append(el("h3", { class: "grp", text: "Exposed (port forwards)", title: "Exposed services (inventory: port forwards)" }), ex, el("h3", { class: "grp", text: "Used by servers (port guess)", title: "Services used by servers (port-based guess)" }), us);
+    NM.rank(ex, d.services.exposed.slice(0, 2).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.name} · ${s.proto}/${s.port}${s.mgmt ? " ⚠ admin" : ""}`,
       sub: (s) => `${fmtNum(s.clients)} clients`, link: (s) => NM.href(`/netmon/servers/${s.ip}`), empty: "No inbound service traffic" });
-    NM.rank(us, d.services.outbound.slice(0, 4).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.svc || "port"} ${s.proto}/${s.port}`,
+    NM.rank(us, d.services.outbound.slice(0, 3).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.svc || "port"} ${s.proto}/${s.port}`,
       sub: (s) => `${fmtNum(s.servers)} servers · guessed from port`, link: (s) => NM.href("/netmon/connections", { port: s.port }) });
     recentPage = Math.min(recentPage, Math.max(1, Math.ceil(d.recent.rows.length / PER)));
     renderRecent();
   }
 
-  const PER = 8; let recentPage = 1;
+  const PER = 8, TOP = 5; let recentPage = 1;
   function renderRecent() {
     const rows = data.recent.rows;
     NM.convTable($("t-recent"), rows.slice((recentPage - 1) * PER, recentPage * PER), { empty: "No conversations in this scope" });
@@ -201,12 +201,13 @@
         return;
       }
       const ul = el("ul", { class: "sentence-list" });
-      for (const x of items) ul.append(el("li", {}, el("span", { class: "s1", text: x.title }), el("span", { class: "s2", text: x.detail }),
-        el("span", { class: "acts" }, el("span", { class: `conf c-${x.confidence}`, text: `${x.confidence[0].toUpperCase()}${x.confidence.slice(1)} confidence` }), " · ",
-          el("a", { href: x.link, text: "View evidence →" }))));
-      const more = d.total > items.length ? el("p", { class: "muted small" }, `${d.total - items.length} more · `, el("a", { href: "/netmon/changes", text: "see all" })) : null;
-      const warn = d.complete ? null : el("p", { class: "muted small", text: "Some of today's data is missing; changes are less certain." });
-      node.replaceChildren(ul, ...[warn, more].filter(Boolean));
+      for (const x of items) ul.append(el("li", { title: x.detail }, el("span", { class: "s1", text: x.title }), el("span", { class: "s2", text: x.detail }),
+        el("span", { class: "acts" }, el("span", { class: `conf c-${x.confidence}`, text: `${x.confidence[0].toUpperCase()}${x.confidence.slice(1)}`, title: `${x.confidence} confidence` }), " · ",
+          el("a", { href: x.link, text: "Evidence →" }))));
+      const more = d.total > items.length ? el("span", {}, `${d.total - items.length} more · `, el("a", { href: "/netmon/changes", text: "see all" })) : null;
+      const warn = d.complete ? null : el("span", { text: "Some of today's data is missing; less certain." });
+      const foot = [warn, more].filter(Boolean);
+      node.replaceChildren(ul, ...(foot.length ? [el("p", { class: "muted small chgfoot" }, ...foot.flatMap((x, i) => (i ? [" · ", x] : [x])))] : []));
     } catch (e) { node.replaceChildren(el("p", { class: "muted small", text: `Could not load changes: ${e.message}` })); }
   }
   loadChanges();

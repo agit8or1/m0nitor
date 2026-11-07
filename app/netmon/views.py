@@ -878,30 +878,33 @@ def api_search(req: Request, q: str = ""):
 def overview(req: Request):
     info = lambda nid, label: (f'<details class="info"><summary aria-label="{label}" title="{label}">i</summary>'  # noqa: E731
                                f'<div class="pop" id="{nid}"></div></details>')
-    body = f"""
+    body = f"""<div class="ov">
 <section class="attn" id="attn" aria-live="polite" aria-label="Needs attention"></section>
 <section class="cards" id="cards" aria-live="polite"></section>
-<section class="card" id="chgcard"><div class="card-h"><h2>Important changes today</h2><a href="/netmon/changes" class="small">What changed? →</a></div>
- <div id="chgtop" aria-live="polite"><p class="muted small">Comparing today with yesterday…</p></div></section>
 <section class="mainrow">
  <div class="card map-card"><div class="card-h"><h2>Where traffic goes</h2>
   <div class="panelctl"><div class="seg" id="mapdir" role="group" aria-label="Direction"><button data-v="both">Both</button><button data-v="in">Inbound</button><button data-v="out">Outbound</button></div>
   <select id="mapshade" aria-label="Shade countries by"><option value="bytes">Shade: bytes</option><option value="flows">Shade: flows</option><option value="alerts">Shade: findings</option><option value="blocked">Shade: GeoIP blocked</option></select>
   <button id="zoomin" aria-label="Zoom in">+</button><button id="zoomout" aria-label="Zoom out">−</button><button id="zoomreset">Reset</button>{info("mapnote", "About this map")}</div></div>
   <div id="map" class="map"></div><div class="legend" id="maplegend"></div></div>
- <div class="card sec-card"><div class="card-h"><h2>Security activity</h2><a href="/netmon/security" class="small">View all alerts →</a></div><div id="secpanel"></div></div>
+ <div class="sidecol">
+  <section class="card" id="chgcard"><div class="card-h"><h2>Important changes today</h2><a href="/netmon/changes" class="small">What changed? →</a></div>
+   <div id="chgtop" aria-live="polite"><p class="muted small">Comparing today with yesterday…</p></div></section>
+  <div class="card sec-card"><div class="card-h"><h2>Security activity</h2><a href="/netmon/security" class="small">View all alerts →</a></div><div id="secpanel"></div></div>
+ </div>
 </section>
-<section class="card"><div class="card-h"><h2>WAN bandwidth</h2><div class="panelctl"><div class="legend" id="bwlegend"></div>
- <div class="seg" id="bwsrc" role="group" aria-label="Bandwidth source"><button data-v="counters">Interface counters</button><button data-v="flows">Flow-estimated</button></div>{info("bwnote", "About this chart")}</div></div>
- <div id="bwstats" class="bwsum"></div><div id="bw" class="chart"></div><div id="capacity" class="utilbar" aria-live="polite"></div></section>
-<section class="quad">
- <div class="card"><div class="card-h"><h2>Top servers</h2><a href="/netmon/servers" class="small" data-keep>View all →</a></div><div id="t-servers"></div></div>
- <div class="card"><div class="card-h"><h2>Top organizations</h2><span class="muted small">remote networks (ASN)</span></div><div id="t-orgs"></div></div>
- <div class="card"><div class="card-h"><h2>Top countries</h2><a href="/netmon/countries" class="small" data-keep>View all →</a></div><div id="t-countries"></div></div>
- <div class="card"><div class="card-h"><h2>Top services</h2><a href="/netmon/connections" class="small" data-keep>View all →</a></div><div id="t-services"></div></div>
+<section class="ovrow">
+ <div class="card bwcard"><div class="card-h"><h2>WAN bandwidth</h2><div class="panelctl"><div class="legend" id="bwlegend"></div>
+  <div class="seg" id="bwsrc" role="group" aria-label="Bandwidth source"><button data-v="counters" title="Interface counters (SNMP)">Counters</button><button data-v="flows" title="Flow-estimated">Flows</button></div>{info("bwnote", "About this chart")}</div></div>
+  <div id="bwstats" class="bwsum"></div><div id="bw" class="chart"></div><div id="capacity" class="utilbar" aria-live="polite"></div></div>
+ <div class="card"><div class="card-h"><h2>Top servers</h2><a href="/netmon/servers" class="small" data-keep>All →</a></div><div id="t-servers"></div></div>
+ <div class="card"><div class="card-h"><h2>Top organizations</h2><span class="muted small">ASN</span></div><div id="t-orgs"></div></div>
+ <div class="card"><div class="card-h"><h2>Top countries</h2><a href="/netmon/countries" class="small" data-keep>All →</a></div><div id="t-countries"></div></div>
+ <div class="card"><div class="card-h"><h2>Top services</h2><a href="/netmon/connections" class="small" data-keep>All →</a></div><div id="t-services"></div></div>
 </section>
-<section class="card"><div class="card-h"><h2>Recent connections</h2><div class="panelctl"><div class="pager compact" id="recentpager"></div>
- <a href="/netmon/connections" class="small" data-keep>View all connections →</a></div></div><div id="t-recent"></div></section>"""
+<details class="card recentbox" id="recentbox"><summary><h2>Recent connections</h2><span class="panelctl"><span class="pager compact" id="recentpager"></span>
+ <a href="/netmon/connections" class="small" data-keep>View all connections →</a></span></summary><div id="t-recent"></div></details>
+</div>"""
     return page(req, "Network overview", body, "/", ("d3.min.js", "topojson-client.min.js", "map.js", "overview.js"))
 
 
