@@ -3,6 +3,12 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.56 — 2026-11-07
+
+### Fixed
+- Overview: on shorter screens Security activity no longer shows a finding cut off at the bottom of its panel. When
+  no whole finding fits, the panel shows the severity counts and a link to the open alerts instead.
+
 ## v1.55 — 2026-11-07
 
 ### Changed

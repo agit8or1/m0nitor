@@ -78,15 +78,24 @@
         el("a", { href: "/netmon/security", title: "Informational changes" }, el("span", { class: "sev s-muted", text: "○ info" }), el("b", { text: String(A.info) }))),
       items.length ? ul : el("div", { class: "state empty", text: "No open security findings" }),
       el("div", { class: "sec-foot" }, el("span", { text: `Coverage: ${cov.join(" · ")}` }), el("a", { href: "/netmon/coverage", text: "What is visible →" })));
-    // fixed-height panel on desktop: drop items that would be clipped instead of adding a nested scrollbar
+    // fixed-height panel on desktop: drop items that would be clipped instead of adding a nested scrollbar. A short
+    // panel may keep none: the severity counts and a link then stand in for the list (never a half-cut finding).
     const more = el("li", { class: "more" }, el("a", { href: "/netmon/security" }));
     const fits = () => node.scrollHeight <= node.clientHeight + 1;
-    if (!fits()) {
+    if (items.length && !fits()) {
       ul.append(more);
-      while (!fits() && ul.children.length > 2) ul.children[ul.children.length - 2].remove();
+      while (!fits() && ul.children.length > 1) ul.children[ul.children.length - 2].remove();
     }
-    const hidden = all.length - (ul.children.length - (more.isConnected ? 1 : 0));
-    if (hidden > 0) { if (!more.isConnected) ul.append(more); more.firstChild.textContent = `+ ${hidden} more security alert${hidden > 1 ? "s" : ""} →`; }
+    const shown = ul.children.length - (more.isConnected ? 1 : 0), hidden = all.length - shown;
+    if (hidden > 0) {
+      if (!more.isConnected) ul.append(more);
+      const s = hidden > 1 ? "s" : "";
+      more.firstChild.textContent = shown ? `+ ${hidden} more security alert${s} →` : `${hidden} open security alert${s} — view →`;
+    }
+    // still too short: drop the coverage footer (Collection health shows it), then the alert link (the header has one)
+    const secFoot = node.querySelector(".sec-foot");
+    if (secFoot && !fits()) secFoot.hidden = true;
+    if (more.isConnected && !fits()) ul.hidden = true;
   }
 
   function renderBandwidth(d) {
