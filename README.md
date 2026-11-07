@@ -54,6 +54,9 @@ the forwarding path: if it stops, your traffic is unaffected.
 - **Optional, off by default** — approval-gated blocking through one firewall alias, auto-response with a dry-run
   mode, preview-first AI analysis with pseudonymized evidence, and notifications (email, SMS, webhook, Slack, Teams,
   Discord, ntfy, Pushover).
+- **Accounts** — viewer / analyst / admin roles, optional or required TOTP 2FA, an audit log, and per-user
+  firewall restrictions: a user limited to some firewalls sees only their data on every page and in the API.
+  → [Privacy and hardening](docs/privacy-hardening.md#accounts)
 
 **What it does not do:** decrypt TLS, inspect payloads, see LAN-to-LAN traffic that does not cross the firewall
 (unless you add the optional [Zeek sensor](docs/zeek-sensor.md)), or promise complete coverage — missing evidence is
@@ -74,6 +77,7 @@ All screenshots come from the isolated [demo](docs/demo.md): synthetic data and 
 | ![What changed: today vs yesterday, ranked changes with confidence and evidence links](docs/screenshots/what-changed.png) **What changed?** | ![Plain-English search: the question, the filters it became, and read-only results](docs/screenshots/search.png) **Plain-English search** |
 | ![Application dependencies with service, evidence, first seen and confirm buttons](docs/screenshots/app-dependencies.png) **Application dependencies** | ![Detection tests: synthetic scenarios with expected vs actual and the rule's explanation](docs/screenshots/detection-test.png) **Detection tests** |
 | ![Devices list: site firewall and additional devices with profile status and live telemetry per protocol](docs/screenshots/devices.png) **Devices — multi-vendor onboarding** | ![Device page: supported, configured and receiving per protocol with evidence](docs/screenshots/device-detail.png) **Device detail — evidence per protocol** |
+| ![Users and 2FA: a viewer limited to one firewall](docs/screenshots/users-firewalls.png) **Users — per-user firewall restrictions** | |
 
 <p align="center"><img src="docs/screenshots/mobile-overview.png" alt="Overview on a phone" width="260"><br><b>Mobile</b></p>
 

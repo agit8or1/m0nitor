@@ -78,6 +78,24 @@ def investigation(pg):
     save(pg, "detection-test")
 
 
+def users(pg):
+    """Users & 2FA with a demo viewer limited to the demo firewall (docs/privacy-hardening.md)."""
+    pg.goto(B + "/netmon/users")
+    if not pg.locator("form[action='/netmon/users/noc-viewer/sites']").count():
+        f = "form[action='/netmon/users']"
+        pg.fill(f"{f} input[name=username]", "noc-viewer")
+        pg.select_option(f"{f} select[name=role]", "viewer")
+        pg.fill(f"{f} input[name=password]", "Demo-only-viewer-" + os.urandom(6).hex())
+        pg.click(f"{f} button")
+        pg.wait_for_load_state("networkidle")
+        sf = "form[action='/netmon/users/noc-viewer/sites']"
+        pg.check(f"{sf} input[name=site]")
+        pg.uncheck(f"{sf} input[name=all]")
+        pg.click(f"{sf} button")
+        pg.wait_for_load_state("networkidle")
+    shot(pg, "/netmon/users", "users-firewalls", 1500)
+
+
 with sync_playwright() as p:
     b = p.chromium.launch()
     fan = os.environ.get("FANOUT_ID", "")
@@ -105,6 +123,7 @@ with sync_playwright() as p:
             shot(pg, "/netmon/settings/devices", "devices", 2500)
             shot(pg, "/netmon/settings/devices/fgt-branch", "device-detail", 2500)
             investigation(pg)
+            users(pg)
     m = login(b.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, device_scale_factor=2))
     shot(m, "/", "mobile-overview", 4000)
     print("mobile scrollWidth", m.evaluate("document.documentElement.scrollWidth"))

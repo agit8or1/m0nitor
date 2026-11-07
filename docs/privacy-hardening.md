@@ -17,7 +17,10 @@ HttpOnly + Secure + SameSite, CSRF tokens on every form.
 **Firewall restrictions (per user).** Under Settings → Users & 2FA an admin can limit a viewer or analyst to some
 firewalls. Such a user sees only those firewalls' traffic, findings, incidents, devices, applications, probes,
 searches, hunts and logs, on every page and in the API; opening another firewall's record by its number gives "not
-found". The restriction is read on every request, so it applies to open sessions at once. Details:
+found". The restriction is read on every request, so it applies to open sessions at once.
+![Users & 2FA: a viewer limited to one firewall with the firewall checkboxes and "All firewalls"](screenshots/users-firewalls.png)
+
+Details:
 
 - Admins always see every firewall (they manage firewalls, users and global settings).
 - Exceptions a restricted analyst adds from a finding apply to that finding's firewall only. The *expected devices*
@@ -26,7 +29,7 @@ found". The restriction is read on every request, so it applies to open sessions
   covers other firewalls.
 - Settings shared by every firewall are not available to restricted users, and the page says so: capacity planning,
   maintenance windows, Inventory (device names and discovery), data sources, auto-response, indicator lists for threat
-  hunts, and editing wallboards. Neither is the Akvorado flow explorer, which cannot be limited per user.
+  hunts, and editing wallboards. Their menu entries, links and buttons are hidden. Neither is the Akvorado flow explorer, which cannot be limited per user.
 - Device names: a device whose address lies only in another firewall's own internal networks is not named or shown;
   addresses no single firewall claims (shared address space) keep their names.
 - Incidents: an incident that groups findings from several firewalls (same remote address) is shown only to users who
