@@ -188,8 +188,9 @@ const NM = (() => {
       svg.append("rect").attr("class", "unavail").attr("x", m.l).attr("y", m.t).attr("width", Math.max(0, x1 - m.l)).attr("height", H - m.t - m.b);
       if (x1 - m.l > 90) svg.append("text").attr("class", "unavail-t").attr("x", (m.l + x1) / 2).attr("y", (H - m.b + m.t) / 2).attr("text-anchor", "middle").text("before collection started");
     }
-    svg.append("g").selectAll("line").data(y.ticks(4)).join("line").attr("class", "gridline").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y).attr("y2", y);
-    svg.append("g").attr("class", "axis").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(4).tickFormat(fmt).tickSize(0).tickPadding(8)).call((g) => g.select(".domain").remove());
+    const nt = H < 90 ? 1 : H < 130 ? 2 : 4;
+    svg.append("g").selectAll("line").data(y.ticks(nt)).join("line").attr("class", "gridline").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y).attr("y2", y);
+    svg.append("g").attr("class", "axis").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(nt).tickFormat(fmt).tickSize(0).tickPadding(8)).call((g) => g.select(".domain").remove());
     svg.append("g").attr("class", "axis").attr("transform", `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(Math.max(2, Math.floor(W / 120))).tickSizeOuter(0));
     // contracted capacity: dashed reference line, labelled at the right edge
     for (const r of inScale) svg.append("line").attr("class", `capline ${r.cls || ""}`).attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(r.value)).attr("y2", y(r.value));

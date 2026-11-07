@@ -878,7 +878,7 @@ def api_search(req: Request, q: str = ""):
 def overview(req: Request):
     info = lambda nid, label: (f'<details class="info"><summary aria-label="{label}" title="{label}">i</summary>'  # noqa: E731
                                f'<div class="pop" id="{nid}"></div></details>')
-    body = f"""<div class="ov">
+    body = f"""<div class="ov"><div class="ovfit" id="ovfit">
 <section class="attn" id="attn" aria-live="polite" aria-label="Needs attention"></section>
 <section class="cards" id="cards" aria-live="polite"></section>
 <section class="mainrow">
@@ -901,7 +901,7 @@ def overview(req: Request):
  <div class="card"><div class="card-h"><h2>Top organizations</h2><span class="muted small">ASN</span></div><div id="t-orgs"></div></div>
  <div class="card"><div class="card-h"><h2>Top countries</h2><a href="/netmon/countries" class="small" data-keep>All →</a></div><div id="t-countries"></div></div>
  <div class="card"><div class="card-h"><h2>Top services</h2><a href="/netmon/connections" class="small" data-keep>All →</a></div><div id="t-services"></div></div>
-</section>
+</section></div>
 <details class="card recentbox" id="recentbox"><summary><h2>Recent connections</h2><span class="panelctl"><span class="pager compact" id="recentpager"></span>
  <a href="/netmon/connections" class="small" data-keep>View all connections →</a></span></summary><div id="t-recent"></div></details>
 </div>"""

@@ -498,11 +498,22 @@ form.askq label.grow input { flex: 1; min-width: 0; }
 .ov .kpi { padding: 8px 14px; } .ov .kpi .k { font-size: 12px; } .ov .kpi .v { font-size: 20px; margin-top: 0; } .ov .kpi .v.na { font-size: 16px; }
 .ov .kpi .s { margin-top: 2px; -webkit-line-clamp: 1; }
 .ov .card { padding: 12px 16px; margin-bottom: 12px; } .ov .card-h { margin-bottom: 8px; } .ov .card-h h2 { font-size: 15px; }
-.ov .mainrow { grid-template-columns: minmax(0, 64fr) minmax(340px, 36fr); gap: 12px; margin-bottom: 12px;
-  height: clamp(350px, calc(100vh - 720px), 560px); }
+.ov .mainrow { grid-template-columns: minmax(0, 64fr) minmax(340px, 36fr); gap: 12px; margin-bottom: 12px; height: 420px; }
+/* fitted to the window (overview.js fitOverview sets the height): map row and bottom row share it */
+.ovfit.fit { display: flex; flex-direction: column; }
+.ovfit.fit > .attn, .ovfit.fit > .cards { flex: none; }
+.ovfit.fit > .mainrow { height: auto; flex: 1.45 1 0; min-height: 230px; }
+.ovfit.fit > .ovrow { flex: 1 1 0; min-height: 200px; margin-bottom: 0; }
+.ovfit.fit .sidecol { overflow: hidden; } .ovfit.fit .sec-card { min-height: 130px; }
+.ovfit.fit .ovrow > .card { overflow: hidden; display: flex; flex-direction: column; }
+.ovfit.fit .bwcard .chart { flex: 1; min-height: 60px; height: auto; }
+.ovfit.fit .bwcard { container-type: size; }   /* short card: drop the in/out figures (also on the summary cards) to keep the chart readable */
+@container (max-height: 290px) { .ovfit.fit .bwcard .bwsum { display: none; } }
+@container (max-width: 560px) { .ovfit.fit .bwcard .utilbar > b, .ovfit.fit .bwcard .utilbar > a.small { display: none; } }
+.ovfit.fit .ovrow > .card > [id^="t-"] { min-height: 0; }
 .ov .map-card { height: auto; min-height: 0; }
 .ov .sidecol { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
-.ov .sidecol > .card { margin: 0; } .ov .sec-card { height: auto; flex: 1; min-height: 0; } .ov .sec-card > #secpanel { overflow-y: auto; }
+.ov .sidecol > .card { margin: 0; } .ov .sec-card { height: auto; flex: 1; min-height: 0; }
 .ov #chgcard { flex: none; }
 .ov #chgtop .sentence-list { gap: 4px; grid-template-columns: minmax(0, 1fr); }
 .ov #chgtop .sentence-list > li { min-width: 0; display: flex; gap: 8px; align-items: baseline; padding: 5px 10px; border-radius: 8px; }
@@ -519,7 +530,7 @@ form.askq label.grow input { flex: 1; min-width: 0; }
 .ov .seg button { font-size: 12px; padding: 4px 8px; }
 .ov .rank td { padding: 4px 3px; font-size: 13px; } .ov .rank .sub { display: none; }
 .ov #t-services h3.grp { margin: 2px 0; font-size: 11px; } .ov .ovrow .note { font-size: 11px; margin: 4px 0 0; }
-.ov .recentbox { padding: 8px 16px; margin-bottom: 0; } .ov .recentbox:not([open]) .pager { display: none; }
+.ov .recentbox { padding: 8px 16px; margin: 12px 0 0; } .ov .recentbox:not([open]) .pager { display: none; }
 .ov + .attrib { margin: 10px 0 0; }
 .ov .recentbox > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
 .ov .recentbox > summary::-webkit-details-marker { display: none; }
@@ -532,3 +543,4 @@ form.askq label.grow input { flex: 1; min-width: 0; }
   .ov .mainrow { height: auto; grid-template-columns: minmax(0, 1fr); } .ov .map-card .map { flex: none; aspect-ratio: 2 / 1; }
   .ov .sec-card > #secpanel { overflow: visible; } .ov .ovrow { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .ov .ovrow { grid-template-columns: minmax(0, 1fr); } }
+.ov .chgfoot:not(:has(> :not([hidden]))) { display: none; }

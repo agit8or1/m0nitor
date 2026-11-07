@@ -3,6 +3,16 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.55 — 2026-11-07
+
+### Changed
+- **Overview resizes to the window.** On desktop the dashboard fills the height left below the page header at any
+  resolution: the map row and the bottom row share it, the bandwidth chart takes its card's free space, and the top
+  lists, important changes and security activity show as many entries as fit (up to 10 per top list on large
+  screens). Short bandwidth cards drop the in/out figures (also on the summary cards) to keep the chart readable.
+  A window shorter than the sections' minimum scrolls slightly instead of overlapping; narrow screens still stack.
+- "N more" under important changes counts the changes hidden to fit the window.
+
 ## v1.54 — 2026-11-07
 
 ### Changed

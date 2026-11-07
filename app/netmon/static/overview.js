@@ -164,15 +164,15 @@
     const sv = $("t-services"); sv.replaceChildren();
     const ex = el("div"), us = el("div");
     sv.append(el("h3", { class: "grp", text: "Exposed (port forwards)", title: "Exposed services (inventory: port forwards)" }), ex, el("h3", { class: "grp", text: "Used by servers (port guess)", title: "Services used by servers (port-based guess)" }), us);
-    NM.rank(ex, d.services.exposed.slice(0, 2).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.name} · ${s.proto}/${s.port}${s.mgmt ? " ⚠ admin" : ""}`,
+    NM.rank(ex, d.services.exposed.slice(0, 4).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.name} · ${s.proto}/${s.port}${s.mgmt ? " ⚠ admin" : ""}`,
       sub: (s) => `${fmtNum(s.clients)} clients`, link: (s) => NM.href(`/netmon/servers/${s.ip}`), empty: "No inbound service traffic" });
-    NM.rank(us, d.services.outbound.slice(0, 3).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.svc || "port"} ${s.proto}/${s.port}`,
+    NM.rank(us, d.services.outbound.slice(0, 8).map((s) => ({ ...s, in_b: s.b, out_b: 0 })), { label: (s) => `${s.svc || "port"} ${s.proto}/${s.port}`,
       sub: (s) => `${fmtNum(s.servers)} servers · guessed from port`, link: (s) => NM.href("/netmon/connections", { port: s.port }) });
     recentPage = Math.min(recentPage, Math.max(1, Math.ceil(d.recent.rows.length / PER)));
     renderRecent();
   }
 
-  const PER = 8, TOP = 5; let recentPage = 1;
+  const PER = 8, TOP = 10; let recentPage = 1;   // top lists: up to TOP rows, trimmed to the space (fitOverview)
   function renderRecent() {
     const rows = data.recent.rows;
     NM.convTable($("t-recent"), rows.slice((recentPage - 1) * PER, recentPage * PER), { empty: "No conversations in this scope" });
@@ -204,10 +204,13 @@
       for (const x of items) ul.append(el("li", { title: x.detail }, el("span", { class: "s1", text: x.title }), el("span", { class: "s2", text: x.detail }),
         el("span", { class: "acts" }, el("span", { class: `conf c-${x.confidence}`, text: `${x.confidence[0].toUpperCase()}${x.confidence.slice(1)}`, title: `${x.confidence} confidence` }), " · ",
           el("a", { href: x.link, text: "Evidence →" }))));
-      const more = d.total > items.length ? el("span", {}, `${d.total - items.length} more · `, el("a", { href: "/netmon/changes", text: "see all" })) : null;
+      ul.dataset.total = d.total || items.length;
+      // "N more" counts the changes not listed, including rows hidden to fit the window (trimAll)
       const warn = d.complete ? null : el("span", { text: "Some of today's data is missing; less certain." });
-      const foot = [warn, more].filter(Boolean);
-      node.replaceChildren(ul, ...(foot.length ? [el("p", { class: "muted small chgfoot" }, ...foot.flatMap((x, i) => (i ? [" · ", x] : [x])))] : []));
+      const more = el("span", { class: "more", hidden: d.total > items.length ? null : true }, warn ? " · " : "",
+        el("span", { class: "n", text: `${d.total - items.length} more` }), " · ", el("a", { href: "/netmon/changes", text: "see all" }));
+      requestAnimationFrame(() => NM.fitOverview && NM.fitOverview());
+      node.replaceChildren(ul, el("p", { class: "muted small chgfoot" }, ...[warn, more].filter(Boolean)));
     } catch (e) { node.replaceChildren(el("p", { class: "muted small", text: `Could not load changes: ${e.message}` })); }
   }
   loadChanges();
@@ -239,7 +242,7 @@
       data = await NM.get("/netmon/api/overview?" + NM.qs());
       NM.scopeDesc(data.scope);
       renderCards(data); renderMapSel(data); renderSecurity(data);
-      renderBandwidth(data); renderTables(data); renderMeters();
+      renderBandwidth(data); renderTables(data); renderMeters(); fitOverview();
     } catch (e) { NM.state($("cards"), "error", `Could not load dashboard: ${e.message}`); }
   }
   $("bwsrc").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b || b.disabled) return; bwSource = b.dataset.v; if (data) renderBandwidth(data); });
@@ -247,5 +250,50 @@
   load();
   NM.every(load, 30000);
   window.addEventListener("nm-theme", () => { if (data) { renderMapSel(data); renderBandwidth(data); } });
-  let rs; window.addEventListener("resize", () => { clearTimeout(rs); rs = setTimeout(() => data && renderBandwidth(data), 200); });
+  // ---- fit the dashboard to the window (desktop): the map row and the bottom row share the height left below the
+  // page header; the chart takes its card's free space and lists show as many rows as fit. Narrow or very short
+  // windows keep the normal stacked page.
+  const FIT = window.matchMedia("(min-width: 1101px) and (min-height: 620px)");
+  function trim(box, lists) {
+    const rows = lists.map((l) => [...l.querySelectorAll(":scope > li, table.rank tr")]);
+    rows.flat().forEach((r) => { r.hidden = false; });
+    if (!box || !FIT.matches) return;
+    for (let guard = 0; box.scrollHeight > box.clientHeight + 1 && guard < 60; guard++) {
+      const vis = rows.map((rs) => rs.filter((r) => !r.hidden));
+      const i = vis.reduce((b, v, j) => (v.length > 1 && v.length > (vis[b] || []).length ? j : b), -1);
+      if (i < 0) break;
+      vis[i][vis[i].length - 1].hidden = true;
+    }
+  }
+  function trimAll() {
+    for (const id of ["t-servers", "t-orgs", "t-countries"]) { const n = $(id); if (n) trim(n.closest(".card"), [n]); }
+    const sv = $("t-services"); if (sv) trim(sv.closest(".card"), [...sv.querySelectorAll(":scope > div")]);
+    const ul = document.querySelector("#chgtop .sentence-list");
+    if (ul) {
+      trim(document.querySelector(".ov .sidecol"), [ul]);
+      const more = document.querySelector("#chgtop .more"), left = (+ul.dataset.total || 0) - ul.querySelectorAll(":scope > li:not([hidden])").length;
+      if (more) { more.hidden = left <= 0; more.querySelector(".n").textContent = `${left} more`; }
+    }
+  }
+  function fitOverview() {
+    const f = $("ovfit"), rb = $("recentbox"), attrib = document.querySelector(".attrib");
+    if (!f) return;
+    f.classList.toggle("fit", FIT.matches);
+    if (FIT.matches) {
+      const top = f.getBoundingClientRect().top + window.scrollY;
+      const rbH = rb ? (rb.open ? rb.querySelector("summary").offsetHeight + 16 : rb.offsetHeight) : 0;
+      const main = f.closest("main"), mainPad = main ? parseFloat(getComputedStyle(main).paddingBottom) || 0 : 0;
+      const foot = attrib ? attrib.offsetHeight + (parseFloat(getComputedStyle(attrib).marginTop) || 0) + (parseFloat(getComputedStyle(attrib).marginBottom) || 0) : 0;
+      // min-height: the rows grow to fill the window, and a window shorter than their minimum scrolls instead of overlapping
+      f.style.minHeight = `${Math.max(520, Math.floor(window.innerHeight - top - rbH - foot - mainPad - 12))}px`;
+    } else f.style.minHeight = "";
+    if (data) renderBandwidth(data);   // the chart is drawn at its node's size
+    trimAll();
+    if (data) renderSecurity(data);    // after the changes list is trimmed: the panel keeps the findings that fit
+  }
+  NM.fitOverview = fitOverview;
+  let rs; window.addEventListener("resize", () => { clearTimeout(rs); rs = setTimeout(fitOverview, 150); });
+  FIT.addEventListener("change", fitOverview);
+  $("recentbox").addEventListener("toggle", fitOverview);
+  fitOverview();
 })();
