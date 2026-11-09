@@ -843,7 +843,7 @@ def alert_view(req: Request, aid: int, back: str = ""):
         if peers:
             opts = "".join(f"<option>{e(p)}</option>" for p in peers)
             actions += f"""<div class="card"><div class="card-h"><h2>Request block</h2></div>
-<p class="muted small">Creates a pending request with an impact preview. An admin must approve it before anything changes on OPNsense.</p>
+<p class="muted small">Creates a pending request with an impact preview. An admin must approve it before anything changes on the firewall.</p>
 <form method=post action="/netmon/blocks" class="row">{csrf_field(req)}<input type=hidden name=alert_id value="{aid}">
 <select name=address>{opts}</select> <input name=reason placeholder="reason" required size=40>
 <span class="chks">Block on: {site_checks([a['site']] if a['site'] else None)}</span> <button>Preview block</button></form></div>"""
@@ -1350,7 +1350,7 @@ def blocks(req: Request):
                   f"<b>{'API key configured' if blk.enforcer(x).enabled else 'not set up — requests can be previewed but not applied'}</b></li>"
                   for x in cfg.sites)
     return page(req, "Block requests", tabs(SECURITY_TABS, "/netmon/blocks") + tip_box("blocking", open_=not con) + f"""<div class="banner {'' if con else 'warn'}">Enforcement happens on each firewall through its own alias ({con} of {tot} connected):
-<ul>{fws}</ul>A request creates one block per selected firewall; each needs a preview and explicit admin approval.
+<ul>{fws}</ul>A request creates one block per selected firewall; each needs a preview and explicit admin approval (a confirmation step: an admin can approve their own request, so this is not two-person approval).
 Automatic blocks (<a href="/netmon/settings/response">Settings → Auto-response</a>) go into a separate alias and expire on their own.</div>
 {form}<div class="card wrap"><table class="tbl"><tr><th>#</th><th>Address</th><th>Firewall</th><th>Type</th><th>Status</th><th>Reason</th><th>Requested</th><th>Approved</th><th>When</th></tr>
 {trs or '<tr><td colspan=9 class=muted>No block requests</td></tr>'}</table></div>""", "/netmon/security", scoped=False)
@@ -1458,7 +1458,7 @@ def users_page(req: Request, msg: str = ""):
 <div class="card"><div class="card-h"><h2>Two-factor policy</h2></div>
 <form method=post action="/netmon/settings/require2fa" class="row">{csrf_field(req)}
 <input type=hidden name=value value="{'0' if req2 else '1'}">
-<span>{'<span class="sev s-good">● Required for all users</span>' if req2 else '<span class="sev s-muted">○ Optional</span>'}</span>
+<span>{'<span class="sev s-good">● Required for all users</span>' if req2 else '<span class="sev s-warning">○ Optional (default) — recommended: require it</span>'}</span>
 <button>{'Make optional' if req2 else 'Require 2FA for all users'}</button>
 <span class="muted small">Users without 2FA are sent to enrollment at their next request. Enroll yourself first under My account.</span></form></div>
 <div class="card wrap"><table class="tbl"><tr><th>User</th><th>Role</th><th>State</th><th>2FA</th><th>Last login</th><th></th></tr>{trs}</table>

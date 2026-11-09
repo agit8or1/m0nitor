@@ -3,7 +3,7 @@
     devices ──NetFlow v5/v9, IPFIX UDP 2055 · IPFIX 4739 · sFlow 6343──▶ Akvorado inlet ─▶ Kafka ─▶ outlet ─▶ ClickHouse (default.flows*)
             ──syslog TCP/UDP 5514──▶ rsyslog ─▶ /var/log/netmon/*.log ─▶ netmon log ingest ─▶ ClickHouse (netmon.*)
                ◀──SNMP (read-only)──── netmon counters
-               ◀──HTTPS API (read; one alias write)── netmon (policy reads, blocking, auto-response)
+               ◀──HTTPS API (read; alias writes; auto-response may create its aliases/rules)── netmon (policy reads, blocking, auto-response)
     browser ──HTTPS 443──▶ Caddy ─▶ netmon app (127.0.0.1:8090) ─┬─▶ ClickHouse HTTP (readonly=1)
                                    └─▶ Akvorado console (forward_auth via the app)   └─▶ SQLite /data/netmon.db
 

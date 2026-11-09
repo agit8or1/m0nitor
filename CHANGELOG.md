@@ -3,6 +3,23 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.58 — 2026-11-09
+
+### Changed
+- Block requests: the page now says plainly that approval is a confirmation step: an admin can approve a request
+  they made themselves, so it is not two-person approval.
+- Users & 2FA: an optional 2FA policy (the default) is flagged with a recommendation to require it.
+
+### Docs
+- Blocking: "one alias" applies to manual blocks only. Auto-response uses a second alias (`netmon_auto`) and, with
+  "Create netmon's own firewall objects" on (default), creates its aliases and floating block rules itself.
+- Install: Caddy's `tls internal` is a private CA, not a publicly trusted certificate, and how to trust or replace
+  it. New step: turn on Require 2FA after enrolling (2FA is optional by default).
+
+### Tests
+- Block approval (pending until an admin approves, typed confirmation, CSRF, roles, rejected requests), the
+  Coverage page, and the finding page's evidence, baseline, alternatives and next steps.
+
 ## v1.57 — 2026-11-07
 
 ### Fixed

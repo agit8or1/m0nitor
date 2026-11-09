@@ -42,8 +42,10 @@ a test message to it succeeded. Credentials are stored as secrets and never show
 
 ## Blocking and auto-response (optional, off by default)
 
-- **Block requests**: approval-gated blocks through one firewall alias created for m0nitor — see [BLOCKING.md](BLOCKING.md).
+- **Block requests**: approval-gated blocks through one firewall alias created for m0nitor (`netmon_block`). An admin confirms each
+  block, and can confirm their own request: this is not two-person approval. See [BLOCKING.md](BLOCKING.md).
 - **Auto-response** (Settings → Auto-response): brute force, high-severity IDS signatures and floods — never scans —
-  can add addresses to m0nitor's own alias with an expiry. It ships in **dry run**; every candidate decision is logged
+  can add addresses to m0nitor's own second alias (`netmon_auto`) with an expiry. With `auto_setup` on (default)
+  it also creates its aliases and floating block rules on the firewall. It ships in **dry run**; every candidate decision is logged
   with the guardrail that stopped it. Guardrails include protected addresses, established-client checks and rate
   limits. m0nitor only changes firewall objects it created and recorded.

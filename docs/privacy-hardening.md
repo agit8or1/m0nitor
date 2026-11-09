@@ -3,7 +3,7 @@
 ## Ports
 | Port | Bound to | Allowed from |
 |---|---|---|
-| 443/tcp (Caddy) | host | management networks only (ufw) |
+| 443/tcp (Caddy, `tls internal`: private CA, not publicly trusted — see [install](install.md#install)) | host | management networks only (ufw) |
 | 22/tcp | host | management networks only |
 | 2055/udp (NetFlow v5/v9, IPFIX), 4739/udp (IPFIX), 6343/udp (sFlow) | Akvorado inlet | registered devices only (DOCKER-USER, rendered) |
 | 5514/tcp+udp (syslog) | rsyslog | registered devices only (ufw `netmon-syslog`, rsyslog AllowedSender, rendered) |
@@ -11,7 +11,8 @@
 ClickHouse, Kafka and Valkey are not published.
 
 ## Accounts
-Local users with roles viewer / analyst / admin, optional TOTP 2FA (can be required by an admin), session cookies
+Local users with roles viewer / analyst / admin, TOTP 2FA (optional by default: `require_2fa` is off until an admin
+turns on Require 2FA — recommended), session cookies
 HttpOnly + Secure + SameSite, CSRF tokens on every form.
 
 **Firewall restrictions (per user).** Under Settings → Users & 2FA an admin can limit a viewer or analyst to some

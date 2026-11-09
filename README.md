@@ -51,7 +51,8 @@ the forwarding path: if it stops, your traffic is unaffected.
 - **Coverage** — which telemetry is actually arriving and what each view can and cannot see.
 - **Threat intelligence** — IDS findings citing exploited CVEs (CISA KEV, EPSS) are marked; server software is matched
   against current CVEs. → [Threat intel](docs/threat-intel.md)
-- **Optional, off by default** — approval-gated blocking through one firewall alias, auto-response with a dry-run
+- **Optional, off by default** — approval-gated blocking through netmon's own firewall alias (an admin confirms each block; this is not two-person
+  approval), auto-response into a second alias (it can create its own aliases and block rules) with a dry-run
   mode, preview-first AI analysis with pseudonymized evidence, and notifications (email, SMS, webhook, Slack, Teams,
   Discord, ntfy, Pushover).
 - **Accounts** — viewer / analyst / admin roles, optional or required TOTP 2FA, an audit log, and per-user

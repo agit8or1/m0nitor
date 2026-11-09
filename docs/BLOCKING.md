@@ -2,8 +2,16 @@
 OPNsense: sections 0–4 below. pfSense: see "pfSense" at the end. Each firewall has its own alias and API key
 (Settings → Firewalls & sites → Connection settings); a block request picks which firewalls it applies to.
 
-netmon never edits firewall rules. It only adds/removes addresses in ONE alias
-(`netmon_block`) after an admin approves a previewed request in /netmon/blocks.
+Manual blocks: netmon adds/removes addresses in ONE alias (`netmon_block`) after an admin approves a previewed
+request in /netmon/blocks. It never edits your own rules.
+
+**Approval is a confirmation step, not two-person control.** An analyst or admin requests, an admin approves by
+typing the address. An admin can approve a request they made themselves; nothing requires a second person.
+
+**Auto-response is separate.** With auto-response On (Settings → Auto-response) netmon uses a second alias,
+`netmon_auto`. With "Create netmon's own firewall objects when they are missing" (`auto_setup`, on by default)
+it also creates the `netmon_block` / `netmon_auto` aliases, a category and its own floating block rules on the
+firewall. Turn `auto_setup` off to create those objects by hand as below.
 
 ## 0. Backup first
 System → Configuration → Backups → Download configuration.

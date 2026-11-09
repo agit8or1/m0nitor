@@ -20,6 +20,11 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
    Afterwards the monitor's FQDN can be changed in the UI (Settings → Firewalls & sites → This monitor): the root helper
    rewrites the Caddyfile site line (this monitor's IP + the FQDN, between `# BEGIN/END netmon-hosts` markers), validates
    it in a throwaway Caddy container and restarts Caddy. Notification links follow the same FQDN.
+   **Certificate:** the Caddyfile uses `tls internal`, so Caddy signs the certificate with its own private CA. It is
+   *not* publicly trusted: browsers warn until you trust that CA on management machines (its root certificate is
+   `/data/caddy/pki/authorities/local/root.crt` in the Caddy container), or you replace `tls internal` with a
+   certificate from your own CA or a public one (`tls /path/cert.pem /path/key.pem`, or remove the line for ACME
+   if the name is publicly reachable).
 6. **Host helpers (root):** install `host/netmon-apply-sites` to `/usr/local/sbin/`, the `.path`/`.service` units to
    `/etc/systemd/system/`, `systemctl enable --now netmon-apply-sites.path`. Add firewalls in Settings → Firewalls;
    the helper renders the NetFlow/syslog ACLs, rsyslog config and Akvorado exporter metadata.
@@ -28,6 +33,8 @@ Ubuntu 24.04 with Docker Engine + compose plugin, ufw and rsyslog. Paths assume 
    container limits, Kafka volume size; read-only, every 5 minutes).
 7. **ufw:** allow 22 and 443 from management networks only; the helper adds the per-device flow (2055, 4739, 6343) and syslog (5514) rules.
 8. **Firewall side:** [opnsense-setup.md](opnsense-setup.md). Then check the Coverage page.
+9. **2FA:** TOTP 2FA is optional by default (`require_2fa` is off). Enroll your own account, then click
+   Settings → Users & 2FA → "Require 2FA for all users" so every user must enroll at next login.
 
 ## Upgrade
 - App: `git pull` (or copy the new release), `cd app && docker compose up -d --build`, the app applies additive
