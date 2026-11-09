@@ -7,10 +7,10 @@ on:
     - cron: "23 6 * * 1"      # Mondays 06:23 UTC
   workflow_dispatch:
   pull_request:
-    paths: ["app/requirements*.lock", "app/requirements*.txt"]
+    paths: ["app/requirements*.lock", "app/requirements*.txt", ".github/workflows/advisories.yml"]
   push:
     branches: [main]
-    paths: ["app/requirements*.lock", "app/requirements*.txt"]
+    paths: ["app/requirements*.lock", "app/requirements*.txt", ".github/workflows/advisories.yml"]
 permissions:
   contents: read
 concurrency:
@@ -35,4 +35,4 @@ jobs:
       - name: audit ${{ matrix.lockfile }} (${{ matrix.service }})
         run: |
           /tmp/pa/bin/pip-audit -r "${{ matrix.lockfile }}" --require-hashes --disable-pip \
-            --service "${{ matrix.service }}" --progress-spinner off --desc on
+            --vulnerability-service "${{ matrix.service }}" --progress-spinner off --desc on
