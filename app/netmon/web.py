@@ -1703,6 +1703,7 @@ from . import wallboards  # noqa: E402,F401
 from . import inventory  # noqa: E402,F401  (server names and external address labels)
 from . import autoresp  # noqa: E402,F401  (auto-response settings, firewall setup, decision log)
 from . import coverage  # noqa: E402,F401  (coverage & source health)
+from . import onboarding_views  # noqa: E402,F401  (Settings -> Onboarding test, guided NAT validation)
 from . import intel  # noqa: E402,F401  (threat intel: ExploitHound Threat Radar)
 from . import capacity_views  # noqa: E402,F401  (capacity planner, resources & capacity, device hardware)
 from . import identity_views  # noqa: E402,F401  (device identity: address history, identity review)

@@ -139,10 +139,18 @@ class Tracker:
         seq = d["sequence"]
         if st["next_seq"] is not None and seq != st["next_seq"]:
             gap = (seq - st["next_seq"]) & 0xFFFFFFFF
+            back = (st["next_seq"] - seq) & 0xFFFFFFFF
             if gap < 1_000_000:          # forward gap = lost; otherwise a restart/reset, not loss
                 st["lost"] += gap
+            elif seq == st["last_seq"] or back <= 64:
+                # the same sequence number again (or a few steps back): a duplicated or reordered export packet, not a
+                # restart. Counted separately; the expected next number is kept.
+                st["duplicates"] = st.get("duplicates", 0) + 1
+                st["last_seq"] = seq
+                return d
             else:
                 st["resets"] = st.get("resets", 0) + 1
+        st["last_seq"] = seq
         p = d["protocol"]
         if p == "netflow_v5":
             st["next_seq"] = (seq + d["records"]) & 0xFFFFFFFF      # counts flows
@@ -178,6 +186,8 @@ class Tracker:
             issues = []
             if st["lost"]:
                 issues.append(f"sequence gaps: about {st['lost']:,} {'flows' if proto == 'netflow_v5' else 'records' if proto == 'ipfix' else 'packets'} lost in transit")
+            if st.get("duplicates"):
+                issues.append(f"{st['duplicates']:,} export packets repeated an earlier sequence number (duplicated or reordered on the way)")
             if st.get("resets"):
                 issues.append(f"sequence restarted {st['resets']}× (exporter restart or counter reset)")
             if st["missing_template"]:
@@ -193,7 +203,7 @@ class Tracker:
                 issues.append(f"sFlow agent reports {st['agent_drops']:,} dropped samples")
             out.append({"exporter": exp, "protocol": proto, "domain": dom, "packets": st["packets"], "templates": sorted(st["templates"]),
                         "sampling": sorted(map(str, st["sampling"])) or ["unknown"], "clock_drift_s": st["drift"],
-                        "agent": st.get("agent"), "issues": issues})
+                        "agent": st.get("agent"), "lost": st["lost"], "duplicates": st.get("duplicates", 0), "issues": issues})
         return out
 
 
@@ -201,6 +211,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Listen for flow export packets and report exporter health (no storage).")
     ap.add_argument("--listen", default="0.0.0.0:2056")
     ap.add_argument("--seconds", type=int, default=60)
+    ap.add_argument("--record", action="store_true",
+                    help="store the result per firewall (matched by exporter address) for Settings -> Onboarding test")
     a = ap.parse_args(argv)
     host, _, port = a.listen.rpartition(":")
     s = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_DGRAM)
@@ -213,8 +225,16 @@ def main(argv=None):
         except socket.timeout:
             continue
         tr.feed(src, pkt)
-    for r in tr.report():
+    rep = tr.report()
+    for r in rep:
         print(r)
+    if a.record and rep:
+        from .core import apply_sites, db_connect, load_config
+        from .onboarding import record_flowdiag
+        cfg, conn = load_config(), db_connect()
+        apply_sites(cfg, conn)
+        got = record_flowdiag(conn, cfg, rep, a.seconds)
+        print("recorded for:", ", ".join(got) or "no configured firewall matched the exporter address(es)")
     if not tr.s:
         print("no packets received: check the exporter destination, port and any firewall on the path")
 

@@ -29,8 +29,15 @@ def _addr(rng, net):
     return int(net.network_address) + rng.randrange(1, net.num_addresses - 1)
 
 
-def record(rng, now):
-    """One synthetic flow: (src, dst, sport, dport, proto, packets, bytes, first_ms, last_ms, in_if, out_if, flags)."""
+MARKER = ipaddress.ip_network("10.98.0.0/16")    # marker flows: UDP to port 9 from here, excluded from benchmark counts
+
+
+def record(rng, now, marker=False):
+    """One synthetic flow: (src, dst, sport, dport, proto, packets, bytes, first_ms, last_ms, in_if, out_if, flags).
+    marker=True: a UDP flow to the discard port (9) from MARKER, which never occurs in normal records (bench.py sends a
+    trickle of them during a pipeline run so the collector flushes its batches, and does not count them)."""
+    if marker:
+        return _addr(rng, MARKER), _addr(rng, EXTERNAL[0]), rng.randrange(1024, 65535), 9, 17, 1, 64, now, now, 2, 1, 0
     inside, outside = _addr(rng, INTERNAL), _addr(rng, rng.choice(EXTERNAL))
     dport, sport, proto = rng.choice(PORTS), rng.randrange(1024, 65535), rng.choice((6, 6, 6, 17))
     if rng.random() < 0.5:
@@ -113,8 +120,9 @@ def filterlog_line(rng, unix):
 
 
 # ------------------------------------------------------------------------------------------------ sender
-def send(kind, target, rate, seconds, per_packet=None, seed=1):
-    """Paced sender. Returns counts actually handed to the kernel (sent), never 'delivered'."""
+def send(kind, target, rate, seconds, per_packet=None, seed=1, marker=False, stop=None):
+    """Paced sender. Returns counts actually handed to the kernel (sent), never 'delivered'. `stop`: an Event that ends
+    the run early (bench.py's marker stream)."""
     host, port = target.rsplit(":", 1)
     fam = socket.AF_INET6 if ":" in host.strip("[]") else socket.AF_INET
     sk = socket.socket(fam, socket.SOCK_DGRAM)
@@ -130,7 +138,7 @@ def send(kind, target, rate, seconds, per_packet=None, seed=1):
     t_next = start
     while True:
         now = time.time()
-        if now - start >= seconds:
+        if now - start >= seconds or (stop is not None and stop.is_set()):
             break
         if now < t_next:
             time.sleep(min(t_next - now, 0.01))
@@ -143,7 +151,7 @@ def send(kind, target, rate, seconds, per_packet=None, seed=1):
         if kind == "syslog":
             pkt = filterlog_line(rng, now).encode()
         else:
-            recs = [record(rng, now_ms) for _ in range(per)]
+            recs = [record(rng, now_ms, marker) for _ in range(per)]
             tmpl = now >= next_tmpl
             if tmpl:
                 next_tmpl = now + 10

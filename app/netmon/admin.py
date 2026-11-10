@@ -18,6 +18,7 @@ from .web import (need_all_sites, ROLES, app, cfg, check_csrf, conn, csrf_field,
 
 # (name, href, group, admin-only): grouped in this order; admin-only entries are hidden from other roles
 SETTINGS_TABS = [("Health", "/netmon/settings", "Status", False), ("Coverage", "/netmon/coverage", "Status", False),
+                 ("Onboarding test", "/netmon/onboarding", "Status", False),
                  ("WAN / VPN quality", "/netmon/quality", "Status", False),
                  ("Firewalls & sites", "/netmon/settings/sites", "Data", False),
                  ("Devices", "/netmon/settings/devices", "Data", False),

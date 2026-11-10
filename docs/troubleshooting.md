@@ -1,12 +1,16 @@
 # Troubleshooting
 
-Start with the **Coverage** page: each source is judged by its own transport ("no events" is not "broken").
+Start with the **Coverage** page: each source is judged by its own transport ("no events" is not "broken"). For one
+firewall, **Settings → Onboarding test** says which evidence is missing, which question that leaves open and which
+exporter or interface setting to check.
 
 | Symptom | Check |
 |---|---|
 | A device shows "no data" | Settings → Devices → the device: actual source address seen, collector counters, decoder errors; the device's destination/port; host ACL status banner |
 | Device logs arrive but stay "unrecognized" | the device page shows a sample line: check the log format against [vendors.md](vendors.md) (e.g. FortiGate format `default`, PAN-OS default CSV); open an issue with a sanitized sample |
-| Flow numbers look wrong for a new exporter | `docker exec app-netmon-app-1 python -m netmon.flowdiag --listen 0.0.0.0:2056` while the exporter sends to 2056: templates, sequence gaps, sampling changes, clock drift ([devices.md](devices.md)) |
+| Flow numbers look wrong for a new exporter | `docker exec app-netmon-app-1 python -m netmon.flowdiag --listen 0.0.0.0:2056` while the exporter sends to 2056: templates, sequence gaps, duplicated packets, sampling changes, clock drift ([devices.md](devices.md)). Add `--record` to store the result for the Onboarding test |
+| Onboarding test: WAN flows *missing* but records arrive | the page names the interfaces seen: set the WAN interface (Firewalls & sites) to the name in the records |
+| NAT evidence *not possible* | the exporter captures only the WAN (e.g. pfSense softflowd): per-host attribution behind shared NAT needs LAN-side records ([nat-attribution.md](nat-attribution.md)) |
 | A device has no blocked counts | only parsed deny/drop decisions count; flow-only devices and logs without an action never do (by design) |
 | No flows | `docker compose logs akvorado-inlet`; inlet metrics `curl -s http://127.0.0.1:8080/api/v0/inlet/metrics`; firewall destination/port; host ACL (`iptables -L DOCKER-USER`) lists the exporter |
 | Flows but wrong direction | interface metadata in `akvorado/config/outlet.yaml` (rendered from Settings → Firewalls: ifindex and names) |

@@ -48,7 +48,9 @@ the forwarding path: if it stops, your traffic is unaffected.
   → [Investigation](docs/investigation.md)
 - **Firewall context** — logged blocks by country, the live GeoIP policy (policy vs. enforcement), configuration and
   authentication events from syslog.
-- **Coverage** — which telemetry is actually arriving and what each view can and cannot see.
+- **Coverage** — which telemetry is actually arriving and what each view can and cannot see, with a per-firewall
+  **onboarding test** (WAN flows, LAN return flows, firewall logs, usable NAT evidence) that names the question you
+  cannot answer yet and the exporter setting to check. → [NAT attribution](docs/nat-attribution.md), [field validation](docs/field-validation.md)
 - **Threat intelligence** — IDS findings citing exploited CVEs (CISA KEV, EPSS) are marked; server software is matched
   against current CVEs. → [Threat intel](docs/threat-intel.md)
 - **Optional, off by default** — approval-gated blocking through netmon's own firewall alias (an admin confirms each block; this is not two-person
@@ -94,7 +96,7 @@ docker compose -f demo/docker-compose.yml logs seed | grep "admin password"
 ```
 
 **Install for real** — follow [docs/install.md](docs/install.md) (Akvorado, the app, the TLS front end and host
-helpers), then [configure your firewall](docs/opnsense-setup.md) and check the Coverage page.
+helpers), then [configure your firewall](docs/opnsense-setup.md) and run Settings → Onboarding test.
 
 ## Supported devices
 

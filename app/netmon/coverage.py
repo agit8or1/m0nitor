@@ -49,16 +49,23 @@ def capabilities():
         att = dash.nat_attribution(sc)
     except Exception as ex:
         att = {"total": 0, "error": str(ex)}
-    v, _ = get_state(conn, "validation:nat_attribution", None)
+    # last guided validation per firewall the user may see (netmon.onboarding); never another firewall's result
+    vals = [x for x in (get_state(conn, "validation:nat_attribution:" + s_["id"], None)[0] for s_ in cfg.sites) if x]
+    if not access.restricted():      # a monitor-wide validation recorded before per-firewall validations existed
+        vals += [x for x in [get_state(conn, "validation:nat_attribution", None)[0]] if x]
+    v = max(vals, key=lambda x: x["ts"]) if vals else None
     if att.get("total"):
         pct = lambda k: 100 * att[k] / att["total"]
+        capped = (f" {att['capped']['bytes'] / 2 ** 20:.0f} MB lowered by recorded collection problems."
+                  if att.get("capped", {}).get("bytes") else "")
         caps.append(("Outbound per-host attribution behind shared NAT", "partial",
                      f"24 h: {pct('high'):.0f}% of shared-NAT upload bytes attributed to one host with high confidence, "
                      f"{pct('medium') + pct('low'):.0f}% medium/low, {pct('ambiguous'):.0f}% ambiguous (several hosts), "
-                     f"{pct('no_return'):.0f}% with no LAN return path, {pct('unanswered'):.0f}% unanswered attempts.",
+                     f"{pct('no_return'):.0f}% with no LAN return path, {pct('unanswered'):.0f}% unanswered attempts, "
+                     f"{pct('wan_only'):.0f}% from WAN-only exporters.{capped}",
                      "Return-path correlation proves a host received replies, not that every outbound packet is visible: unanswered "
                      "and firewall-originated traffic has no LAN-side record (bridge ingress is not exported). Full pre-NAT attribution "
-                     "needs LAN-rule logging or a LAN-side sensor (see docs/nat-attribution.md).",
+                     "needs LAN-rule logging or a LAN-side sensor (see docs/nat-attribution.md). Per firewall: Onboarding test.",
                      v["ts"] if v else None, v))
     caps.append(("Outbound volume across the WAN (post-NAT)", "verified" if f.get("outb") else "unavailable",
                  f"{int(f.get('outb') or 0):,} WAN egress flow records in the last hour; 1:1 NAT addresses map to exactly one host",
@@ -126,6 +133,8 @@ def coverage_page(req: Request, msg: str = ""):
         f"{'<div class=muted>' + e(c['limits']) + '</div>' if c['limits'] else ''}</td><td class='small'>{e(c['action'])}</td></tr>"
         for g in groups for c in groups[g])
     caps = capabilities()
+    from .onboarding_views import summary_html
+    onboard = summary_html(req)
     crow = ""
     for name, st, ev, lim, last, *val in caps:
         vd = val[0] if val else None
@@ -150,6 +159,7 @@ def coverage_page(req: Request, msg: str = ""):
 <div class="row"><button class="primary">Save thresholds</button></div></form></section>"""
     banner = f"<p class='note'>{e(msg)}</p>" if msg else ""
     body = f"""{tabs(SETTINGS_TABS, '/netmon/coverage')}{banner}
+{onboard}
 <section class="card"><div class="card-h"><h2>Source health</h2><span class="muted small">checked {e(_ts(ts))} · every 60 s</span></div>
 <p class="note">“No events” and “broken collection” are different states: each source is judged by its own transport, heartbeat or counters.</p>
 <div class="wrap"><table class="tbl"><tr><th>Source</th><th>State</th><th>Observed</th><th>Last data</th><th>Evidence / limits</th><th>Next action</th></tr>

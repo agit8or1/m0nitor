@@ -12,6 +12,7 @@ Scope parameters (most GET endpoints): `site`, `range` (15m…30d) or `from`/`to
 | GET | /netmon/api/connections | conversations; `dir=in|out|unknown`, `proto`, `port`, `rip` |
 | GET | /netmon/api/countries, /api/country, /api/country/{cc}/blocks | traffic and logged blocks by country, policy per site |
 | GET | /netmon/api/firewall, /api/ids, /api/sources | firewall events, IDS alerts, telemetry source state |
+| GET | /netmon/api/onboarding?site= | onboarding test for one firewall: source states, quality rows, NAT tiers (15 min), current guided validation (404 for a firewall the user may not see) |
 | GET | /netmon/api/alert/{id}/traffic | traffic behind a finding |
 | GET | /netmon/api/search, /api/name | search (partial IPs/CIDRs), name lookup |
 | POST | /netmon/api/geocode | site location lookup |

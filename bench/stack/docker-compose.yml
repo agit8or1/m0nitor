@@ -1,0 +1,63 @@
+# Isolated end-to-end benchmark stack for `bench.py pipeline`: the same Akvorado, Kafka and ClickHouse images as the
+# monitoring stack, under its own compose project, network and volumes. No ports are published: the generator sends
+# to the inlet's address on the bench network. Synthetic flows only; never point a firewall at it.
+#   docker compose -f bench/stack/docker-compose.yml up -d        # start (about a minute until healthy)
+#   docker compose -f bench/stack/docker-compose.yml down -v      # remove it and its data afterwards
+name: m0nitor-bench
+x-akvorado: &akv
+  image: quay.io/akvorado/akvorado:2026.10.1
+  restart: "no"
+  networks: [bench]
+services:
+  kafka:
+    image: apache/kafka:4.3.2
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: CLIENT://:9092,CONTROLLER://:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CLIENT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: CLIENT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: CLIENT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes: [kafka:/var/lib/kafka/data]
+    networks: [bench]
+    healthcheck:
+      interval: 10s
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--list", "--bootstrap-server", "kafka:9092"]
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3
+    environment:
+      CLICKHOUSE_INIT_TIMEOUT: 60
+      CLICKHOUSE_SKIP_USER_SETUP: 1
+    volumes: [clickhouse:/var/lib/clickhouse]
+    networks: [bench]
+    cap_add: [SYS_NICE]
+    healthcheck:
+      interval: 10s
+      test: ["CMD", "wget", "-T", "1", "--spider", "--no-proxy", "http://127.0.0.1:8123/ping"]
+  akvorado-orchestrator:
+    <<: *akv
+    command: orchestrator /etc/akvorado/akvorado.yaml
+    volumes: [./config:/etc/akvorado:ro]
+    depends_on: {kafka: {condition: service_healthy}}
+  akvorado-inlet:
+    <<: *akv
+    command: inlet http://akvorado-orchestrator:8080
+    depends_on: {akvorado-orchestrator: {condition: service_healthy}, kafka: {condition: service_healthy}}
+  akvorado-outlet:
+    <<: *akv
+    command: outlet http://akvorado-orchestrator:8080
+    depends_on: {akvorado-orchestrator: {condition: service_healthy}, kafka: {condition: service_healthy},
+                 clickhouse: {condition: service_healthy}}
+networks:
+  bench: {}
+volumes:
+  kafka:
+  clickhouse:

@@ -8,8 +8,9 @@
       per core. It does NOT measure end-to-end flow capacity (no UDP decoding, Kafka or Akvorado outlet), so it never
       writes sustained_flows_per_s and the Capacity Planner keeps CPU capacity UNKNOWN on its account.
 
-  bench.py pipeline --inlet HOST:PORT --clickhouse-container NAME --i-confirm-isolated-stack
+  bench.py pipeline --clickhouse-container NAME --i-confirm-isolated-stack [--inlet HOST:PORT]
                     [--kind netflow9] [--rates 500,1000,2000,4000] [--step-seconds 60] [--out DIR]
+      (bench/stack/docker-compose.yml is a ready isolated stack: --clickhouse-container m0nitor-bench-clickhouse-1)
       End to end against a NON-PRODUCTION install (synthetic records would mix with real data otherwise): sends paced
       synthetic flows (flowgen.py) at each rate and counts the rows that reach that stack's ClickHouse. sustained_flows_per_s
       is the highest rate with < 1 % loss and no growing backlog. Only this mode feeds the planner's BENCHMARKED figures.
@@ -255,48 +256,156 @@ def component(a):
 
 
 # ------------------------------------------------------------------------------------------------ pipeline
+COUNTED = "SELECT count() FROM flows WHERE NOT (Proto = 17 AND DstPort = 9)"    # excludes flowgen marker flows
+
+
+def container_ip(name):
+    return sh("docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", name).split()[0]
+
+
+def metrics(url):
+    """Prometheus text -> {name: summed value} (labels folded). None when unreachable."""
+    import urllib.request
+    try:
+        text = urllib.request.urlopen(url, timeout=5).read().decode()
+    except OSError:
+        return None
+    out = {}
+    for line in text.splitlines():
+        if line and not line.startswith("#"):
+            name, _, v = line.rpartition(" ")
+            try:
+                out[name.split("{")[0]] = out.get(name.split("{")[0], 0.0) + float(v)
+            except ValueError:
+                pass
+    return out
+
+
+def counters(inlet_url, outlet_url):
+    i, o = metrics(inlet_url) or {}, metrics(outlet_url) or {}
+    return {"udp_dropped": i.get("akvorado_inlet_flow_input_udp_in_dropped_packets_total", 0) + i.get("akvorado_inlet_flow_input_udp_errors_total", 0),
+            "udp_packets": i.get("akvorado_inlet_flow_input_udp_packets_total", 0),
+            "decoded_flows": o.get("akvorado_outlet_flow_decoder_flows_total", 0),
+            "decoder_errors": sum(v for k, v in o.items() if k.startswith("akvorado_outlet_flow_decoder") and "error" in k),
+            "kafka_lag": o.get("akvorado_outlet_kafkainput_consumergroup_lag_messages", 0), "reachable": bool(i and o)}
+
+
+def storage(ch):
+    rows = chq(ch, "SELECT table, sum(bytes_on_disk), sum(rows) FROM system.parts WHERE database = 'default' AND active "
+                   "AND table LIKE 'flows%' GROUP BY table").splitlines()
+    t = {r.split("\t")[0]: (int(r.split("\t")[1]), int(r.split("\t")[2])) for r in rows if r}
+    return {"flows_bytes": t.get("flows", (0, 0))[0], "flows_rows": t.get("flows", (0, 0))[1],
+            "all_flow_tables_bytes": sum(v[0] for v in t.values()), "tables": {k: v[0] for k, v in t.items()}}
+
+
+def retention(ch):
+    out = {}
+    for line in chq(ch, "SELECT name, engine_full FROM system.tables WHERE database = 'default' AND name LIKE 'flows%'").splitlines():
+        name, _, eng = line.partition("\t")
+        m = re.search(r"TTL\s+(.+?)(?:\s+SETTINGS|$)", eng)
+        if m and not name.endswith("_local") and "consumer" not in name:
+            out[name] = m.group(1).strip()
+    return out
+
+
 def pipeline(a):
     if not a.i_confirm_isolated_stack:
         sys.exit("pipeline mode writes synthetic flows into the target stack; pass --i-confirm-isolated-stack for a non-production install")
     if a.clickhouse_container in PROD_HINTS and not a.allow_default_names:
         sys.exit(f"{a.clickhouse_container} is the default production container name; run the benchmark stack under its own "
                  "compose project name (or pass --allow-default-names on a dedicated benchmark host)")
+    import threading
     hw, before = hardware(), host_load()
     ch = a.clickhouse_container
+    inlet_c = a.inlet_container or ch.replace("clickhouse", "akvorado-inlet")
+    outlet_c = a.outlet_container or ch.replace("clickhouse", "akvorado-outlet")
+    target = a.inlet or f"{container_ip(inlet_c)}:2055"
+    iu = f"http://{container_ip(inlet_c)}:8080/api/v0/inlet/metrics"
+    ou = f"http://{container_ip(outlet_c)}:8080/api/v0/outlet/metrics"
     ver = chq(ch, "SELECT version()").strip()
+    images = {c: sh("docker", "inspect", "-f", "{{.Config.Image}}", c, check=False).strip() or None
+              for c in (inlet_c, outlet_c, ch, ch.replace("clickhouse", "kafka"))}
+    # marker trickle: keeps the collector flushing its batches (a quiet exporter's last batch otherwise waits for the
+    # next flow) and primes the v9/IPFIX template; marker flows are excluded from every count
+    stop = threading.Event()
+    mk = threading.Thread(target=flowgen.send, args=(a.kind, target, 20, 10 ** 9), kwargs={"per_packet": 1, "seed": 99, "marker": True,
+                                                                                         "stop": stop}, daemon=True)
+    mk.start()
+    time.sleep(15)
     steps, best = [], None
     started = time.time()
-    for rate in [float(x) for x in a.rates.split(",")]:
-        c0 = int(chq(ch, "SELECT count() FROM flows").strip())
-        s = flowgen.send(a.kind, a.inlet, rate, a.step_seconds)
-        time.sleep(a.settle)
-        c1 = int(chq(ch, "SELECT count() FROM flows").strip())
-        time.sleep(10)
-        c2 = int(chq(ch, "SELECT count() FROM flows").strip())
-        got = c2 - c0
-        loss = max(0.0, 1 - got / s["records"]) if s["records"] else None
-        step = {"target_rate": rate, "sent": s["records"], "achieved_send_rate": s["achieved_rate"], "ingested": got,
-                "dropped": max(0, s["records"] - got), "loss_frac": round(loss, 4) if loss is not None else None,
-                "still_arriving_after_settle": c2 - c1, "send_errors": s["send_errors"]}
-        steps.append(step)
-        print(json.dumps(step), file=sys.stderr)
-        sender_ok = s["achieved_rate"] >= 0.97 * rate
-        if loss is not None and loss < 0.01 and step["still_arriving_after_settle"] == 0 and sender_ok:
-            best = rate
-        elif not sender_ok:
-            step["note"] = "the generator could not reach this rate on this host; run flowgen from a second machine"
-            break
-        else:
-            break
+    st0 = storage(ch)
+    try:
+        for rate in [float(x) for x in a.rates.split(",")]:
+            c0, k0, s0 = int(chq(ch, COUNTED).strip()), counters(iu, ou), storage(ch)
+            t0 = time.time()
+            s = flowgen.send(a.kind, target, rate, a.step_seconds, seed=int(rate))
+            time.sleep(a.settle)
+            c1 = int(chq(ch, COUNTED).strip())
+            time.sleep(10)
+            c2, k1, s1 = int(chq(ch, COUNTED).strip()), counters(iu, ou), storage(ch)
+            got = c2 - c0
+            loss = max(0.0, 1 - got / s["records"]) if s["records"] else None
+            step = {"target_rate": rate, "sent": s["records"], "offered_flows_per_s": s["achieved_rate"], "ingested": got,
+                    "ingested_flows_per_s": round(got / s["seconds"], 1) if s["seconds"] else None,
+                    "dropped": max(0, s["records"] - got), "loss_frac": round(loss, 4) if loss is not None else None,
+                    "still_arriving_after_settle": c2 - c1, "send_errors": s["send_errors"], "step_wall_s": round(time.time() - t0, 1),
+                    "collector_udp_drops": int(k1["udp_dropped"] - k0["udp_dropped"]) if k1["reachable"] else None,
+                    "decoder_errors": int(k1["decoder_errors"] - k0["decoder_errors"]) if k1["reachable"] else None,
+                    "kafka_lag_after": int(k1["kafka_lag"]) if k1["reachable"] else None,
+                    "storage_growth_bytes": s1["flows_bytes"] - s0["flows_bytes"],
+                    "storage_growth_all_tables_bytes": s1["all_flow_tables_bytes"] - s0["all_flow_tables_bytes"]}
+            steps.append(step)
+            print(json.dumps(step), file=sys.stderr)
+            sender_ok = s["achieved_rate"] >= 0.97 * rate
+            if loss is not None and loss < 0.01 and step["still_arriving_after_settle"] == 0 and sender_ok:
+                best = rate
+            elif not sender_ok:
+                step["note"] = "the generator could not reach this rate on this host; run flowgen from a second machine"
+                break
+            else:
+                break
+    finally:
+        stop.set()
+        mk.join(timeout=5)
+    time.sleep(5)
+    chq(ch, "OPTIMIZE TABLE flows FINAL") if a.optimize else None
+    st1 = storage(ch)
+    t1 = int(time.time())
+    wall = {}
+    for name, q in QUERIES.items():
+        for i in range(a.repeats):
+            s_ = time.perf_counter()
+            chq(ch, q.format(t1=t1), fmt="Null", tag=f"pq:{name}#{i}:{started:.0f}")
+            wall.setdefault(name, []).append((time.perf_counter() - s_) * 1000)
+    srv = server_ms(ch, "pq:")
+    qres = {n: {"server_p50_ms": round(statistics.median(srv.get(f"pq:{n}", [0])), 1), "server_max_ms": round(max(srv.get(f"pq:{n}", [0])), 1),
+                "wall_p50_ms": round(statistics.median(w), 1), "runs": len(w)} for n, w in wall.items()}
+    rows = st1["flows_rows"]
+    bpr = round(st1["flows_bytes"] / rows, 2) if rows else None
+    ret = retention(ch)
+    raw_days = None
+    m = re.search(r"toIntervalSecond\((\d+)\)", ret.get("flows", ""))
+    if m:
+        raw_days = int(m.group(1)) / 86400
     after = host_load()
+    proj = (round(bpr * best * 86400 * raw_days / 1e9, 1) if bpr and best and raw_days else None)
     res = {"scope": "pipeline", "ts": time.time(), "duration_s": round(time.time() - started, 1),
            "hardware": {**hw, "bench_cpus": hw["cpus"]},
-           "versions": {"clickhouse": ver, "netmon_image": app_image(), "bench": "1"},
-           "workload": {"kind": a.kind, "step_seconds": a.step_seconds, "rates": a.rates},
+           "versions": {"clickhouse": ver, "images": images, "netmon_image": app_image(), "bench": "2"},
+           "workload": {"kind": a.kind, "step_seconds": a.step_seconds, "rates": a.rates, "settle_s": a.settle,
+                        "marker_flows_per_s": 20, "records_per_packet": {"netflow5": 30, "netflow9": 28, "ipfix": 20}[a.kind]},
            "environment": {"before": before, "after": after, "shared_host": before["other_containers"] > 0,
-                           "generator_on_same_host": True},
-           "result": {"steps": steps, **({"sustained_flows_per_s": best} if best else {})},
-           "notes": ["synthetic flows; the generator shares CPU with the stack when run on the same host (a lower bound)"]}
+                           "generator_on_same_host": True, "target": "isolated bench stack"},
+           "retention": {"ttl": ret, "raw_days": raw_days},
+           "result": {"steps": steps, **({"sustained_flows_per_s": best} if best else {}),
+                      "rows_total": rows, "storage": {"start": st0, "end": st1, "growth_bytes": st1["flows_bytes"] - st0["flows_bytes"],
+                                                      "growth_all_tables_bytes": st1["all_flow_tables_bytes"] - st0["all_flow_tables_bytes"]},
+                      "bytes_per_row_raw": bpr, "projected_raw_storage_gb_at_sustained_rate": proj, "queries": qres},
+           "notes": ["synthetic flows; the generator shares CPU with the stack when run on the same host (a lower bound)",
+                     "storage measured right after insertion: background merges still compress further; bytes/row of synthetic "
+                     "flows differs from real traffic",
+                     "query latency over the rows this run inserted (small dataset): compare with the component run for a 24 h dataset"]}
     print(json.dumps(res, indent=1))
     print("wrote", write(a.out, res), file=sys.stderr)
 
@@ -314,8 +423,12 @@ def main():
     c.add_argument("--parse-seconds", type=float, default=10)
     c.add_argument("--out", default="/opt/netmon/data/benchmarks")
     p = sp.add_parser("pipeline")
-    p.add_argument("--inlet", required=True)
+    p.add_argument("--inlet", help="HOST:PORT (default: the inlet container's address on its network, port 2055)")
     p.add_argument("--clickhouse-container", required=True)
+    p.add_argument("--inlet-container")
+    p.add_argument("--outlet-container")
+    p.add_argument("--repeats", type=int, default=7)
+    p.add_argument("--optimize", action="store_true", help="OPTIMIZE ... FINAL before measuring storage (slower, smaller)")
     p.add_argument("--kind", default="netflow9", choices=("netflow5", "netflow9", "ipfix"))
     p.add_argument("--rates", default="500,1000,2000,4000,8000")
     p.add_argument("--step-seconds", type=float, default=60)

@@ -1,0 +1,29 @@
+---
+# Interface names for flowgen's ifindexes (1 = WAN, 2 = LAN) from any exporter address; no GeoIP, no SNMP.
+geoip:
+  optional: true
+networks:
+  networks:
+    10.0.0.0/8: {name: bench-lan, role: internal}
+metadata:
+  providers:
+    - type: static
+      exporters:
+        0.0.0.0/0:
+          name: bench-fw
+          default: {name: unknown, description: unmapped ifindex, speed: 0}
+          ifindexes:
+            1: {name: wan0, description: "WAN", speed: 10000}
+            2: {name: lan0, description: "LAN", speed: 10000}
+        ::/0:
+          name: bench-fw
+          default: {name: unknown, description: unmapped ifindex, speed: 0}
+          ifindexes:
+            1: {name: wan0, description: "WAN", speed: 10000}
+            2: {name: lan0, description: "LAN", speed: 10000}
+core:
+  default-sampling-rate: 1
+  exporter-classifiers: ['ClassifySite("bench")', 'ClassifyRole("firewall")']
+  interface-classifiers:
+    - Interface.Description == "WAN" && ClassifyExternal()
+    - ClassifyInternal()

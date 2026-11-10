@@ -27,21 +27,40 @@ sudo python3 bench/bench.py component            # defaults: --cpus 4 --memory 4
 What it does **not** measure: UDP decoding, Kafka and the Akvorado outlet. A component result therefore never sets
 `sustained_flows_per_s`, and the planner keeps CPU capacity UNKNOWN on its account.
 
-### `bench.py pipeline`: end to end, against a stack you name
+### `bench.py pipeline`: end to end, against an isolated stack
 
 ```sh
-python3 bench/bench.py pipeline --inlet 127.0.0.1:2055 --clickhouse-container bench-clickhouse-1 \
-        --i-confirm-isolated-stack [--kind netflow9] [--rates 500,1000,2000,4000,8000] [--step-seconds 60]
+sudo docker compose -f bench/stack/docker-compose.yml up -d          # isolated stack (project m0nitor-bench)
+sudo python3 bench/bench.py pipeline --clickhouse-container m0nitor-bench-clickhouse-1 --i-confirm-isolated-stack \
+        [--kind netflow9] [--rates 1000,2000,4000,8000,16000,32000,64000] [--step-seconds 60] [--settle 30]
+sudo docker compose -f bench/stack/docker-compose.yml down -v        # remove it and its data
 ```
 
+`bench/stack/` runs the same Akvorado, Kafka and ClickHouse images as the monitoring stack, with the same inlet
+settings (4 workers, 212,992-byte receive buffer), ClickHouse resolutions and TTLs. It uses its own compose project,
+network and volumes, and publishes no ports. The generator sends to the inlet's address on the bench network.
+
 This mode sends paced synthetic flows (`bench/flowgen.py`: NetFlow v5, v9 or IPFIX) at each rate in turn and counts
-the rows that arrive in that stack's ClickHouse. The result is the highest rate with under 1 % loss, no backlog still
-arriving after the settle time, and a generator that actually reached the rate. Only this mode writes
-`sustained_flows_per_s`, which the planner shows as BENCHMARKED when CPU model and vCPU count match the server.
+the rows that arrive in that stack's ClickHouse. Per step it records:
+
+* offered and ingested flows/s and dropped records;
+* the collector's UDP drops and decoder errors, and the Kafka consumer lag afterwards;
+* storage growth.
+
+After the last step it records retention (the TTL of every flow table), bytes per row, query latency (the
+component-run queries, server-side and wall-clock), the image versions and the run's duration. The result is the highest
+rate with under 1 % loss, no backlog still arriving after the settle time, and a generator that actually reached the
+rate. Only this mode writes `sustained_flows_per_s`. The planner shows that figure as BENCHMARKED when the CPU model and
+vCPU count match the server.
+
+A trickle of 20 marker flows/s (UDP to port 9 from 10.98.0.0/16, a combination normal flowgen records never use) runs
+for the whole benchmark and is excluded from every count. Akvorado's outlet sends a partial batch to ClickHouse only
+when the next flow arrives, so without the trickle the tail of each step would be counted in the next step. The
+trickle also delivers the NetFlow v9 / IPFIX template before the first measured record.
 
 **Run it against a separate install, never production**: synthetic records cannot be told apart from real ones once
 stored. The flag is mandatory, and the default production container name is refused. Run the generator from a second
-machine for rates the stack's own host cannot generate; the result records whether the generator shared the host.
+machine for rates the stack's own host cannot generate. The result records whether the generator shared the host.
 
 sFlow is not generated. sFlow carries sampled packet headers, not flow records, so it needs a real exporter.
 
@@ -103,5 +122,55 @@ filterlog line costs. Neither is an end-to-end capacity.
 
 ### Pipeline runs
 
-None yet; the pipeline mode has not been run against a stack. Until a result exists, the planner and [hardware sizing](hardware-sizing.md) give no flows/s capacity for any
-hardware.
+#### End to end, 2026-11-10 (NetFlow v9)
+
+| | |
+|---|---|
+| Hardware | KVM VM, 48 vCPU Intel Xeon Gold 5120 @ 2.20 GHz, 31 GB RAM, virtual disk (QEMU, reported rotational) |
+| Versions | Akvorado 2026.10.1 (inlet, outlet, orchestrator), Kafka 4.3.2, ClickHouse 26.3.62.3; harness 2 (`bench/stack/`) |
+| Conditions | **shared host**: the production stack (12 containers) kept running, load average 38.5 at the start and 22.8 at the end; the generator (one Python process) ran on the same host. Figures are a **lower bound** |
+| Workload | synthetic NetFlow v9, 28 records per packet, steps of 60 s at 1,000 → 64,000 flows/s, 30 s settle; marker trickle 20 flows/s |
+| Duration | 741 s |
+| Retention | raw flows 30 days, 1-minute aggregates 7 days, 5-minute 90 days, 1-hour 1 year (TTL of each table, as the monitoring stack) |
+
+| Offered flows/s | Ingested flows/s | Sent | Dropped | Collector UDP drops | Decoder errors | Queue lag after | Raw storage growth |
+|---|---|---|---|---|---|---|---|
+| 1,000 | 1,000 | 60,004 | 0 | 0 | 0 | 14 | 0.96 MB |
+| 2,000 | 2,000 | 120,008 | 0 | 0 | 0 | 20 | 1.96 MB |
+| 4,000 | 4,000 | 240,016 | 0 | 0 | 0 | 4 | 3.78 MB |
+| 8,000 | 8,000 | 480,004 | 0 | 0 | 0 | 27 | 7.57 MB |
+| 16,000 | 16,000 | 960,008 | 0 | 0 | 0 | 19 | 14.98 MB |
+| 32,000 | 32,000 | 1,920,016 | 0 | 0 | 0 | 12 | 29.62 MB |
+| 48,207 (64,000 requested) | 48,208 | 2,892,456 | 0 | 0 | 0 | 18 | 44.91 MB |
+
+* **Sustained: 32,000 flows/s** (the highest step the generator reached at its target rate, with 0 % loss). At the
+  64,000 step the single-process generator topped out at 48,207 flows/s. The stack ingested every record of that step
+  too, so the ceiling of this stack on this hardware was **not reached**. A generator on a second machine is needed to
+  find it.
+* Storage: 6.7 million rows, 15.5 bytes per raw row right after insertion (background merges still compress further;
+  synthetic rows compress differently from real flows, which store at ≈10 B/row on this host). The aggregate tables
+  added nothing measurable at this point (`flows_1m0s` etc. are small). At 32,000 flows/s, 30 days of raw retention
+  would need about 1.3 TB at 15.5 B/row: size the disk from your own flow rate (the planner does this).
+* Query latency after the run, over the 6.7 million rows it inserted, 7 runs each:
+
+| Query | Server p50 | Server max | Wall-clock p50 |
+|---|---|---|---|
+| traffic per minute, last hour | 63 ms | 375 ms | 491 ms |
+| top destinations, last hour | 79 ms | 1,329 ms | 308 ms |
+| top ports, 24 h | 61 ms | 78 ms | 287 ms |
+| one host's traffic, 24 h | 60 ms | 1,150 ms | 307 ms |
+| country pairs, 24 h | 29 ms | 60 ms | 255 ms |
+
+  The occasional maxima above 1 s coincide with the host's production load. This dataset is smaller than a day at
+  these rates: for latency over a full 24 h dataset see the component run above.
+
+What it means: on this hardware, sharing the host with production, the collector path takes at least 48,000
+NetFlow v9 records/s without loss. That is roughly 100 times the reference installation's flow rate. The figure applies
+to NetFlow v9 from one exporter with synthetic records. IPFIX, NetFlow v5, sFlow, many exporters, or a real firewall's
+export behaviour (bursts at active-timeout boundaries) can differ and have not been measured.
+
+#### Real devices
+
+No real-device throughput or attribution run exists for **pfSense** or **FortiGate**: no field hardware was available.
+These paths remain fixture-only and their claims unverified. The procedure to measure them, including the onboarding
+test, the export check and the guided NAT validation, is in [field validation](field-validation.md).

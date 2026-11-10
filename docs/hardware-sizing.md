@@ -18,7 +18,10 @@ system.
 
 The storage column uses the bytes per row measured on the reference installation (≈10 B per flow row, ≈12 B per
 firewall log row) with the default retention, and includes ClickHouse's own logs, Kafka and the OS. Rows 2 and 3
-give no CPU figure on purpose: the monitor has not been measured at those rates.
+give no CPU figure on purpose: the monitor has not been measured at those rates on a sized machine. One end-to-end
+measurement exists on a 48 vCPU host shared with production: 0 % loss up to 48,000 NetFlow v9 records/s, a lower
+bound with the ceiling not reached ([pipeline run](performance-benchmarks.md#pipeline-runs)). It shows the collector
+path is not the limit at these rates on that host. It does not size a smaller machine.
 
 ## Measured reference point
 

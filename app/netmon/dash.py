@@ -114,6 +114,7 @@ class Dash:
     def __init__(self, cfg, ch):
         self.cfg, self.ch = cfg, ch
         self._cache, self._lock = {}, threading.Lock()
+        self.quality_source = None     # callable -> recorded collection quality (netmon.onboarding), set by web
         from .rdns import RDNS
         self.rdns = RDNS(cfg)          # reverse DNS names for tooltips and endpoint tables
 
@@ -427,51 +428,92 @@ class Dash:
             h["in_bps"], h["out_bps"] = h["rx"] * 8 / sc.span, h["tx"] * 8 / sc.span
         return {"servers": out, "unattributed_nat_tx": att["unattributed"], "nat_attribution": att}
 
-    def nat_attribution(self, sc: Scope):
+    def nat_ips(self, sites):
+        """Shared outbound NAT addresses of these firewalls (each site's own list; the first site inherits the legacy
+        top-level setting). Never another firewall's addresses."""
+        return sorted({ip for s in sites for ip in (s.get("outbound_nat_ips") or [])})
+
+    def nat_attribution(self, sc: Scope, quality=None):
         """Attribute shared-NAT (post-NAT) upload bytes to LAN hosts from the return path.
 
         The WAN egress record of a NATed connection carries only the shared address. When the remote end answers, the
-        reply leaves the LAN bridge towards the real host, and that record (InIf=WAN -> LAN, destination = host) is
-        exported too. An egress group (remote address, remote port, protocol) is matched to the host(s) that received
-        traffic from that same remote address and port: exactly one host in the same minute -> "high", in the same
-        5 minutes -> "medium", anywhere in the window -> "low"; several hosts -> "ambiguous" (never split); none ->
-        no LAN return path: unanswered, or originated by the firewall itself (an empty input interface alone does not
-        prove that). TCP egress flows with SYN and never ACK are counted separately as unanswered attempts.
+        reply leaves the LAN interface towards the real host, and that record (InIf=WAN -> LAN, destination = host) is
+        exported too. An egress group (exporter, remote address, remote port, protocol) is matched to the internal
+        host(s) that received traffic from that same remote address and port ON THE SAME EXPORTER: exactly one host in
+        the same minute -> "high", in the same 5 minutes -> "medium", anywhere in the window -> "low"; several hosts ->
+        "ambiguous" (never split); none -> "no_return" (unanswered, firewall-originated, or the reply took another
+        path: asymmetric routing). Bytes of TCP egress flows with SYN and never ACK are always "unanswered", never
+        attributed, even when another host's answered connection shares the group. Capture (WAN-only) exporters have
+        no LAN-side records: their egress is "wan_only". Return evidence counts only addresses inside the firewall's
+        internal networks, so a reply to the NAT address itself (WAN-only capture) is never mistaken for a host.
+
+        Collection problems recorded for the window (export loss, duplicate exports: `quality`, see
+        netmon.onboarding.caps) can only LOWER tiers: a lost return record can hide a second host, so a single-host
+        result is no longer proof. Moved bytes are reported in "capped" with the reasons.
         The accounting boundary is unchanged (WAN egress bytes); this only says whose bytes they are."""
-        nat = self.cfg.get("outbound_nat_ips", [])
-        empty = {"hosts": [], "high": 0, "medium": 0, "low": 0, "ambiguous": 0, "no_return": 0, "unanswered": 0, "unanswered_flows": 0,
-                 "unattributed": 0, "total": 0, "nat_ips": nat}
+        from .onboarding import TIERS, cap_tier, caps
+        nat = self.nat_ips(sc.sites)
+        empty = {"hosts": [], **{t: 0 for t in TIERS}, "unanswered_flows": 0, "unattributed": 0, "total": 0, "nat_ips": nat,
+                 "capped": {"bytes": 0, "reasons": []}, "limits": []}
         if not nat:
             return empty
-        ret = lambda bucket: f"""SELECT {bucket} AS b, SrcAddr AS x, SrcPort AS p, Proto AS pr, groupUniqArray(3)({IPS.format(c='DstAddr')}) AS hosts
-                  FROM flows WHERE {self.where(sc)} AND INB AND TOLAN GROUP BY b, x, p, pr"""
+        if quality is None and self.quality_source:
+            quality = self.quality_source()
+        cap = caps(quality, sc.sites, sc.start, sc.end)
+        inets = sorted({str(n) for s in sc.sites for n in (s.get("internal_nets") or [])}) or [str(n) for n in self.cfg.internal_nets]
+        cap_exps = [s["exporter"] for s in sc.sites if s.get("flow_mode") == "capture"]
+        lan = (f"arrayExists(n -> isIPAddressInRange({IPS.format(c='DstAddr')}, n), {{inets:Array(String)}}) "
+               f"AND NOT {ip_set('DstAddr', 'nat')} AND ExporterName NOT IN {{capx:Array(String)}}")
+        ret = lambda bucket: f"""SELECT {bucket} AS b, ExporterName AS ex, SrcAddr AS x, SrcPort AS p, Proto AS pr,
+                  groupUniqArray(3)({IPS.format(c='DstAddr')}) AS hosts
+                  FROM flows WHERE {self.where(sc)} AND INB AND TOLAN AND {lan} GROUP BY b, ex, x, p, pr"""
+        SYN = "Proto = 6 AND bitAnd(TCPFlags, 2) != 0 AND bitAnd(TCPFlags, 16) = 0"   # SYN seen, never ACK: unanswered attempt
         rows = self.q(sc, f"""
             WITH e AS (
-                SELECT toStartOfMinute(TimeReceived) AS m, toStartOfFiveMinutes(TimeReceived) AS b5, DstAddr AS x, DstPort AS p, Proto AS pr,
-                       sum(Bytes * SamplingRate) AS bytes,
-                       countIf(Proto = 6 AND bitAnd(TCPFlags, 2) != 0 AND bitAnd(TCPFlags, 16) = 0) AS syn_only
+                SELECT toStartOfMinute(TimeReceived) AS m, toStartOfFiveMinutes(TimeReceived) AS b5, ExporterName AS ex,
+                       DstAddr AS x, DstPort AS p, Proto AS pr,
+                       sumIf(Bytes * SamplingRate, NOT ({SYN})) AS bytes, sumIf(Bytes * SamplingRate, {SYN}) AS syn_bytes,
+                       countIf({SYN}) AS syn_only
                 FROM flows WHERE {self.where(sc)} AND OUTB AND {ip_set('SrcAddr', 'nat')}
-                GROUP BY m, b5, x, p, pr),
+                GROUP BY m, b5, ex, x, p, pr),
             r1 AS ({ret("toStartOfMinute(TimeReceived)")}),
             r5 AS ({ret("toStartOfFiveMinutes(TimeReceived)")}),
-            w AS ({ret("toDateTime(0)")})
-            SELECT multiIf(length(r1.hosts) = 1, 'high', length(r1.hosts) = 0 AND length(r5.hosts) = 1, 'medium',
-                           length(r1.hosts) = 0 AND length(r5.hosts) = 0 AND length(w.hosts) = 1, 'low',
-                           length(r1.hosts) > 1 OR length(r5.hosts) > 1 OR length(w.hosts) > 1, 'ambiguous', e.syn_only > 0, 'unanswered', 'no_return') AS conf,
-                   multiIf(conf = 'high', r1.hosts[1], conf = 'medium', r5.hosts[1], conf = 'low', w.hosts[1], '') AS host,
-                   sum(e.bytes) AS nbytes, sum(e.syn_only) AS syn_n, count() AS groups
-            FROM e LEFT JOIN r1 ON e.m = r1.b AND e.x = r1.x AND e.p = r1.p AND e.pr = r1.pr
-                   LEFT JOIN r5 ON e.b5 = r5.b AND e.x = r5.x AND e.p = r5.p AND e.pr = r5.pr
-                   LEFT JOIN w ON e.x = w.x AND e.p = w.p AND e.pr = w.pr
-            GROUP BY conf, host""", {"nat": nat}, ttl=30)
-        out = {**empty, "hosts": []}
+            w AS ({ret("toDateTime(0)")}),
+            j AS (
+                SELECT e.ex AS ex, e.bytes AS bytes, e.syn_bytes AS syn_bytes, e.syn_only AS syn_only,
+                       multiIf(has({{capx:Array(String)}}, e.ex), 'wan_only', length(r1.hosts) = 1, 'high',
+                               length(r1.hosts) = 0 AND length(r5.hosts) = 1, 'medium',
+                               length(r1.hosts) = 0 AND length(r5.hosts) = 0 AND length(w.hosts) = 1, 'low',
+                               length(r1.hosts) > 1 OR length(r5.hosts) > 1 OR length(w.hosts) > 1, 'ambiguous', 'no_return') AS c0,
+                       multiIf(c0 = 'high', r1.hosts[1], c0 = 'medium', r5.hosts[1], c0 = 'low', w.hosts[1], '') AS h0
+                FROM e LEFT JOIN r1 ON e.m = r1.b AND e.ex = r1.ex AND e.x = r1.x AND e.p = r1.p AND e.pr = r1.pr
+                       LEFT JOIN r5 ON e.b5 = r5.b AND e.ex = r5.ex AND e.x = r5.x AND e.p = r5.p AND e.pr = r5.pr
+                       LEFT JOIN w ON e.ex = w.ex AND e.x = w.x AND e.p = w.p AND e.pr = w.pr)
+            SELECT t.1 AS conf, t.2 AS host, ex, sum(t.3) AS nbytes, sum(if(t.1 = 'unanswered', syn_only, 0)) AS syn_n, count() AS groups
+            FROM j ARRAY JOIN [(c0, h0, bytes), ('unanswered', '', syn_bytes)] AS t
+            WHERE t.3 > 0 OR (t.1 = 'unanswered' AND syn_only > 0)
+            GROUP BY conf, host, ex""", {"nat": nat, "inets": inets, "capx": cap_exps}, ttl=30)
+        out = {**empty, "hosts": [], "capped": {"bytes": 0, "reasons": []}, "limits": []}
+        hosts, reasons = {}, []
         for r in rows:
-            out[r["conf"]] += int(r["nbytes"])
-            out["total"] += int(r["nbytes"])
+            conf, nb = r["conf"], int(r["nbytes"])
+            c = cap.get(r["ex"])
+            if c and conf in ("high", "medium", "low"):
+                new = cap_tier(conf, c["max"])
+                if new != conf:
+                    out["capped"]["bytes"] += nb
+                    reasons += [x for x in c["reasons"] if x not in reasons]
+                    conf = new
+            out[conf] += nb
+            out["total"] += nb
             out["unanswered_flows"] += int(r["syn_n"])
             if r["host"]:
-                out["hosts"].append({"host": r["host"], "bytes": int(r["nbytes"]), "confidence": r["conf"]})
-        out["unattributed"] = out["ambiguous"] + out["no_return"] + out["unanswered"]
+                k = (r["host"], conf)
+                hosts[k] = hosts.get(k, 0) + nb
+        out["hosts"] = [{"host": h, "bytes": b, "confidence": c} for (h, c), b in sorted(hosts.items(), key=lambda kv: -kv[1])]
+        out["capped"]["reasons"] = reasons
+        out["limits"] = sorted({x for c in cap.values() for x in c.get("notes", [])})
+        out["unattributed"] = out["ambiguous"] + out["no_return"] + out["unanswered"] + out["wan_only"]
         return out
 
     # ---- organizations / peers ----------------------------------------------------------

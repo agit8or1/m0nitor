@@ -13,14 +13,15 @@
 | **Investigation** — device identity, what changed, incidents, baselines, threat hunting, segmentation, applications, WAN / VPN quality, search, detection tests | [investigation.md](investigation.md) |
 | **Maps and traffic views** — arcs, tooltips, WAN aliases, reverse DNS | [maps.md](maps.md) |
 | **Findings and alerting** — rules, notifications, suppressions, auto-response | [alerting.md](alerting.md) |
-| **NAT attribution** — LAN hosts behind a shared outbound NAT address | [nat-attribution.md](nat-attribution.md) |
+| **NAT attribution** — LAN hosts behind a shared outbound NAT address; per-firewall onboarding test and guided validation | [nat-attribution.md](nat-attribution.md) |
+| **Field validation** — which vendor paths are verified on hardware, which are fixture-only, and the procedure to verify a device | [field-validation.md](field-validation.md) |
 | **GeoIP** — country policy vs. enforcement | [geoip.md](geoip.md) |
 | **Threat intelligence** — CVE enrichment for IDS findings and server software | [threat-intel.md](threat-intel.md) |
 | **Optional sources** — DNS names, Zeek, host logs | [dns-zeek-hostlogs.md](dns-zeek-hostlogs.md), [zeek-sensor.md](zeek-sensor.md) |
 | **Sizing** — hardware for a site, measured reference points | [hardware-sizing.md](hardware-sizing.md) |
 | **Capacity planning** — current load, what runs out first, planning a new installation | [capacity-planning.md](capacity-planning.md) |
 | **Firewall resources** — SNMP discovery, manual values, export cost, monitoring profiles | [firewall-resource-requirements.md](firewall-resource-requirements.md) |
-| **Benchmarks** — harness, result format, published results | [performance-benchmarks.md](performance-benchmarks.md) |
+| **Benchmarks** — harness, isolated end-to-end stack, result format, published results | [performance-benchmarks.md](performance-benchmarks.md) |
 | **Security and privacy** — ports, accounts, secrets, retention | [privacy-hardening.md](privacy-hardening.md), [../SECURITY.md](../SECURITY.md) |
 | **Architecture** — components, data flow, trust boundaries | [architecture.md](architecture.md) |
 | **API and storage** — HTTP API, ClickHouse and SQLite schema | [api.md](api.md) |

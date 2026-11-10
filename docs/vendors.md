@@ -66,9 +66,14 @@ sFlow v5 on 6343. Only registered device addresses are let through the host fire
 | Device ownership with two vendors plus Generic at once, malformed input, rate limits, OPNsense path unchanged | `tests/test_vendors.py` |
 | Onboarding validation, one sender per device, SNMPv3 secrets, RBAC, no blocking without an adapter | `tests/test_devices.py` |
 | Rules over device events (VPN, interface, routing, HA, config, failed logins) | `tests/test_vendors.py` |
+| NAT attribution on routed and WAN-only (capture) exporters: shared NAT, asymmetric routing, unanswered connections, clock skew, duplicate exports, export loss (real ClickHouse, synthetic rows) | `tests/test_nat_scenarios.py` |
+| Onboarding test: per-vendor guidance for missing sources, caps, export-check recording, guided validation, roles and per-firewall restrictions | `tests/test_onboarding.py` |
 
 The flow decoders in `netmon.flowdiag` are diagnostics: Akvorado remains the collector. Akvorado's own NetFlow/IPFIX/sFlow
 decoding is upstream code and is not re-tested here.
+
+Which of these paths have been checked on real hardware, which are covered by synthetic fixtures only, and the
+procedure to verify a device: [field validation](field-validation.md).
 
 ## Profiles
 

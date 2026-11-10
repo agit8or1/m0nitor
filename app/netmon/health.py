@@ -132,7 +132,7 @@ class Health:
         s = settings(self.conn)
         out = []
         for fn in (self.c_netflow, self.c_collector, self.c_syslog, self.c_suricata, self.c_clickhouse, self.c_storage,
-                   self.c_geoip, self.c_secrets, self.c_notifications, self.c_detector, self.c_snmp, self.c_clock, self.c_probes, self.c_optional):
+                   self.c_geoip, self.c_secrets, self.c_notifications, self.c_detector, self.c_snmp, self.c_clock, self.c_probes, self.c_optional, self.c_duplicates):
             try:
                 out += fn(s)
             except Exception as ex:
@@ -140,7 +140,7 @@ class Health:
         return self.apply_choices(out)
 
     # check id prefix -> per-firewall monitoring choice (ux.MONITOR_OPTIONS)
-    CHOICE = {"netflow": "flows", "templates": "flows", "syslog": "syslog", "ids": "ids", "snmp": "snmp", "fwres": "snmp", "dns": "dns", "probes": "probes"}
+    CHOICE = {"netflow": "flows", "templates": "flows", "dupflows": "flows", "syslog": "syslog", "ids": "ids", "snmp": "snmp", "fwres": "snmp", "dns": "dns", "probes": "probes"}
 
     def apply_choices(self, checks):
         """A source the user switched off for a firewall is 'not monitored (your choice)': never failing, never alerted."""
@@ -181,6 +181,9 @@ class Health:
                           action="Check the Akvorado containers (inlet, outlet, kafka, clickhouse).")]
         drops = msum(inl, "akvorado_inlet_flow_input_udp_in_dropped_packets_total") + msum(inl, "akvorado_inlet_flow_input_udp_errors_total")
         d = self._delta("udp_drops", drops)
+        if d:   # collector receive loss: NAT attribution in this window is capped (netmon.onboarding.caps)
+            from .onboarding import record_loss
+            record_loss(self.conn, d, "collector receive drops")
         out.append(check("collector:udp", "Flows", "Collector UDP receive loss", "warn" if d else "ok",
                          f"{int(d)} dropped/errored datagrams since last check" if d is not None else "first sample",
                          evidence=f"inlet counters: {int(drops)} dropped/errored datagrams since collector start",
@@ -458,6 +461,25 @@ class Health:
             out.append(check(f"clock:{row['site']}", "Monitor", f"Clock: firewall {row['site']} vs monitor", "warn" if abs(d) > s["clock_drift_s"] else "ok",
                              f"{d:+.0f} s (median of {int(row['n']):,} log lines)",
                              limits="Includes transport/ingest delay and 1 s timestamp resolution; measures drift only where logs flow."))
+        return out
+
+    def c_duplicates(self, s):
+        """Identical flow records per exporter (last 10 min): a duplicate export doubles bytes and caps NAT attribution."""
+        from .onboarding import DUP_FRAC, measure_duplicates, record_duplicates
+        per = measure_duplicates(self.ch, self.cfg.sites)
+        record_duplicates(self.conn, per)
+        out = []
+        for site in self.cfg.sites:
+            r = per.get(site["id"])
+            if not r:
+                continue
+            frac = r["dup"] / r["rows"] if r["rows"] else 0.0
+            bad = r["rows"] >= 50 and frac >= DUP_FRAC
+            out.append(check(f"dupflows:{site['id']}", "Flows", f"Duplicate flow exports ({site['name']})", "warn" if bad else "ok",
+                             f"{100 * frac:.2f}% identical records", evidence=f"{r['dup']:,} of {r['rows']:,} records in the last 10 minutes",
+                             limits="Identical second, addresses, ports, protocol, bytes, packets, interfaces and flags.",
+                             action="" if not bad else "Two export destinations reaching the monitor, two sampled interfaces or both HA "
+                                                       "members exporting. See Settings → Onboarding test."))
         return out
 
     def c_optional(self, s):

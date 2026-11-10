@@ -119,6 +119,7 @@ with sync_playwright() as p:
             shot(pg, "/netmon/servers?range=6h", "servers", 3000, sel="table tbody tr")
             shot(pg, "/netmon/servers/10.40.0.250?range=6h", "server-detail", 3500, sel=".srvaddrs")
             shot(pg, "/netmon/coverage", "coverage", 2000)
+            shot(pg, "/netmon/onboarding", "onboarding", 2500)
             shot(pg, "/netmon/settings", "settings", 2000)
             shot(pg, "/netmon/settings/devices", "devices", 2500)
             shot(pg, "/netmon/settings/devices/fgt-branch", "device-detail", 2500)

@@ -42,3 +42,12 @@ jobs:
         run: docker build --build-arg DEV=1 -t netmon-app:test app
       - name: pytest (synthetic fixtures only)
         run: docker run --rm --network none netmon-app:test python -m pytest -q -p no:cacheprovider tests
+      - name: NAT attribution scenarios against a throwaway ClickHouse (synthetic rows only)
+        env:
+          CH: clickhouse/clickhouse-server:26.3@sha256:de3e47c64078aa196dae2349e048fc98ba81947f651f5c20e06e46baea8ae40a
+        run: |
+          docker network create --internal natsc
+          docker run -d --name nat-ch --network natsc -e CLICKHOUSE_SKIP_USER_SETUP=1 "$CH"
+          for i in $(seq 60); do docker exec nat-ch clickhouse-client -q "SELECT 1" >/dev/null 2>&1 && break; sleep 1; done
+          docker run --rm --network natsc -e NETMON_TEST_CH_URL=http://nat-ch:8123/ netmon-app:test \
+            python -m pytest -q -p no:cacheprovider -rs tests/test_nat_scenarios.py

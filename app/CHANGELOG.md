@@ -3,6 +3,54 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.59 — 2026-11-10
+
+### Added
+- **Onboarding test per firewall** (Settings → Status → Onboarding test; summary for every firewall you can see on
+  Coverage). It checks whether WAN flows, LAN return flows, firewall logs and usable NAT evidence are arriving and fresh.
+  For each source that is missing, stale or not possible, it says which question you cannot answer yet and which
+  exporter or interface setting to check, written for the firewall's vendor (OPNsense, pfSense, FortiGate, generic). A
+  WAN interface name that does not match the records is named, with the interfaces actually seen. The test only reads
+  received data: it changes no firewall setting and sends no traffic.
+- **Collection quality** on the same page: export loss, duplicate exports, clock skew, asymmetric return paths and
+  WAN-only capture, each with its effect on attribution. The health loop now records collector receive drops and
+  measures identical flow records per exporter (new health check "Duplicate flow exports").
+- **Export check**: `python -m netmon.flowdiag ... --record` stores sequence gaps, duplicated export packets and
+  exporter clock drift for the matching firewall. flowdiag now counts repeated sequence numbers as duplicates instead
+  of exporter restarts.
+- **Guided NAT validation** (optional, analyst or admin): two hosts you operate, one destination you are authorised to
+  use. The page shows the upload commands to run on your hosts (the monitor sends nothing) and evaluates what was
+  attributed to which host. Simultaneous uploads must stay *ambiguous* and an unanswered attempt must stay
+  *unanswered*. The result per firewall is shown on Coverage. Actions are audited.
+
+### Fixed
+- **NAT attribution could overstate confidence.** On a WAN-only (capture) exporter the reply to the shared NAT address
+  counted as "one host", and the NAT address itself was reported at *high*. A reply that returned through a different
+  firewall confirmed another firewall's egress. Unanswered SYN bytes were added to a host whose answered connection
+  shared the remote address, port and minute. Now only addresses inside the firewall's internal networks count as
+  return evidence, pairing stays on one exporter, and SYN-only bytes are always *unanswered*. WAN-only egress has its
+  own tier, *wan_only*.
+- Recorded export loss caps single-host results at *low*, and recorded duplicate exports cap them at *medium*, in the
+  affected window; the moved bytes and reasons are shown. When export-path loss has never been measured for a firewall,
+  every attribution says so instead of assuming none.
+- A user limited to some firewalls no longer sees another firewall's shared NAT addresses or last NAT validation.
+
+### Tests
+- NAT attribution scenarios against a real (throwaway) ClickHouse: WAN-only capture, several hosts behind one shared
+  NAT, asymmetric routing, unanswered connections, clock skew / delayed export, duplicate exports, export loss and
+  per-firewall restrictions. None of these may raise a host's tier compared with the clean run of the same traffic.
+  CI runs them against a pinned ClickHouse image.
+- Onboarding page, vendor guidance, roles, CSRF, restricted users (404 for other firewalls), audit entries, ClickHouse
+  outage, and a guard that no firewall adapter is called.
+
+### Benchmarks
+- `bench.py pipeline` (end to end: UDP → Akvorado inlet → Kafka → outlet → ClickHouse) now records offered and
+  ingested flows/s per step, collector drops, decoder errors, queue lag, storage growth, retention (TTL per table),
+  query latency and image versions. A low-rate marker stream keeps the collector flushing and is excluded from counts.
+  `bench/stack/` is a ready isolated stack for it. First measured results: docs/performance-benchmarks.md.
+- docs/field-validation.md: which vendor paths are verified on hardware (OPNsense) and which are fixture-only
+  (pfSense, FortiGate and every other vendor), with a reproducible procedure. pfSense and FortiGate stay unverified.
+
 ## v1.58 — 2026-11-09
 
 ### Changed
