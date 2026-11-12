@@ -3,6 +3,13 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.62 — 2026-11-12
+
+### Fixed
+- **WAN bandwidth panel while loading.** On the Overview, the "Loading…" overlay made the bandwidth chart taller and
+  pushed the WAN utilization meters below it out of the panel. The chart now keeps its normal size while loading,
+  so the meters stay visible.
+
 ## v1.61 — 2026-11-12
 
 ### Added

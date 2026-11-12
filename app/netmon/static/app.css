@@ -520,7 +520,8 @@ form.askq label.grow input { flex: 1; min-width: 0; }
 @container (max-height: 290px) { .ovfit.fit .bwcard .bwsum { display: none; } }
 @container (max-width: 560px) { .ovfit.fit .bwcard .utilbar > b, .ovfit.fit .bwcard .utilbar > a.small { display: none; } }
 .ovfit.fit .ovrow > .card > [id^="t-"] { min-height: 0; }
-.ovfit.fit .ovrow > .card > .is-loading { flex: 1 1 auto; min-height: 104px; }   /* loading overlay needs the card's room */
+.ovfit.fit .ovrow > .card > .is-loading:not(.chart) { flex: 1 1 auto; min-height: 104px; }   /* loading overlay needs the card's room */
+.ovfit.fit .bwcard .chart.is-loading { min-height: 60px; }   /* the chart keeps its size: the meters below stay visible */
 .ov .map-card { height: auto; min-height: 0; }
 .ov .sidecol { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
 .ov .sidecol > .card { margin: 0; } .ov .sec-card { height: auto; flex: 1; min-height: 0; }
