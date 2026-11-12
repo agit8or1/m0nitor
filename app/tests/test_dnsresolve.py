@@ -71,7 +71,9 @@ def test_run_site_resolves_new_names_once_and_advances(conn, monkeypatch):
     assert st["names"] == 2 and st["addresses"] == 1 and seen[0] == ("www.example.com.", "10.40.0.1")
     assert inserted == [{"ts": "1970-01-01 00:16:40", "site": "site-a", "query": "www.example.com", "qtype": "A", "addr": "::ffff:203.0.113.7",
                          "ttl": 300, "clients": ["::ffff:10.40.0.20"], "resolver": "10.40.0.1"}]
-    assert dr.get_state(conn, "dnsnames:mark:site-a", None)[0] == 1002
+    p = r.ch.calls[0]
+    assert 0 < p["hi"] - p["m"] <= dr.NameResolver.STEP
+    assert dr.get_state(conn, "dnsnames:mark:site-a", None)[0] == p["hi"]   # fewer than BATCH rows: whole window done
     r.run_site(conn, {"id": "site-a", "exporter_ip": "10.40.0.1"})
     assert len(seen) == 2                        # still fresh (TTL): not asked again
     dr.save_settings(conn, "site-a", {"enabled": False}, "t")
@@ -117,3 +119,14 @@ def test_rdns_lookup_failure_is_unknown_not_no_record(cfg, monkeypatch):
         raise TimeoutError("timed out")
     monkeypatch.setattr(rdns, "query", boom)
     assert rdns.RDNS(cfg).wait(["45.83.64.7"], timeout=1.0) == {"45.83.64.7": None}
+
+
+def test_old_mark_is_clamped_and_each_run_reads_a_bounded_window(conn):
+    """A backlog must not grow: the mark was 3 days behind and every run re-aggregated those 3 days until timeout."""
+    import time as _t
+    r = dr.NameResolver({}, LogCH([]), "http://ch")
+    dr.set_state(conn, "dnsnames:mark:site-a", int(_t.time()) - 3 * 86400)
+    r.run_site(conn, {"id": "site-a", "exporter_ip": "10.40.0.1"})
+    p = r.ch.calls[0]
+    assert p["m"] >= int(_t.time()) - dr.NameResolver.CATCHUP - 5 and p["hi"] - p["m"] <= dr.NameResolver.STEP
+    assert dr.get_state(conn, "dnsnames:mark:site-a", None)[0] == p["hi"]

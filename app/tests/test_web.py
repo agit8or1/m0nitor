@@ -495,3 +495,23 @@ def test_footer_credits_only_the_geoip_data_loaded(monkeypatch):
     assert "no database loaded" in footer(None, None)
     monkeypatch.setattr(geo, "provenance", lambda: {"database": "ipinfo x"})
     assert "no database loaded" in web.geo_attribution()      # cached for 5 min: no per-page database work
+
+
+def test_page_queries_run_ahead_of_background_scans(monkeypatch):
+    """Requests query ClickHouse at priority 1; detector, warm-up and other loops at 2 (paused while pages query)."""
+    from netmon import core
+    sent = []
+
+    class Resp:
+        status_code, text = 200, ""
+
+    ch = core.ClickHouse("http://ch.invalid")
+    monkeypatch.setattr(ch.client, "post", lambda url, params, content: sent.append(params["priority"]) or Resp())
+    ch.query("SELECT 1")
+    assert sent == ["2"]                          # no request in progress: background
+    seen = []
+    monkeypatch.setattr(web.dash.ch, "query", lambda sql, params=None: seen.append(core.CH_PRIORITY.get()) or [])
+    web.dash._cache.clear()
+    client("admin", ADMINPW).get("/netmon/api/overview?range=15m")
+    assert seen and set(seen) == {core.INTERACTIVE}   # including queries run on the request's worker pool
+    web.dash._cache.clear()

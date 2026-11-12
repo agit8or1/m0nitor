@@ -17,8 +17,8 @@ from urllib.parse import quote
 from .rdns import LIST_WAIT
 from . import access, counters, geocity, secretbox
 from .ai import AI
-from .core import audit, get_state
-from .dash import IPS, META, cname
+from .core import BACKGROUND, CH_PRIORITY, audit, get_state
+from .dash import IPS, META, cname, ip_set
 from .profile import server_profile
 from .devtypes import CATEGORY_NAMES
 from .detect import fmt_ts
@@ -118,12 +118,7 @@ def alert_countries():
                     for ip in (v if isinstance(v, list) else [v] if v else []):
                         ips.setdefault(str(ip), set()).add(a["id"])
     if ips:
-        sc = dash.scope(range_key="7d")
-        rows = dash.q(sc, """SELECT replaceOne(IPv6NumToString(SrcAddr), '::ffff:', '') AS ip, any(SrcCountry) AS cc FROM flows
-                             WHERE ExporterName IN {exps:Array(String)} AND TimeReceived > now() - INTERVAL 7 DAY AND has({ips:Array(String)}, replaceOne(IPv6NumToString(SrcAddr), '::ffff:', ''))
-                             GROUP BY ip""", {"ips": sorted(ips)}, ttl=60)
-        for r in rows:
-            r["cc"] = (r["cc"] or "").strip("\x00")
+        for r in [{"ip": ip, "cc": cc} for ip, cc in flow_countries(dash.scope(range_key="7d"), ips).items()]:
             if r["cc"]:
                 d = by_cc.setdefault(r["cc"], {"security": 0, "info": 0, "ids": []})
                 # per-finding detail for the map marker tooltip: which endpoints in this country the finding names
@@ -139,6 +134,37 @@ def alert_countries():
                 d["security"] = len(d["sec_ids"])
     _alert_cc[access.allowed_key()] = {"t": time.time(), "v": by_cc, "fp": fp}
     return by_cc
+
+
+_ip_cc = {}   # (firewall ids, address) -> (country as recorded on its flows, checked at)
+IP_CC_TTL, IP_CC_MISS_TTL = 6 * 3600, 600
+
+
+def flow_countries(sc, ips):
+    """{address: country} for remote addresses seen as a flow source in the last 7 days. Each address is looked up
+    once and remembered (not seen: re-checked after 10 min), so the map markers no longer rescan a week of flows
+    whenever any open finding changes; only addresses new to the cache are queried, on the raw address column."""
+    key, now = tuple(s["id"] for s in sc.sites), time.time()
+    out, todo = {}, []
+    for ip in ips:
+        hit = _ip_cc.get((key, ip))
+        if hit and now - hit[1] < (IP_CC_TTL if hit[0] else IP_CC_MISS_TTL):
+            if hit[0]:
+                out[ip] = hit[0]
+        else:
+            todo.append(ip)
+    if todo:
+        rows = dash.q(sc, f"""SELECT {IPS.format(c='SrcAddr')} AS ip, any(SrcCountry) AS cc FROM flows
+                              WHERE ExporterName IN {{exps:Array(String)}} AND TimeReceived > now() - INTERVAL 7 DAY
+                                AND {ip_set('SrcAddr', 'ips')} GROUP BY SrcAddr""", {"ips": sorted(todo)}, ttl=60)
+        got = {r["ip"]: (r["cc"] or "").strip("\x00") for r in rows}
+        if len(_ip_cc) > 50000:
+            _ip_cc.clear()
+        for ip in todo:
+            _ip_cc[(key, ip)] = (got.get(ip, ""), now)
+            if got.get(ip):
+                out[ip] = got[ip]
+    return out
 
 
 def counter_series(sc):
@@ -351,6 +377,7 @@ def _roll_compute(shape, sc, fn, extra):
 
 
 def _roll_refresh(shape, sc, fn, extra):
+    CH_PRIORITY.set(BACKGROUND)    # the viewer already has the previous step: do not compete with pages
     try:
         _roll_compute(shape, sc, fn, extra)
     except Exception as ex:   # the next request computes it on demand

@@ -129,6 +129,7 @@ def query(name, qtype, server, timeout=2.0, port=53):
 class NameResolver:
     """Every 30 s: new A/AAAA names from each site's query log -> resolve on the site's resolver -> dns_resolved."""
     BATCH, WORKERS, TIMEOUT = 3000, 16, 2.0
+    CATCHUP, STEP = 900, 300      # seconds
 
     def __init__(self, cfg, ch, url):
         self.cfg, self.ch, self.url = cfg, ch, url
@@ -151,12 +152,15 @@ class NameResolver:
             return st
         key = f"dnsnames:mark:{site['id']}"
         mark, _ = get_state(conn, key, None)
-        mark = mark or int(time.time()) - 600
+        # never more than CATCHUP behind (answers are resolved now, so old queries add nothing), and at most STEP of
+        # the log per run (the ts bound lets ClickHouse skip old days): an unbounded range grew with every timeout and kept timing out (a 3-day backlog, 45 s per run)
+        mark = max(int(mark or 0), int(time.time()) - self.CATCHUP)
+        hi = min(mark + self.STEP, int(time.time()) - 2)
         rows = self.ch.query("""
             SELECT query, qtype, groupUniqArray(5)(client) AS clients, toUInt32(min(ts)) AS t, toUInt32(max(received)) AS r
             FROM netmon.dns_events WHERE site = {site:String} AND received > toDateTime({m:UInt32})
-              AND received <= now() - 2 AND qtype IN ('A', 'AAAA') AND startsWith(source, 'unbound')
-            GROUP BY query, qtype ORDER BY r LIMIT {n:UInt32}""", {"site": site["id"], "m": int(mark), "n": self.BATCH})
+              AND received <= toDateTime({hi:UInt32}) AND ts > toDateTime({m:UInt32}) - 3600 AND qtype IN ('A', 'AAAA') AND startsWith(source, 'unbound')
+            GROUP BY query, qtype ORDER BY r LIMIT {n:UInt32}""", {"site": site["id"], "m": mark, "hi": hi, "n": self.BATCH})
         now = time.time()
         todo = [x for x in rows if self.fresh.get((server, x["query"], x["qtype"]), 0) < now]
         if len(self.fresh) > 100000:
@@ -182,8 +186,7 @@ class NameResolver:
                                 "addr": _v6(addr), "ttl": attl, "clients": x["clients"], "resolver": server})
         self.insert(out)
         st["addresses"] = len(out)
-        if rows:
-            set_state(conn, key, int(rows[-1]["r"]) if len(rows) >= self.BATCH else max(int(r["r"]) for r in rows))
+        set_state(conn, key, int(rows[-1]["r"]) if len(rows) >= self.BATCH else hi)
         return st
 
     def run(self):

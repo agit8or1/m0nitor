@@ -3,6 +3,25 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.60 — 2026-11-12
+
+### Fixed
+- **Overview loads much faster.** Under normal load the overview API took 2–17 s, and up to 40 s while ClickHouse
+  was busy. Three causes, all fixed:
+  - Map markers for open findings looked up the country of every named address by scanning 7 days of flows,
+    formatting each row's address as text. The cache was dropped whenever any open finding changed, which happens on
+    nearly every detector run. Each address's country is now remembered (6 h; addresses not seen are re-checked after
+    10 min), and only new addresses are queried, on the raw address column (about 0.4 s instead of 4–30 s).
+  - The collection state (newest record, flows in the last 5 minutes, oldest record) scanned the whole flow table
+    every 5 s. It now reads only the last day, and the oldest record is found from the table index (cached 10 min).
+  - Background work (detector, cache warm-up for the 24-hour and 7-day views, health checks, resolvers) competed with
+    pages for ClickHouse query threads. When the 7-day warm-up ran, a small overview query got a single thread.
+    Queries made for a page or API request now run at a higher ClickHouse priority than background queries, so
+    ClickHouse pauses background scans while a page is waiting.
+  - The DNS name resolver had fallen days behind. Each run re-read the whole backlog, timed out after 45 s, and so
+    never moved forward. It now never falls more than 15 minutes behind and reads at most 5 minutes of the query log
+    per run.
+
 ## v1.59 — 2026-11-10
 
 ### Added

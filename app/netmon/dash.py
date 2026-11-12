@@ -212,8 +212,18 @@ class Dash:
 
     # ---- collection state -------------------------------------------------------
     def collection(self, sc: Scope):
-        r = self.q(sc, "SELECT toUInt32(min(TimeReceived)) AS first, toUInt32(max(TimeReceived)) AS last, "
-                       "countIf(TimeReceived > now() - 300) AS f5 FROM flows WHERE ExporterName IN {exps:Array(String)}", ttl=5)[0]
+        # newest record + last-5-min count from the last day only (was a scan of the whole flows table every 5 s);
+        # the oldest record changes only when retention drops a day, so it is cached for 10 min
+        r = self.q(sc, "SELECT toUInt32(max(TimeReceived)) AS last, countIf(TimeReceived > now() - 300) AS f5 FROM flows "
+                       "WHERE ExporterName IN {exps:Array(String)} AND TimeReceived > now() - INTERVAL 1 DAY", ttl=5)[0]
+        if not r["last"]:   # nothing in the last day: look further back
+            r = {**r, **self.q(sc, "SELECT toUInt32(max(TimeReceived)) AS last FROM flows WHERE ExporterName IN {exps:Array(String)}", ttl=60)[0]}
+        # the table's oldest record comes from the primary index; these firewalls' oldest is normally within hours of it
+        r["first"] = self.q(sc, "SELECT toUInt32(min(TimeReceived)) AS first FROM flows WHERE ExporterName IN {exps:Array(String)} "
+                                "AND TimeReceived < (SELECT min(TimeReceived) + INTERVAL 2 HOUR FROM flows)", ttl=600)[0]["first"]
+        if not r["first"]:   # a firewall added later than the oldest data
+            r["first"] = self.q(sc, "SELECT toUInt32(min(TimeReceived)) AS first FROM flows WHERE ExporterName IN {exps:Array(String)}",
+                                ttl=600)[0]["first"]
         last = r["last"] or None
         return {"first": r["first"] or None, "last": last, "age": (time.time() - last) if last else None,
                 "flows_5m": int(r["f5"])}

@@ -1,4 +1,5 @@
 """Config, ClickHouse access (read-only, parameterized), SQLite state."""
+import contextvars
 import ipaddress
 import json
 import os
@@ -360,6 +361,13 @@ def ch_literal(v) -> str:
     return str(v)
 
 
+# ClickHouse query priority (1 = highest). Page and API requests run at 1 (set per request in web.py), everything
+# else (detector, warm-up, health, resolvers) at 2. ClickHouse pauses lower-priority queries while higher-priority ones
+# run, so scans over days of flows no longer take every query thread from the overview (2-5 s -> ~0.4 s under load).
+CH_PRIORITY = contextvars.ContextVar("netmon_ch_priority", default=2)
+INTERACTIVE, BACKGROUND = 1, 2
+
+
 class ClickHouse:
     """Read-only access. Values are always passed as typed query parameters."""
 
@@ -370,7 +378,7 @@ class ClickHouse:
     def query(self, sql: str, params: dict | None = None) -> list[dict]:
         q = {"default_format": "JSONEachRow", "readonly": "1",
              "max_execution_time": "45", "max_result_rows": "200000",
-             "result_overflow_mode": "throw"}
+             "result_overflow_mode": "throw", "priority": str(CH_PRIORITY.get())}
         for k, v in (params or {}).items():
             q[f"param_{k}"] = v if isinstance(v, str) else ch_literal(v)
         r = self.client.post(self.url, params=q, content=sql.encode())

@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import access, auth, secretbox, threatradar
 from . import block as blk
-from .core import (DATA_DIR, EXPECTED_KEY, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
+from .core import (CH_PRIORITY, DATA_DIR, EXPECTED_KEY, INTERACTIVE, ClickHouse, ThreadLocalDB, audit, db_connect, expected_devices, expected_match, get_setting, get_state,
                    load_config, put_setting, set_state)
 from .dash import Dash
 from .detect import Detector, fmt_ts, human_bytes
@@ -108,9 +108,11 @@ async def firewall_restriction(request: Request, call_next):
                             f"<form method=post action='/logout'><input type=hidden name=csrf value='{tokv}'><button>Sign out</button></form>",
                             status_code=403, headers=SECURITY_HEADERS)
     tok = access.set_allowed(allowed)
+    ptok = CH_PRIORITY.set(INTERACTIVE)     # a viewer is waiting: ahead of background scans (netmon.core)
     try:
         return await call_next(request)
     finally:
+        CH_PRIORITY.reset(ptok)
         access.reset(tok)
 
 

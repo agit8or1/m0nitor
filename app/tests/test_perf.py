@@ -158,3 +158,40 @@ def test_block_stats_custom_windows_do_not_grow_memory():
     for i in range(40):                        # many rolling windows of different lengths
         b.stats(web.cfg.sites, now - 3600 - i * 60, now)
     assert len(b._latest) <= 21
+
+
+def test_map_marker_countries_are_looked_up_once_per_address(monkeypatch):
+    """flow_countries queries only addresses it has not seen; a changed finding set no longer rescans 7 days."""
+    calls = []
+
+    def fake_q(sc, sql, extra=None, ttl=10):
+        calls.append(sorted(extra["ips"]))
+        assert "SrcAddr IN (SELECT toIPv6" in sql   # raw address column, not every row formatted as a string
+        return [{"ip": ip, "cc": "ZZ"} for ip in extra["ips"] if ip.startswith("45.")]
+    monkeypatch.setattr(web.dash, "q", fake_q)
+    views._ip_cc.clear()
+    sc = web.dash.scope(site="all", range_key="7d")
+    assert views.flow_countries(sc, ["45.83.64.1", "45.83.64.2"]) == {"45.83.64.1": "ZZ", "45.83.64.2": "ZZ"}
+    assert views.flow_countries(sc, ["45.83.64.1", "45.83.64.2", "45.83.64.3", "8.8.8.8"]) == \
+        {"45.83.64.1": "ZZ", "45.83.64.2": "ZZ", "45.83.64.3": "ZZ"}
+    assert views.flow_countries(sc, ["45.83.64.3", "8.8.8.8"]) == {"45.83.64.3": "ZZ"}
+    assert calls == [["45.83.64.1", "45.83.64.2"], ["45.83.64.3", "8.8.8.8"]]   # 8.8.8.8 not seen: re-checked after 10 min
+    views._ip_cc.clear()
+
+
+def test_collection_state_does_not_scan_the_whole_flow_table(monkeypatch):
+    seen = []
+
+    class CH:
+        def query(self, sql, params=None):
+            seen.append(sql)
+            return [{"first": 100, "last": 200, "f5": 3}]
+    monkeypatch.setattr(web.dash, "ch", CH())
+    web.dash._cache.clear()
+    c = web.dash.collection(web.dash.scope(site="all", range_key="15m"))
+    assert c["first"] == 100 and c["last"] == 200 and c["flows_5m"] == 3
+    assert all("INTERVAL 1 DAY" in q for q in seen if "countIf" in q)
+    n = len(seen)
+    web.dash.collection(web.dash.scope(site="all", range_key="15m"))
+    assert len(seen) == n       # cached
+    web.dash._cache.clear()
