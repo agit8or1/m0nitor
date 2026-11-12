@@ -249,7 +249,7 @@
 
   async function load() {
     try {
-      data = await NM.get("/netmon/api/overview?" + NM.qs());
+      data = await NM.loading("#cards, #map, #secpanel, #bw, #t-servers, #t-orgs, #t-countries, #t-services, #t-recent", NM.get("/netmon/api/overview?" + NM.qs()));
       NM.scopeDesc(data.scope);
       renderCards(data); renderMapSel(data); renderSecurity(data);
       renderBandwidth(data); renderTables(data); renderMeters(); fitOverview();

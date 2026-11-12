@@ -51,7 +51,20 @@ const NM = (() => {
   // ---- live / pause ----
   let paused = false; try { paused = localStorage.getItem("nm.paused") === "1"; } catch (_) {}
   const timers = [];
-  function every(fn, ms) { timers.push(setInterval(() => { if (!paused && !document.hidden) fn(); }, ms)); }
+  // `refreshing` is true only while a periodic refresh starts (the synchronous part of fn), so loading() can tell it
+  // apart from a first load or a scope change
+  let refreshing = false;
+  function every(fn, ms) { timers.push(setInterval(() => { if (!paused && !document.hidden) { refreshing = true; try { fn(); } finally { refreshing = false; } } }, ms)); }
+  // "Loading…" overlay (spinner + text) on the panels a request fills, until it settles. Shown on a first load and
+  // after a scope change; a periodic refresh keeps the current view without one. Returns the promise unchanged.
+  function loading(sel, promise) {
+    if (refreshing) return promise;
+    const nodes = [...document.querySelectorAll(sel)];
+    for (const n of nodes) { n.classList.add("is-loading"); n.setAttribute("aria-busy", "true"); }
+    const done = () => { for (const n of nodes) { n.classList.remove("is-loading"); n.removeAttribute("aria-busy"); } };
+    promise.then(done, done);
+    return promise;
+  }
 
   function syncToolbar() {
     const site = $("site"); if (site) site.value = scope.site || "all";
@@ -410,7 +423,7 @@ const NM = (() => {
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) location.reload(); });
   // server-rendered forms with data-confirm (e.g. Ack all) ask before submitting (inline handlers are blocked by the CSP)
   document.addEventListener("submit", (ev) => { const m = ev.target.dataset && ev.target.dataset.confirm; if (m && !confirm(m)) ev.preventDefault(); });
-  return { rdnsLine, el, $, fmtBytes, fmtBps, fmtNum, ago, fmtTime, tz, css, sev, scope, qs, href, setScope, onScope, every, get, state, table, rank,
+  return { rdnsLine, el, $, fmtBytes, fmtBps, fmtNum, ago, fmtTime, tz, css, sev, scope, qs, href, setScope, onScope, every, loading, get, state, table, rank,
     legendInOut, pager, lineChart, cards, alertList, ackButton, meters, convTable, scopeDesc, ipCell, namer, onLive: (f) => liveL.push(f), live: () => live,
     isPaused: () => paused };
 })();

@@ -22,7 +22,7 @@
   $("convclear").addEventListener("click", () => { dir = ""; proto = ""; page = 1; mark(); NM.setScope({ port: "", host: "", rip: "", cc: "", asn: "" }); keepUrl(); });
   async function load() {
     try {
-      const d = await NM.get(`/netmon/api/connections?${NM.qs({ page, sort, dir, proto })}`);
+      const d = await NM.loading("#conv", NM.get(`/netmon/api/connections?${NM.qs({ page, sort, dir, proto })}`));
       NM.scopeDesc(d.scope); $("convnote").textContent = `${d.total.toLocaleString()} conversation(s) · ${d.note}`;
       NM.convTable($("conv"), d.rows, { empty: "No conversations match these filters" });
       NM.pager($("pager"), d.page, d.per, d.total, (p) => { page = p; load(); });

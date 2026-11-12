@@ -90,3 +90,21 @@ def test_stats_reports_duplicates_and_unavailable():
     pub = make([{"site": "site-a", "first": now - 9000, "last": now}], rows, raw=5).public(v)
     assert "ips" not in pub["countries"]["FR"] and "rules" not in pub["countries"]["FR"]
     assert make([]).stats([SITE], now - 900, now)["state"] == "unavailable"
+
+
+def test_block_rows_are_grouped_per_external_address_in_clickhouse():
+    """7 days of blocks passed the 200,000-row limit as (source, destination) pairs: the query now groups per external
+    address, classifying each end against the site's own protected networks and the special-purpose ranges."""
+    seen = []
+
+    class CH(FakeCH):
+        def query(self, sql, p=None):
+            if "SELECT DISTINCT" in sql:
+                seen.append(p)
+            return super().query(sql, p)
+    b = make([])
+    b.ch = CH([], [row("198.51.100.61", "203.0.113.179", 3)], 3)
+    v = b.stats([SITE], 1000, 2000)
+    assert v["countries"]["FR"]["in"] == 3
+    assert "GROUP BY site, rid, iface, ext" in gb.BLOCK_SQL and "isIPAddressInRange" in gb.BLOCK_SQL
+    assert seen[0]["site"] == "site-a" and seen[0]["ours"] == [str(n) for n in OURS] and "10.0.0.0/8" in seen[0]["special"]

@@ -3,6 +3,22 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.61 — 2026-11-12
+
+### Added
+- **"Loading…" indicator on panels still waiting for data.** A spinner with "Loading…" now covers each map, list,
+  chart and table until its data arrives: Overview, Countries, a country's page, a server's page, Internal devices,
+  Connections and a finding's traffic map. Before, the map showed an empty world with no sign it was still loading.
+  It appears on first load and after changing site, time range or filter; the periodic refresh updates in place
+  without it.
+
+### Fixed
+- **Logged firewall blocks over 7 days.** The query returned one row per source and destination pair, and over 7 days
+  that passed the 200,000-row result limit, so the 7-day Countries map and block statistics failed. Rows are now
+  grouped per external address inside ClickHouse, using the same protected-network and special-range rules as before:
+  about 100,000 rows for 7 days instead of more than 377,000. Per-country counts, addresses and rules are unchanged
+  (checked against the old query on 24 hours of real data).
+
 ## v1.60 — 2026-11-12
 
 ### Fixed

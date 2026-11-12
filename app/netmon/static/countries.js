@@ -56,7 +56,7 @@
   }
   async function load() {
     try {
-      const d = await NM.get(`/netmon/api/countries?${NM.qs()}`);
+      const d = await NM.loading("#map, #blkmap, #policy, :has(> #ct)", NM.get(`/netmon/api/countries?${NM.qs()}`));
       NM.scopeDesc(d.scope);
       const p = d.policy;
       const common = { countries: d.countries, sites: d.sites, span: d.scope.span, scope: d.scope, blocked: { in: p.blocked_in, out: p.blocked_out },

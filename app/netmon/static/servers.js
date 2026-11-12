@@ -12,7 +12,7 @@
   async function load() {
     const tb = document.querySelector("#srv tbody");
     try {
-      const d = await NM.get(`/netmon/api/servers?${NM.qs({ page, sort, cat })}`);
+      const d = await NM.loading(".wrap:has(> #srv)", NM.get(`/netmon/api/servers?${NM.qs({ page, sort, cat })}`));
       NM.scopeDesc(d.scope);
       const total = d.categories.reduce((n, c) => n + c.n, 0);
       const chip = (name, n, v) => { const a = el("a", { class: "chip" + (cat === v ? " on" : ""), href: "#", text: `${name} ` }, el("b", { text: fmtNum(n) }));

@@ -394,7 +394,14 @@ details.more { margin-top: 10px; } details.more > summary { cursor: pointer; col
   background: linear-gradient(90deg, var(--surface-2) 0%, var(--grid) 50%, var(--surface-2) 100%) 0 0 / 200% 100%; animation: nm-shimmer 1.4s linear infinite; }
 section.cards:empty { min-height: 104px; }
 @keyframes nm-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-@media (prefers-reduced-motion: reduce) { #nm-progress.on, .state.loading::before, .card > div:empty, section.cards:empty { animation: none; } }
+/* NM.loading(): spinner + "Loading…" over a panel whose data is on its way (clicks still reach the panel) */
+.is-loading { position: relative; min-height: 104px; }
+.is-loading::after { content: "Loading…"; position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center;
+  padding-top: 30px; font-size: 13px; color: var(--muted); border-radius: 8px; pointer-events: none;
+  background: color-mix(in srgb, var(--surface) 62%, transparent); }
+.is-loading::before { content: ""; position: absolute; z-index: 5; left: calc(50% - 11px); top: calc(50% - 24px); width: 18px; height: 18px;
+  border: 2px solid var(--grid); border-top-color: var(--accent); border-radius: 50%; animation: nm-spin .8s linear infinite; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { #nm-progress.on, .state.loading::before, .card > div:empty, section.cards:empty, .is-loading::before { animation: none; } }
 
 /* ---- capacity planner ---- */
 .lab { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .03em; border-radius: 4px; padding: 1px 5px; border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap; }
@@ -513,6 +520,7 @@ form.askq label.grow input { flex: 1; min-width: 0; }
 @container (max-height: 290px) { .ovfit.fit .bwcard .bwsum { display: none; } }
 @container (max-width: 560px) { .ovfit.fit .bwcard .utilbar > b, .ovfit.fit .bwcard .utilbar > a.small { display: none; } }
 .ovfit.fit .ovrow > .card > [id^="t-"] { min-height: 0; }
+.ovfit.fit .ovrow > .card > .is-loading { flex: 1 1 auto; min-height: 104px; }   /* loading overlay needs the card's room */
 .ov .map-card { height: auto; min-height: 0; }
 .ov .sidecol { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
 .ov .sidecol > .card { margin: 0; } .ov .sec-card { height: auto; flex: 1; min-height: 0; }

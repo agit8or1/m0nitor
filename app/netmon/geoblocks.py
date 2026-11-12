@@ -157,13 +157,27 @@ def aggregate(rows, ours_by_site, geo_rids, lookup):
     return out, amb, nogeo
 
 
-BLOCK_SQL = """
-SELECT site, rid, iface, replaceOne(IPv6NumToString(src), '::ffff:', '') AS src, replaceOne(IPv6NumToString(dst), '::ffff:', '') AS dst,
-       count() AS events, sum(length) AS bytes, countIf(length = 0) AS nolen, toUInt32(max(ts)) AS last
-FROM (SELECT DISTINCT site, ts, rid, iface, dir, src, dst, sport, dport, proto, length, tcpflags FROM netmon.fw_events
-      WHERE has({sites:Array(String)}, site) AND action IN ('block', 'reject')
-        AND ts >= toDateTime64({t0:UInt32}, 3) AND ts < toDateTime64({t1:UInt32}, 3))
-GROUP BY site, rid, iface, src, dst"""
+# One row per (firewall, rule, interface, external address) rather than per (source, destination) pair: a scanner that
+# probes many of our addresses was one row per address, and 7 days passed the 200,000-row result limit. The grouping
+# key classifies each end against the site's protected networks the same way classify() does (ours / special-purpose /
+# external); every row keeps one sample src/dst pair, so aggregate() still classifies it in Python. Pairs ClickHouse
+# finds ambiguous keep their own rows (few: neither or both ends external).
+_KIND = ("multiIf(arrayExists(n -> isIPAddressInRange({a}, n), {{ours:Array(String)}}), 1, "
+         "arrayExists(n -> isIPAddressInRange({a}, n), {{special:Array(String)}}), 2, 0)")
+BLOCK_SQL = f"""
+SELECT site, rid, iface, any(s) AS src, any(d) AS dst,
+       sum(ev) AS events, sum(by) AS bytes, sum(nl) AS nolen, toUInt32(max(lt)) AS last
+FROM (SELECT site, rid, iface, s, d, ev, by, nl, lt, {_KIND.format(a='s')} AS sk, {_KIND.format(a='d')} AS dk,
+             multiIf(sk = 0 AND dk = 1, s, sk = 1 AND dk = 0, d, concat(s, '>', d)) AS ext
+      FROM (SELECT site, rid, iface, replaceOne(IPv6NumToString(src), '::ffff:', '') AS s,
+                   replaceOne(IPv6NumToString(dst), '::ffff:', '') AS d,
+                   count() AS ev, sum(length) AS by, countIf(length = 0) AS nl, max(ts) AS lt
+            FROM (SELECT DISTINCT site, ts, rid, iface, dir, src, dst, sport, dport, proto, length, tcpflags FROM netmon.fw_events
+                  WHERE site = {{site:String}} AND action IN ('block', 'reject')
+                    AND ts >= toDateTime64({{t0:UInt32}}, 3) AND ts < toDateTime64({{t1:UInt32}}, 3))
+            GROUP BY site, rid, iface, src, dst))
+GROUP BY site, rid, iface, ext"""
+SPECIAL_NETS = [str(n) for n in _SPECIAL]
 
 
 class Blocks:
@@ -262,7 +276,8 @@ class Blocks:
             except Exception:
                 pass
         p = {"sites": [s["id"] for s in sites], "t0": int(t0), "t1": int(t1)}
-        rows = self.ch.query(BLOCK_SQL, p)
+        rows = [r for st in sites for r in self.ch.query(BLOCK_SQL, {**p, "site": st["id"], "ours": self.cfg.site_ours(st),
+                                                                     "special": SPECIAL_NETS})]
         raw = self.ch.query("SELECT count() AS n FROM netmon.fw_events WHERE has({sites:Array(String)}, site) AND action IN ('block', 'reject') "
                             "AND ts >= toDateTime64({t0:UInt32}, 3) AND ts < toDateTime64({t1:UInt32}, 3)", p)[0]["n"]
         for r in rows:

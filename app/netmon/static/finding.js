@@ -12,7 +12,7 @@
     const portName = (p) => (33434 <= p.port && p.port <= 33534 && p.proto === "udp") ? "traceroute" : p.port in WELL_KNOWN ? WELL_KNOWN[p.port] : p.service;
     (async () => {
       try {
-        const d = await NM.get(`/netmon/api/alert/${aid}/traffic`);
+        const d = await NM.loading("#map, #ft-remotes", NM.get(`/netmon/api/alert/${aid}/traffic`));
         const sc = d.scope;
         $("ftscope").textContent = `${fmtTime(sc.start, true)} → ${fmtTime(sc.end, true)} · ${d.subject_label || d.subject || "named peers"}`;
         // every remote endpoint at its own (city-level) location; named ones carry the finding marker

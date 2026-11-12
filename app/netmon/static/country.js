@@ -4,7 +4,7 @@
   const cc = $("cthead").dataset.cc; document.body.dataset.fixed = "cc";
   async function load() {
     try {
-      const d = await NM.get(`/netmon/api/country?${NM.qs({ cc })}`);
+      const d = await NM.loading("#cards, #bw, #t-servers, #t-orgs, #t-findings, #t-policy, #t-conv", NM.get(`/netmon/api/country?${NM.qs({ cc })}`));
       NM.scopeDesc(d.scope);
       const s = d.summary;
       NM.cards($("cards"), [
@@ -46,7 +46,7 @@
   async function blocks() {
     const box = $("t-blocks");
     try {
-      const d = await NM.get(`/netmon/api/country/${cc}/blocks?${NM.qs({ cc: "" })}`);
+      const d = await NM.loading("#t-blocks", NM.get(`/netmon/api/country/${cc}/blocks?${NM.qs({ cc: "" })}`));
       const st = d.stats, c = d.summary, g = st.provenance && st.provenance.geoip;
       $("blkstate").textContent = `${NM.fmtTime(d.scope.start, true)} → ${NM.fmtTime(d.scope.end, true)}`;
       if (st.state === "unavailable" || st.state === "error") return NM.state(box, "empty", st.state === "error" ? `Blocked activity unavailable: ${st.error}` : "Blocked activity unavailable — connect firewall logs.");

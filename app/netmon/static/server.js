@@ -4,7 +4,7 @@
   const ip = $("srvhead").dataset.ip; document.body.dataset.fixed = "host";
   async function load() {
     try {
-      const d = await NM.get(`/netmon/api/server?${NM.qs({ ip, host: "" })}`);
+      const d = await NM.loading("#cards, #bw, #t-countries, #t-orgs, #t-services, #t-novel, #t-alerts, #t-exposure, #t-conv", NM.get(`/netmon/api/server?${NM.qs({ ip, host: "" })}`));
       NM.scopeDesc(d.scope);
       const s = d.summary;
       // the server's addresses with reverse DNS: LAN, then the public (1:1 NAT) address it is reached on
