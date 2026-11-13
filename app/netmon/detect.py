@@ -139,18 +139,16 @@ class Detector:
         col = "cc" if kind == "country" else "asn"
         notempty = "cc != ''" if kind == "country" else "asn != 0"
         ws, we, bs = self.windows(now)
+        # one pass over baseline + window (a NOT IN over the baseline re-expanded the CTE and ran 14-45 s, v1.63)
         sql = f"""
         WITH conv AS ({INBOUND})
-        SELECT local, {col} AS v, count() AS flows, sum(bytes) AS bytes,
-               groupUniqArray(5)(peer) AS peers, groupUniqArray(5)(peer_port) AS ports,
+        SELECT local, {col} AS v, countIf(cur) AS flows, sumIf(bytes, cur) AS bytes,
+               groupUniqArrayIf(5)(peer, cur) AS peers, groupUniqArrayIf(5)(peer_port, cur) AS ports,
                any(dictGetOrDefault('asns', 'name', asn, '')) AS asname
-        FROM conv
-        WHERE t >= toDateTime({{ws:UInt32}}) AND t < toDateTime({{we:UInt32}})
-          AND local_initiated AND {notempty}
-          AND (local, {col}) NOT IN (
-              SELECT local, {col} FROM conv
-              WHERE t >= toDateTime({{bs:UInt32}}) AND t < toDateTime({{ws:UInt32}}) AND {notempty})
-        GROUP BY local, v HAVING flows >= {{min:UInt32}}
+        FROM (SELECT *, t >= toDateTime({{ws:UInt32}}) AND local_initiated AS cur FROM conv
+              WHERE t >= toDateTime({{bs:UInt32}}) AND t < toDateTime({{we:UInt32}}) AND {notempty})
+        GROUP BY local, v
+        HAVING flows >= {{min:UInt32}} AND countIf(t < toDateTime({{ws:UInt32}})) = 0
         ORDER BY bytes DESC LIMIT 200"""
         params = {"ws": ws, "we": we, "bs": bs, "min": rc["min_flows"]}
         out = []
@@ -1003,9 +1001,17 @@ class Detector:
         site = f.get("site") or self.cfg.sites[0]["id"]
         key = f"{site}|{f['rule']}|{f['asset']}|{f['subject']}"
         cooldown = self.cfg["detector"]["cooldown_minutes"] * 60
-        row = self.conn.execute("SELECT id, last_seen, status FROM alerts WHERE key=? AND status IN ('open','acked') "
+        row = self.conn.execute("SELECT id, last_seen, status, severity FROM alerts WHERE key=? AND status IN ('open','acked') "
                                 "ORDER BY id DESC LIMIT 1", (key,)).fetchone()
-        if row and now - row["last_seen"] < cooldown:
+        # an acknowledged finding keeps absorbing repeats while they continue (no new alert every cooldown), unless it
+        # got worse; it is re-raised only after it has been quiet for acked_quiet_days
+        quiet = float(self.cfg["detector"].get("acked_quiet_days", 7)) * 86400
+        if row and row["status"] == "acked":
+            merge = now - row["last_seen"] < max(cooldown, quiet) and \
+                SEV_ORDER.get(f["severity"], 0) <= SEV_ORDER.get(row["severity"], 0)
+        else:
+            merge = row is not None and now - row["last_seen"] < cooldown
+        if merge:
             self.conn.execute("UPDATE alerts SET last_seen=?, window_end=?, count=count+1, evidence=?, title=?, "
                               "direction=?, direction_verified=?, direction_basis=? WHERE id=?",
                               (now, f["window"][1], json.dumps(f["evidence"], default=str), f["title"],

@@ -3,6 +3,23 @@
 Versions are `vMAJOR.MINOR` with two-digit minors (v1.05, v1.06, ... v1.10). Every change ships as a new version
 with its own section here; the running version is in the page footer and on Changelog in the app.
 
+## v1.63 — 2026-11-13
+
+### Fixed
+- **"Detector errors: new_dest_asn … TIMEOUT_EXCEEDED".** The new-network and new-country rules compared the last hour
+  against 14 days of baseline with a `NOT IN` subquery that ClickHouse expanded twice. It took about 14 seconds
+  on a quiet server and went past the 45-second limit under load. Both rules now read the baseline and the window
+  in a single grouped pass, which takes about 3 seconds and gives the same findings (checked on real data).
+- **Acknowledged findings came back.** Acknowledging only held for the 6-hour repeat window, so a finding that
+  kept happening was raised again as a new alert. Now an acknowledged finding absorbs repeats (count and
+  last-seen time still update) until it has been quiet for `detector.acked_quiet_days`, which defaults to 7. It is
+  raised again sooner if it gets more severe.
+- **"This is normal" on findings that change subject every time.** Rules that raise one finding per destination
+  network, country, scanner, beaconing target or port start a new finding for each new subject, so choosing "only
+  this behaviour" never stopped the next one. When the same device has had at least two other such findings in the
+  last 7 days, the card now says so and pre-selects "Any … finding for this device". With "close matching open
+  findings now", it also closes the ones already in the list.
+
 ## v1.62 — 2026-11-12
 
 ### Fixed

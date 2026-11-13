@@ -397,6 +397,22 @@ def test_mark_finding_normal_suppresses_future_and_closes_past():
     assert a.post(f"/netmon/alert/{third}/normal", data={"scope": "x", "reason": "r", "csrf": tok}).status_code == 400
 
 
+def test_normal_card_defaults_to_any_for_varying_subjects():
+    a = client("admin", ADMINPW)
+    ids = []
+    for asn in ("64500", "64501", "64502"):
+        web.conn.execute("INSERT INTO alerts(key,rule,severity,confidence,asset,subject,title,first_seen,last_seen,status,site) "
+                         "VALUES (?,?,?,?,?,?,?,?,?,'open',?)", (f"site-a|new_dest_asn|10.40.0.9|{asn}", "new_dest_asn", "low", "medium",
+                                                                  "10.40.0.9", asn, "t", time.time(), time.time(), "site-a"))
+        ids.append(web.conn.execute("SELECT max(id) FROM alerts").fetchone()[0])
+    web.conn.commit()
+    t = a.get(f"/netmon/alert/{ids[-1]}").text
+    assert "2 other" in t and "would not stop the next" in t
+    assert "name=scope value=rule checked" in t and "name=scope value=exact checked" not in t
+    web.conn.execute("DELETE FROM alerts WHERE id IN (?,?,?)", ids)
+    web.conn.commit()
+
+
 def test_site_dns_settings_recorded_on_firewalls_page():
     from netmon import dnsresolve
     a, v = client("admin", ADMINPW), client("viewer1", VIEWPW)

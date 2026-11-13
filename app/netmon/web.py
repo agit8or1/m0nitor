@@ -923,6 +923,10 @@ def _is_internal_safe(ip):
         return False
 
 
+VARYING_SUBJECT = {"new_dest_asn": "networks", "new_dest_country": "countries", "fw_blocked_scan": "scanners",
+                   "beaconing": "destinations", "unexpected_inbound": "ports"}
+
+
 def normal_card(req, a, back="/netmon/security"):
     """'This is normal' on a finding: a precise exception (this behaviour, this device to one destination/service,
     optionally only during a schedule, until a date), previewed before it is saved. Suppression only: the traffic is
@@ -937,14 +941,26 @@ def normal_card(req, a, back="/netmon/security"):
     opt = lambda v, text, checked=False, note="": (f"<label class='check'><input type=radio name=scope value={v} {'checked' if checked else ''}> {text}"  # noqa: E731
                                                    f"{f' <span class=muted small>{note}</span>' if note else ''}</label>")
     exact = a["subject"] not in ("", "*")
-    scopes = ((opt("exact", f"Only this behaviour: <b>{rule}</b> for <b>{e(label or a['asset'])}</b> about <span class='mono'>{e(a['subject'])}</span>", True)
-               if exact else "")
+    who = e(label or a["asset"]) if a["asset"] else "any source"
+    # rules that raise one finding per destination/ASN/scanner: "only this" would not stop the next one (v1.63)
+    similar = 0 if a["rule"] not in VARYING_SUBJECT else conn.execute(
+        "SELECT count(*) FROM alerts WHERE rule=? AND coalesce(asset,'')=? AND coalesce(site,'')=? AND subject<>? AND test=0 "
+        "AND first_seen > ?", (a["rule"], a["asset"] or "", a["site"] or "", a["subject"] or "", time.time() - 7 * 86400)).fetchone()[0]
+    broad = similar >= 2 and not shared
+    rule_opt = opt("rule", f"Any <b>{rule}</b> finding for <b>{who}</b>", broad,
+                   f"{similar} similar finding(s) with other {VARYING_SUBJECT.get(a['rule'], 'subjects')} in the last 7 days — "
+                   "this stops them too" if broad else "hides this kind of finding to any destination")
+    scopes = ((f"<p class='muted small'>⚠ <b>{who}</b> had {similar} other <b>{rule}</b> findings this week, each about a different "
+               f"{VARYING_SUBJECT[a['rule']].rstrip('s')}. Choosing only this one would not stop the next.</p>" if broad else "")
+              + (rule_opt if broad else "")
+              + (opt("exact", f"Only this behaviour: <b>{rule}</b> for <b>{who}</b> about <span class='mono'>{e(a['subject'])}</span>", not broad)
+                 if exact else "")
               + ("" if a["rule"] in MANY_PEERS - {"outbound_volume"} else
-                 opt("dest", f"<b>{rule}</b> for <b>{e(label or a['asset'])}</b> to one destination and/or service", not exact,
+                 opt("dest", f"<b>{rule}</b> for <b>{who}</b> to one destination and/or service", not exact and not broad,
                      "traffic to this destination is not counted; the rest is still checked" if a["rule"] == "outbound_volume" else
                      "only findings that name exactly this destination/service are hidden"))
               + "<details class='tech'><summary>Broader options</summary>"
-              + opt("rule", f"Any <b>{rule}</b> finding for <b>{e(label or a['asset'])}</b>", note="hides this kind of finding to any destination")
+              + ("" if broad else rule_opt)
               + ("" if shared or not a["asset"] else
                  opt("device", f"Every finding for <span class='mono'>{e(a['asset'])}</span> (expected device)", note="hides all findings for the device"))
               + "</details>")

@@ -53,6 +53,7 @@ detector:
   baseline_days: 14           # full-confidence learning period
   min_learning_days: 3        # novelty rules stay silent before this
   cooldown_minutes: 360       # repeat of an open alert only updates it
+  acked_quiet_days: 7         # an acknowledged finding absorbs repeats until it has been quiet this long
 
 rules:
   new_dest_country: {enabled: true, min_flows: 2}

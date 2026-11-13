@@ -49,6 +49,21 @@ def test_dedup_cooldown_and_exception(cfg, conn):
     assert conn.execute("SELECT count(*) FROM alerts").fetchone()[0] == 2
 
 
+def test_acked_finding_absorbs_repeats_until_quiet(cfg, conn):
+    d = Detector(cfg, None, conn)
+    now = time.time()
+    cool = cfg["detector"]["cooldown_minutes"] * 60
+    assert d.record(finding(subject="tcp/25"), now) == 1
+    conn.execute("UPDATE alerts SET status='acked'")
+    assert d.record(finding(subject="tcp/25"), now + cool + 60) == 0        # past cooldown: still merged, stays acked
+    row = conn.execute("SELECT count, status FROM alerts").fetchone()
+    assert (row["count"], row["status"]) == (2, "acked")
+    assert d.record(finding(subject="tcp/25", severity="critical"), now + cool + 120) == 1   # got worse: new alert
+    conn.execute("UPDATE alerts SET status='acked'")
+    later = now + cool + 120 + cfg["detector"]["acked_quiet_days"] * 86400 + 1
+    assert d.record(finding(subject="tcp/25", severity="critical"), later) == 1   # quiet for a week: raised again
+
+
 class FakeCH:
     """Answers the firewall-state and IDS lookups used by verify_direction."""
     def __init__(self, states=None, ids=None):
